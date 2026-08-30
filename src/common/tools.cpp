@@ -268,29 +268,38 @@ static std::string escape_control_chars_in_strings(const std::string & s) {
     return res;
 }
 
-static bool try_parse_json_lenient(std::string_view json_str, nlohmann::json & out_json) {
+static bool try_parse_json_lenient(std::string_view json_str, nlohmann::json & out_json, std::string * out_error = nullptr) {
+    std::string first_err;
     try {
         out_json = nlohmann::json::parse(json_str);
+        if (out_error) out_error->clear();
         return true;
-    } catch (...) {}
+    } catch (const std::exception & e) {
+        first_err = e.what();
+    }
 
     std::string s(json_str);
     sanitize_json(s);
     try {
         out_json = nlohmann::json::parse(s);
+        if (out_error) out_error->clear();
         return true;
     } catch (...) {}
 
     std::string escaped = escape_control_chars_in_strings(s);
     try {
         out_json = nlohmann::json::parse(escaped);
+        if (out_error) out_error->clear();
         return true;
     } catch (...) {}
 
+    if (out_error && out_error->empty() && !first_err.empty()) {
+        *out_error = std::move(first_err);
+    }
     return false;
 }
 
-static bool try_extract_and_parse_json(std::string_view text, size_t from, char start_char, nlohmann::json & out_json, size_t & out_end_pos) {
+static bool try_extract_and_parse_json(std::string_view text, size_t from, char start_char, nlohmann::json & out_json, size_t & out_end_pos, std::string * out_error = nullptr) {
     const size_t begin = text.find(start_char, from);
     if (begin == std::string_view::npos) {
         return false;
@@ -324,7 +333,7 @@ static bool try_extract_and_parse_json(std::string_view text, size_t from, char 
                 stack.pop_back();
                 if (stack.empty()) {
                     std::string_view balanced = text.substr(begin, i - begin + 1);
-                    if (try_parse_json_lenient(balanced, out_json)) {
+                    if (try_parse_json_lenient(balanced, out_json, out_error)) {
                         out_end_pos = i + 1;
                         return true;
                     }
@@ -335,7 +344,7 @@ static bool try_extract_and_parse_json(std::string_view text, size_t from, char 
                 stack.pop_back();
                 if (stack.empty()) {
                     std::string_view balanced = text.substr(begin, i - begin + 1);
-                    if (try_parse_json_lenient(balanced, out_json)) {
+                    if (try_parse_json_lenient(balanced, out_json, out_error)) {
                         out_end_pos = i + 1;
                         return true;
                     }
@@ -378,7 +387,7 @@ static bool try_extract_and_parse_json(std::string_view text, size_t from, char 
             }
         }
 
-        if (try_parse_json_lenient(repaired, out_json)) {
+        if (try_parse_json_lenient(repaired, out_json, out_error)) {
             out_end_pos = text.size();
             return true;
         }
@@ -428,7 +437,7 @@ static bool extract_single_tool_call(const nlohmann::json & j, ToolCall & tc) {
     return true;
 }
 
-static void parse_tool_calls_from_text_segment(std::string_view text, std::vector<ToolCall> & tool_calls) {
+static void parse_tool_calls_from_text_segment(std::string_view text, std::vector<ToolCall> & tool_calls, std::string * out_error = nullptr) {
     // 1. First check if the text contains a JSON array [...]
     size_t arr_pos = text.find('[');
     size_t obj_pos = text.find('{');
@@ -436,7 +445,7 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
     if (arr_pos != std::string_view::npos && (obj_pos == std::string_view::npos || arr_pos < obj_pos)) {
         nlohmann::json j;
         size_t end_pos = 0;
-        if (try_extract_and_parse_json(text, arr_pos, '[', j, end_pos)) {
+        if (try_extract_and_parse_json(text, arr_pos, '[', j, end_pos, out_error)) {
             if (j.is_array()) {
                 for (const auto & elem : j) {
                     ToolCall tc;
@@ -445,6 +454,7 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
                     }
                 }
                 if (!tool_calls.empty()) {
+                    if (out_error) out_error->clear();
                     return;
                 }
             }
@@ -459,7 +469,7 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
 
         nlohmann::json j;
         size_t end_pos = 0;
-        if (try_extract_and_parse_json(text, next_obj, '{', j, end_pos)) {
+        if (try_extract_and_parse_json(text, next_obj, '{', j, end_pos, out_error)) {
             ToolCall tc;
             if (extract_single_tool_call(j, tc)) {
                 tool_calls.push_back(std::move(tc));
@@ -469,10 +479,17 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
             cur = next_obj + 1;
         }
     }
+
+    if (!tool_calls.empty() && out_error) {
+        out_error->clear();
+    }
 }
 
-bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_calls) {
+bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_calls, std::string * out_error) {
     tool_calls.clear();
+    if (out_error) {
+        out_error->clear();
+    }
 
     struct TagInfo {
         std::string_view open_tag;
@@ -490,6 +507,7 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
     };
 
     // Scan for tags in sequence
+    bool found_any_tag = false;
     size_t search_pos = 0;
 
     while (search_pos < response.size()) {
@@ -508,6 +526,7 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
             break;
         }
 
+        found_any_tag = true;
         const auto & tag = k_tags[matched_tag_idx];
         size_t content_start = earliest_pos + tag.open_tag.size();
         size_t content_end = response.size();
@@ -534,11 +553,23 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
         }
 
         std::string_view tag_content = response.substr(content_start, content_end - content_start);
-        parse_tool_calls_from_text_segment(tag_content, tool_calls);
+        parse_tool_calls_from_text_segment(tag_content, tool_calls, out_error);
+        if (tool_calls.empty() && out_error && out_error->empty()) {
+            size_t non_ws = tag_content.find_first_not_of(" \t\r\n");
+            if (non_ws != std::string_view::npos) {
+                nlohmann::json dummy;
+                try_parse_json_lenient(tag_content.substr(non_ws), dummy, out_error);
+            }
+        }
     }
 
     if (!tool_calls.empty()) {
+        if (out_error) out_error->clear();
         return true;
+    }
+
+    if (found_any_tag) {
+        return false;
     }
 
     // Fallback: If no tool tags or no tool calls in tags, parse raw JSON from response
@@ -551,13 +582,13 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
         fallback_view = stripped_storage;
     }
 
-    parse_tool_calls_from_text_segment(fallback_view, tool_calls);
+    parse_tool_calls_from_text_segment(fallback_view, tool_calls, nullptr);
     return !tool_calls.empty();
 }
 
-bool parse_tool_call(std::string_view response, std::string & name, nlohmann::json & arguments) {
+bool parse_tool_call(std::string_view response, std::string & name, nlohmann::json & arguments, std::string * out_error) {
     std::vector<ToolCall> tool_calls;
-    if (parse_tool_calls(response, tool_calls) && !tool_calls.empty()) {
+    if (parse_tool_calls(response, tool_calls, out_error) && !tool_calls.empty()) {
         name = std::move(tool_calls[0].name);
         arguments = std::move(tool_calls[0].arguments);
         return true;
@@ -567,7 +598,12 @@ bool parse_tool_call(std::string_view response, std::string & name, nlohmann::js
 
 // ---------------------------------------------------------------------------
 // Tool Approval Handling
-// ---------------------------------------------------------------------------
+// -------------------------------------------------------------{
+//  "name": "execute_command",
+//  "arguments": {
+//    "command": "cd /workspaces/llama-onprem-server && for f in src/llm/llm_engine.cpp src/common/agent.cpp src/common/tools.cpp src/common/context.hpp src/common/agent_backend.hpp src/client.cpp src/server.cpp src/fat_client.cpp; do\n  perl -pi -e 's/Color::(RESET|BOLD|DIM|RED|GREEN|YELLOW|BLUE|MAGENTA|CYAN|WHITE|GRAY)\\b/Color::code(Color::\$1)/g' \"$f\"\ndone\necho \"=== remaining bare Color:: usages (should be empty) ===\"\ngrep -rn \"Color::\" src/ | grep -v \"Color::code(\" | grep -v \"override_enabled\" | grep -v \"code(const char\" | grep -v \"is_enabled\"\necho \"=== DONE ===\"\ngrep -rc \"Color::code(\" src/ | grep -v ':0'"
+//  }
+//}              --------------
 
 ToolApprovalParseResult parse_tool_approval_input(std::string_view raw_input) {
     size_t first = raw_input.find_first_not_of(" \t\r\n");
@@ -596,10 +632,11 @@ ToolApprovalParseResult parse_tool_approval_input(std::string_view raw_input) {
     return ToolApprovalParseResult::INVALID;
 }
 
-ToolApproval prompt_tool_approval(std::string_view tool_name, const nlohmann::json & tool_args, std::istream & in, std::ostream & out) {
+ToolApproval prompt_tool_approval(std::string_view tool_name, const nlohmann::json &tool_args, std::istream &in,
+                                  std::ostream &out) {
     while (true) {
         out << Color::BOLD << Color::YELLOW << "⚠️  Agent vill köra verktyg / wants to execute tool: "
-            << Color::CYAN << tool_name << Color::RESET << "\n";
+                << Color::CYAN << tool_name << Color::RESET << "\n";
         out << "   " << Color::GRAY << "Parametrar / Arguments: " << Color::RESET << tool_args.dump(2) << "\n";
         out << "   " << Color::BOLD << "Godkänn körning? (ja / nej / alltid ja) [j/n/a]: " << Color::RESET;
         out.flush();

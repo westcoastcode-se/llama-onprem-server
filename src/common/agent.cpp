@@ -120,7 +120,8 @@ std::string run_subagent(IAgentBackend & backend,
         sub_messages.push_back({"assistant", clean_hist.empty() ? response : clean_hist});
 
         std::vector<ToolCall> tool_calls;
-        if (parse_tool_calls(response, tool_calls) && !tool_calls.empty()) {
+        std::string parse_error;
+        if (parse_tool_calls(response, tool_calls, &parse_error) && !tool_calls.empty()) {
             std::string call_signature;
             for (const auto & tc : tool_calls) {
                 call_signature += tc.name + ":" + tc.arguments.dump() + ";";
@@ -195,6 +196,31 @@ std::string run_subagent(IAgentBackend & backend,
             if (stop_execution) {
                 continue;
             }
+            continue;
+        } else if (!parse_error.empty()) {
+            std::string call_signature = "parse_error:" + parse_error;
+            if (call_signature == last_tool_call_signature) {
+                duplicate_tool_count++;
+            } else {
+                last_tool_call_signature = call_signature;
+                duplicate_tool_count = 0;
+            }
+
+            if (duplicate_tool_count >= 3) {
+                if (!quiet) {
+                    printf("%s  [sub-agent loop detected: skipping duplicate invalid tool call]%s\n", Color::RED, Color::RESET);
+                }
+                std::string loop_warning = "<tool_response>\nerror: repeated invalid tool call detected. Please provide your final answer or try a different approach.\n</tool_response>";
+                sub_messages.push_back({"tool", loop_warning});
+                continue;
+            }
+
+            if (!quiet) {
+                printf("%s❌ [sub-agent felaktig JSON i verktygsanrop / Invalid JSON in tool call: %s]%s\n",
+                       Color::RED, parse_error.c_str(), Color::RESET);
+            }
+            const std::string tool_message = "<tool_response>\nerror: " + parse_error + "\n</tool_response>";
+            sub_messages.push_back({"tool", tool_message});
             continue;
         }
 
@@ -306,7 +332,8 @@ bool execute_agent_turn(IAgentBackend & backend,
 
         // Check if assistant called one or more tools
         std::vector<ToolCall> tool_calls;
-        if (parse_tool_calls(response, tool_calls) && !tool_calls.empty()) {
+        std::string parse_error;
+        if (parse_tool_calls(response, tool_calls, &parse_error) && !tool_calls.empty()) {
             std::string call_signature;
             for (const auto & tc : tool_calls) {
                 call_signature += tc.name + ":" + tc.arguments.dump() + ";";
@@ -381,6 +408,31 @@ bool execute_agent_turn(IAgentBackend & backend,
             if (stop_execution) {
                 continue;
             }
+            continue;
+        } else if (!parse_error.empty()) {
+            std::string call_signature = "parse_error:" + parse_error;
+            if (call_signature == last_tool_call_signature) {
+                duplicate_tool_count++;
+            } else {
+                last_tool_call_signature = call_signature;
+                duplicate_tool_count = 0;
+            }
+
+            if (duplicate_tool_count >= 3) {
+                if (!quiet) {
+                    printf("%s[agent loop detected: skipping duplicate invalid tool call]%s\n", Color::RED, Color::RESET);
+                }
+                std::string loop_warning = "<tool_response>\nerror: repeated invalid tool call detected. Please provide your final answer or try a different approach.\n</tool_response>";
+                messages.push_back({"tool", loop_warning});
+                continue;
+            }
+
+            if (!quiet) {
+                printf("%s❌ [Felaktig JSON i verktygsanrop / Invalid JSON in tool call: %s]%s\n",
+                       Color::RED, parse_error.c_str(), Color::RESET);
+            }
+            const std::string tool_message = "<tool_response>\nerror: " + parse_error + "\n</tool_response>";
+            messages.push_back({"tool", tool_message});
             continue;
         }
 

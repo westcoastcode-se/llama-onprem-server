@@ -348,6 +348,42 @@ void test_tool_call_parsing() {
     assert(tool_calls[1].name == "read_file");
     assert(tool_calls[1].arguments["path"] == "arr.txt");
 
+    // 5. Invalid JSON in tool call tests (nlohmann parse error reporting)
+    {
+        std::string err;
+        std::string broken_json = "<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\n    \"path\": \n  }\n}\n</tool_call>";
+        parsed = parse_tool_call(broken_json, tool_name, args, &err);
+        assert(!parsed);
+        assert(!err.empty());
+        assert(err.find("parse_error") != std::string::npos || err.find("syntax error") != std::string::npos || err.find("[json.exception") != std::string::npos);
+
+        std::string not_json = "<tool_call>\nread_file(path=\"test.txt\")\n</tool_call>";
+        err.clear();
+        parsed = parse_tool_call(not_json, tool_name, args, &err);
+        assert(!parsed);
+        assert(!err.empty());
+        assert(err.find("parse_error") != std::string::npos || err.find("[json.exception") != std::string::npos);
+
+        // Multiple tool calls tag with broken JSON
+        std::string broken_array = "<tool_calls>\n[ {\"name\": \"read_file\", \"arguments\": } ]\n</tool_calls>";
+        err.clear();
+        tool_calls.clear();
+        bool res = parse_tool_calls(broken_array, tool_calls, &err);
+        assert(!res);
+        assert(tool_calls.empty());
+        assert(!err.empty());
+        assert(err.find("parse_error") != std::string::npos || err.find("[json.exception") != std::string::npos);
+
+        // Normal response without tool tags should have empty error
+        std::string normal_msg = "Hello! I am ready to help you.";
+        err.clear();
+        tool_calls.clear();
+        res = parse_tool_calls(normal_msg, tool_calls, &err);
+        assert(!res);
+        assert(tool_calls.empty());
+        assert(err.empty());
+    }
+
     std::cout << "[TEST] Tool call parsing tests passed!" << std::endl;
 }
 
@@ -1573,6 +1609,36 @@ void test_agent_backend_and_common_runner() {
         assert(messages[4].content.find("multi_2") != std::string::npos);
         assert(messages[5].role == "assistant");
         assert(messages[5].content == "Both commands executed successfully.");
+
+        // Test agent turn recovering from broken tool_call JSON
+        mock.chat_call_count = 0;
+        messages.clear();
+        messages.push_back({"system", "System instruction"});
+        mock.chat_responses = {
+            // First turn: model outputs invalid JSON inside <tool_call>
+            "<tool_call>\n{\n  \"name\": \"execute_command\",\n  \"arguments\": {\n    \"command\": \n  }\n}\n</tool_call>",
+            // Second turn: model sees nlohmann error in <tool_response> and corrects it
+            "<tool_call>{\"name\":\"execute_command\",\"arguments\":{\"command\":\"echo fixed_syntax\"}}</tool_call>",
+            // Third turn: final answer
+            "Command executed with syntax correction."
+        };
+        turn_ok = execute_agent_turn(mock, messages, tools, "Run echo command",
+                                     0.7f, 10, auto_approve, {}, &out_resp, true);
+        assert(turn_ok);
+        assert(mock.chat_call_count == 3);
+        assert(out_resp == "Command executed with syntax correction.");
+        assert(messages.size() == 7);
+        assert(messages[0].role == "system");
+        assert(messages[1].role == "user");
+        assert(messages[2].role == "assistant"); // broken tool call
+        assert(messages[3].role == "tool");      // nlohmann parse error response
+        assert(messages[3].content.find("<tool_response>") != std::string::npos);
+        assert(messages[3].content.find("error:") != std::string::npos);
+        assert(messages[3].content.find("parse_error") != std::string::npos || messages[3].content.find("[json.exception") != std::string::npos || messages[3].content.find("syntax error") != std::string::npos);
+        assert(messages[4].role == "assistant"); // fixed tool call
+        assert(messages[5].role == "tool");      // tool output
+        assert(messages[5].content.find("fixed_syntax") != std::string::npos);
+        assert(messages[6].role == "assistant"); // final answer
     }
 
     // 4. Test run_subagent with MockAgentBackend

@@ -131,10 +131,17 @@ struct ToolCall {
 
 /**
  * @brief Parses all tool calls from LLM output (supporting multiple tool calls/tags or JSON arrays).
+ * @param response Raw LLM output.
+ * @param tool_calls Output vector of parsed tool calls.
+ * @param out_error Optional pointer to receive nlohmann parse error message if JSON parsing fails.
  */
-bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_calls);
+bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_calls, std::string * out_error = nullptr);
 
 /**
  * @brief Parses a single (first) tool call from LLM output (either inside a <tool_call> tag or raw JSON).
+ * @param response Raw LLM output.
+ * @param name Output tool name.
+ * @param arguments Output tool arguments JSON.
+ * @param out_error Optional pointer to receive nlohmann parse error message if JSON parsing fails.
  */
-bool parse_tool_call(std::string_view response, std::string & name, nlohmann::json & arguments);
+bool parse_tool_call(std::string_view response, std::string & name, nlohmann::json & arguments, std::string * out_error = nullptr);
