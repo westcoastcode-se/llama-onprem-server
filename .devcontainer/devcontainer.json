@@ -1,0 +1,8 @@
+{
+  "name": "dev",
+  "image":"local_ai:latest",
+  "runArgs": [
+    "--network=host"
+  ],
+  "remoteUser":"1000"
+}

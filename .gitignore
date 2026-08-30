@@ -1,0 +1,8 @@
+.idea
+cmake-build-debug
+cmake-build-release
+build
+__pycache__
+
+# Ignore model if downloaded in the project directory
+Qwen3.8-27B-GGUF

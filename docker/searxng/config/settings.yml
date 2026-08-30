@@ -1,0 +1,9 @@
+use_default_settings: true
+server:
+    secret_key: "supersecret"   # generated 2026-08-22
+    bind_address: "[::]"
+search:
+    # Also expose the JSON API (used by Open WebUI's web-search tool); HTML stays on.
+    formats:
+        - html
+        - json

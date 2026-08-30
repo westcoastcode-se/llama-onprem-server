@@ -1,0 +1,6 @@
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries" FORCE)
+set(LLAMA_STATIC ON CACHE BOOL "llama: static link libraries" FORCE)
+set(GGML_STATIC ON CACHE BOOL "ggml: static link libraries" FORCE)
+# set(GGML_CUDA ON CACHE BOOL "" FORCE)
+# set(CMAKE_CUDA_ARCHITECTURES "89" CACHE STRING "" FORCE)
+add_subdirectory(llama.cpp)

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local AI - Web Interface</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <span class="logo-icon">⚡</span>
+                    <span class="logo-text">Local AI</span>
+                </div>
+                <button id="new-chat-btn" class="btn btn-primary btn-new-chat" title="Starta ny chatt">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    <span>Ny chatt</span>
+                </button>
+            </div>
+
+            <!-- Server Status & Stats Card -->
+            <div class="status-card">
+                <div class="status-header">
+                    <div class="status-indicator">
+                        <span class="status-dot" id="server-status-dot"></span>
+                        <span class="status-label" id="server-status-text">Ansluter...</span>
+                    </div>
+                    <button class="btn-icon" id="btn-refresh-status" title="Uppdatera status">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                    </button>
+                </div>
+                <div class="status-info-row">
+                    <span class="info-key">Modell:</span>
+                    <span class="info-val model-val" id="status-model-name">-</span>
+                </div>
+                <div class="status-info-row">
+                    <span class="info-key">Server:</span>
+                    <span class="info-val" id="status-server-target">127.0.0.1:8080</span>
+                </div>
+
+                <!-- Context Usage Meter -->
+                <div class="context-meter-box">
+                    <div class="context-header">
+                        <span class="context-title">Context Användning</span>
+                        <span class="context-pct" id="context-pct">0%</span>
+                    </div>
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="context-bar-fill" style="width: 0%;"></div>
+                    </div>
+                    <div class="context-tokens-label">
+                        <span id="context-used-tokens">0</span> / <span id="context-max-tokens">4096</span> tokens
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Accordion -->
+            <div class="sidebar-settings">
+                <div class="section-title">Inställningar</div>
+                <div class="setting-item">
+                    <div class="setting-header">
+                        <label for="temp-slider">Temperatur: <span id="temp-val">0.7</span></label>
+                    </div>
+                    <input type="range" id="temp-slider" min="0.0" max="1.5" step="0.05" value="0.7" class="slider">
+                </div>
+
+                <div class="setting-item">
+                    <div class="setting-header">
+                        <label for="system-prompt-input">Systemprompt</label>
+                    </div>
+                    <textarea id="system-prompt-input" rows="3" class="input-text" placeholder="Valfri systemprompt för AI-assistenten..."></textarea>
+                </div>
+
+                <div class="setting-item">
+                    <button class="btn btn-secondary btn-full" id="btn-open-server-modal">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        <span>Ändra serveradress</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Footer actions -->
+            <div class="sidebar-footer">
+                <button class="btn btn-outline-danger btn-full" id="btn-reset-context" title="Återställ serverns context och minne">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                    <span>Återställ context (/reset)</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="main-content">
+            <!-- Top bar -->
+            <header class="topbar">
+                <button class="btn-icon mobile-menu-btn" id="mobile-menu-toggle">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+                <div class="current-chat-title" id="current-chat-title">
+                    <span class="ai-avatar">🤖</span>
+                    <span>Local AI Server Chat</span>
+                </div>
+                <div class="topbar-actions">
+                    <button class="btn btn-sm btn-secondary" id="btn-clear-chat" title="Rensa chatten">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        <span>Rensa</span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Message List -->
+            <div class="messages-container" id="messages-container">
+                <div class="welcome-screen" id="welcome-screen">
+                    <div class="welcome-icon">⚡</div>
+                    <h2>Välkommen till Local AI Web UI</h2>
+                    <p>Denna webbplats kommunicerar direkt med din lokala AI-server via realtidsstreaming och full context-övervakning.</p>
+                    <div class="quick-prompts">
+                        <button class="quick-prompt-btn" data-prompt="Förklara hur LLM-inference och context fönster fungerar.">
+                            💡 Förklara LLM-inference & context
+                        </button>
+                        <button class="quick-prompt-btn" data-prompt="Skriv en snabb och effektiv C++ funktion för parallell beräkning med trådar.">
+                            💻 Skriv en C++ funktion
+                        </button>
+                        <button class="quick-prompt-btn" data-prompt="Hur bryter man bäst ner en komplex programmeringsuppgift i deluppgifter?">
+                            📋 Bryt ner komplexa uppgifter
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Input Area -->
+            <div class="input-container">
+                <form id="chat-form" class="chat-form">
+                    <div class="input-wrapper">
+                        <textarea
+                            id="user-input"
+                            class="chat-input"
+                            placeholder="Skriv ett meddelande till din lokala AI-modell..."
+                            rows="1"
+                        ></textarea>
+                        <div class="input-actions">
+                            <button type="button" class="btn btn-stop hidden" id="btn-stop-gen" title="Stoppa generering">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12"></rect></svg>
+                                <span>Stoppa</span>
+                            </button>
+                            <button type="submit" class="btn btn-send" id="btn-send-msg" title="Skicka meddelande (Enter)">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </button>
+                        </div>
+                    </div>
+                </form>
+                <div class="input-footnote">
+                    <span>Tips: Tryck <code>Enter</code> för att skicka, <code>Shift + Enter</code> för ny rad.</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Server Configuration Modal -->
+    <div class="modal-overlay hidden" id="server-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Anslutningsinställningar</h3>
+                <button class="btn-icon" id="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Konfigurera IP/värd och TCP-port för Local AI-servern som hemsidan ska kommunicera med.</p>
+                <div class="form-group">
+                    <label for="cfg-server-host">Server Host / IP:</label>
+                    <input type="text" id="cfg-server-host" class="input-text" value="127.0.0.1">
+                </div>
+                <div class="form-group">
+                    <label for="cfg-server-port">Server TCP Port:</label>
+                    <input type="number" id="cfg-server-port" class="input-text" value="8080">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-cancel-modal">Avbryt</button>
+                <button class="btn btn-primary" id="btn-save-modal">Spara & Anslut</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

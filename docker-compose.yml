@@ -1,0 +1,57 @@
+name: onprem-ai
+
+services:
+  valkey:
+    container_name: onprem-ai-valkey
+    image: docker.io/valkey/valkey:9-alpine
+    command: valkey-server --save 30 1 --loglevel warning
+    restart: unless-stopped
+    volumes:
+      - ./docker/valkey/config/valkey.conf:/etc/valkey/valkey.conf
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep PONG"]
+      interval: 1s
+      timeout: 3s
+      retries: 5
+    networks:
+      - ai_isolated
+
+  searxng:
+    container_name: onprem-ai-searxng
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    depends_on:
+      valkey:
+        condition: service_healthy
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${SEARXNG_PORT:-4488}:8080"
+    volumes:
+      - ./docker/searxng/config:/etc/searxng/:rw
+      - ./docker/searxng/data:/var/cache/searxng/:rw
+    environment:
+      - SEARXNG_BASE_URL=https://${SEARXNG_HOSTNAME:-localhost}/
+      - UWSGI_WORKERS=${SEARXNG_UWSGI_WORKERS:-4}
+      - UWSGI_THREADS=${SEARXNG_UWSGI_THREADS:-4}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    networks:
+      - ai_public
+      - ai_isolated
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+networks:
+  ai_isolated:
+    internal: true
+  ai_public:
+
+volumes:
+  valkey-data:
