@@ -526,9 +526,12 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
 
         for (size_t i = 0; i < sizeof(k_tags) / sizeof(k_tags[0]); ++i) {
             size_t pos = response.find(k_tags[i].open_tag, search_pos);
-            if (pos != std::string_view::npos && (earliest_pos == std::string_view::npos || pos < earliest_pos)) {
-                earliest_pos = pos;
-                matched_tag_idx = i;
+            // Assume that the tool_call starts on a new line or at the start of the response
+            if (search_pos == 0 || (pos != std::string_view::npos && pos > 0 && response[pos-1] == '\n')) {
+                if (pos != std::string_view::npos && (earliest_pos == std::string_view::npos || pos < earliest_pos)) {
+                    earliest_pos = pos;
+                    matched_tag_idx = i;
+                }
             }
         }
 
