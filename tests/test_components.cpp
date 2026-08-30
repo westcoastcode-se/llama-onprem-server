@@ -384,6 +384,71 @@ void test_tool_call_parsing() {
         assert(err.empty());
     }
 
+    // 6. Tool calls in the middle of text vs at the end of response
+    {
+        // 6a. Tool call in the middle of text with following content should NOT be interpreted
+        std::string text_with_tool_call = "To read a file you can use <tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"test.txt\"}}</tool_call> in your instructions. Is there anything else you want to know?";
+        std::string err;
+        tool_name.clear();
+        args.clear();
+        parsed = parse_tool_call(text_with_tool_call, tool_name, args, &err);
+        assert(!parsed);
+        assert(tool_name.empty());
+        assert(err.empty());
+
+        tool_calls.clear();
+        bool res = parse_tool_calls(text_with_tool_call, tool_calls, &err);
+        assert(!res);
+        assert(tool_calls.empty());
+        assert(err.empty());
+
+        // 6b. Broken JSON in tool call in the middle of text should NOT produce a parse error
+        std::string broken_in_text = "Here is an example: <tool_call>{\"name\":\"read_file\", \"arguments\": }</tool_call> and here is how to fix it.";
+        err.clear();
+        tool_calls.clear();
+        res = parse_tool_calls(broken_in_text, tool_calls, &err);
+        assert(!res);
+        assert(tool_calls.empty());
+        assert(err.empty());
+
+        // 6c. Tool call tag without closing tag in the middle of text
+        std::string unclosed_in_text = "You can write <tool_call> tag to invoke tools in the terminal.";
+        err.clear();
+        tool_calls.clear();
+        res = parse_tool_calls(unclosed_in_text, tool_calls, &err);
+        assert(!res);
+        assert(tool_calls.empty());
+        assert(err.empty());
+
+        // 6d. Text before tool call, but tool call is at the end of response -> MUST be parsed
+        std::string text_then_tool = "I will now proceed with reading the file:\n<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\"path\": \"actual_file.txt\"}\n}\n</tool_call>\n\n  ";
+        err.clear();
+        tool_name.clear();
+        args.clear();
+        parsed = parse_tool_call(text_then_tool, tool_name, args, &err);
+        assert(parsed);
+        assert(tool_name == "read_file");
+        assert(args["path"] == "actual_file.txt");
+        assert(err.empty());
+
+        // 6e. Tool call in middle of text (ignored) and real tool call at the end (interpreted)
+        std::string mixed_response = "For example: <tool_call>{\"name\":\"fake_tool\"}</tool_call>. Now doing the actual call:\n<tool_call>{\"name\":\"real_tool\",\"arguments\":{\"target\":\"main\"}}</tool_call>";
+        err.clear();
+        tool_calls.clear();
+        res = parse_tool_calls(mixed_response, tool_calls, &err);
+        assert(res);
+        assert(tool_calls.size() == 1);
+        assert(tool_calls[0].name == "real_tool");
+        assert(tool_calls[0].arguments["target"] == "main");
+
+        // 6f. Raw JSON in middle of text should not be interpreted as tool call
+        std::string raw_json_in_text = "The returned data was {\"name\": \"read_file\", \"arguments\": {\"path\": \"test.txt\"}} as shown above.";
+        tool_calls.clear();
+        res = parse_tool_calls(raw_json_in_text, tool_calls);
+        assert(!res);
+        assert(tool_calls.empty());
+    }
+
     std::cout << "[TEST] Tool call parsing tests passed!" << std::endl;
 }
 
@@ -1639,6 +1704,21 @@ void test_agent_backend_and_common_runner() {
         assert(messages[5].role == "tool");      // tool output
         assert(messages[5].content.find("fixed_syntax") != std::string::npos);
         assert(messages[6].role == "assistant"); // final answer
+
+        // Test agent turn where response contains <tool_call> in the middle of text (not at end)
+        mock.chat_call_count = 0;
+        messages.clear();
+        messages.push_back({"system", "System instruction"});
+        mock.chat_responses = {
+            "You can execute commands with <tool_call>{\"name\":\"execute_command\",\"arguments\":{\"command\":\"ls\"}}</tool_call> in your prompts. Let me know if you have questions!"
+        };
+        turn_ok = execute_agent_turn(mock, messages, tools, "Explain how tool calling works",
+                                     0.7f, 10, auto_approve, {}, &out_resp, true);
+        assert(turn_ok);
+        assert(mock.chat_call_count == 1);
+        assert(out_resp == "You can execute commands with <tool_call>{\"name\":\"execute_command\",\"arguments\":{\"command\":\"ls\"}}</tool_call> in your prompts. Let me know if you have questions!");
+        assert(messages.size() == 3); // system, user, assistant (no tool execution)
+        assert(messages[2].role == "assistant");
     }
 
     // 4. Test run_subagent with MockAgentBackend

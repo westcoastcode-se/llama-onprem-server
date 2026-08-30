@@ -437,7 +437,8 @@ static bool extract_single_tool_call(const nlohmann::json & j, ToolCall & tc) {
     return true;
 }
 
-static void parse_tool_calls_from_text_segment(std::string_view text, std::vector<ToolCall> & tool_calls, std::string * out_error = nullptr) {
+static size_t parse_tool_calls_from_text_segment(std::string_view text, std::vector<ToolCall> & tool_calls, std::string * out_error = nullptr) {
+    size_t last_end = 0;
     // 1. First check if the text contains a JSON array [...]
     size_t arr_pos = text.find('[');
     size_t obj_pos = text.find('{');
@@ -455,7 +456,7 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
                 }
                 if (!tool_calls.empty()) {
                     if (out_error) out_error->clear();
-                    return;
+                    return end_pos;
                 }
             }
         }
@@ -473,6 +474,7 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
             ToolCall tc;
             if (extract_single_tool_call(j, tc)) {
                 tool_calls.push_back(std::move(tc));
+                last_end = end_pos;
             }
             cur = (end_pos > next_obj) ? end_pos : (next_obj + 1);
         } else {
@@ -483,6 +485,7 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
     if (!tool_calls.empty() && out_error) {
         out_error->clear();
     }
+    return last_end;
 }
 
 bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_calls, std::string * out_error) {
@@ -506,8 +509,15 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
         {"```json", "```"}
     };
 
-    // Scan for tags in sequence
-    bool found_any_tag = false;
+    struct TagMatch {
+        size_t open_pos;
+        size_t content_start;
+        size_t content_end;
+        size_t end_pos;
+        bool has_close_tag;
+    };
+
+    std::vector<TagMatch> matches;
     size_t search_pos = 0;
 
     while (search_pos < response.size()) {
@@ -526,15 +536,19 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
             break;
         }
 
-        found_any_tag = true;
         const auto & tag = k_tags[matched_tag_idx];
+        size_t open_pos = earliest_pos;
         size_t content_start = earliest_pos + tag.open_tag.size();
         size_t content_end = response.size();
+        size_t end_pos = response.size();
+        bool has_close_tag = false;
 
         size_t close_pos = response.find(tag.close_tag, content_start);
         if (close_pos != std::string_view::npos) {
             content_end = close_pos;
-            search_pos = close_pos + tag.close_tag.size();
+            end_pos = close_pos + tag.close_tag.size();
+            search_pos = end_pos;
+            has_close_tag = true;
         } else {
             size_t next_open = std::string_view::npos;
             for (size_t i = 0; i < sizeof(k_tags) / sizeof(k_tags[0]); ++i) {
@@ -545,34 +559,67 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
             }
             if (next_open != std::string_view::npos) {
                 content_end = next_open;
+                end_pos = next_open;
                 search_pos = next_open;
             } else {
                 content_end = response.size();
+                end_pos = response.size();
                 search_pos = response.size();
             }
         }
 
-        std::string_view tag_content = response.substr(content_start, content_end - content_start);
-        parse_tool_calls_from_text_segment(tag_content, tool_calls, out_error);
-        if (tool_calls.empty() && out_error && out_error->empty()) {
-            size_t non_ws = tag_content.find_first_not_of(" \t\r\n");
-            if (non_ws != std::string_view::npos) {
-                nlohmann::json dummy;
-                try_parse_json_lenient(tag_content.substr(non_ws), dummy, out_error);
+        matches.push_back({open_pos, content_start, content_end, end_pos, has_close_tag});
+    }
+
+    if (!matches.empty()) {
+        const auto & last_match = matches.back();
+        std::string_view after_last = response.substr(last_match.end_pos);
+        if (after_last.find_first_not_of(" \t\r\n") != std::string_view::npos) {
+            // There is non-whitespace text after the last tag: tags are part of the text, not at the end.
+            return false;
+        }
+
+        size_t start_match_idx = matches.size() - 1;
+        while (start_match_idx > 0) {
+            size_t prev_idx = start_match_idx - 1;
+            size_t prev_end = matches[prev_idx].end_pos;
+            size_t curr_open = matches[start_match_idx].open_pos;
+            if (curr_open >= prev_end) {
+                std::string_view between = response.substr(prev_end, curr_open - prev_end);
+                if (between.find_first_not_of(" \t\r\n") == std::string_view::npos) {
+                    start_match_idx = prev_idx;
+                    continue;
+                }
+            }
+            break;
+        }
+
+        for (size_t i = start_match_idx; i < matches.size(); ++i) {
+            const auto & match = matches[i];
+            std::string_view tag_content = response.substr(match.content_start, match.content_end - match.content_start);
+            parse_tool_calls_from_text_segment(tag_content, tool_calls, out_error);
+            if (tool_calls.empty() && out_error) {
+                if (!match.has_close_tag && tag_content.find('{') == std::string_view::npos && tag_content.find('[') == std::string_view::npos) {
+                    out_error->clear();
+                } else if (out_error->empty()) {
+                    size_t non_ws = tag_content.find_first_not_of(" \t\r\n");
+                    if (non_ws != std::string_view::npos) {
+                        nlohmann::json dummy;
+                        try_parse_json_lenient(tag_content.substr(non_ws), dummy, out_error);
+                    }
+                }
             }
         }
-    }
 
-    if (!tool_calls.empty()) {
-        if (out_error) out_error->clear();
-        return true;
-    }
+        if (!tool_calls.empty()) {
+            if (out_error) out_error->clear();
+            return true;
+        }
 
-    if (found_any_tag) {
         return false;
     }
 
-    // Fallback: If no tool tags or no tool calls in tags, parse raw JSON from response
+    // Fallback: If no tool tags found, parse raw JSON from response
     std::string stripped_storage;
     std::string_view fallback_view = response;
     if (response.find("<think>") != std::string_view::npos ||
@@ -582,8 +629,15 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
         fallback_view = stripped_storage;
     }
 
-    parse_tool_calls_from_text_segment(fallback_view, tool_calls, nullptr);
-    return !tool_calls.empty();
+    size_t last_end = parse_tool_calls_from_text_segment(fallback_view, tool_calls, nullptr);
+    if (!tool_calls.empty()) {
+        if (fallback_view.substr(last_end).find_first_not_of(" \t\r\n") != std::string_view::npos) {
+            tool_calls.clear();
+            return false;
+        }
+        return true;
+    }
+    return false;
 }
 
 bool parse_tool_call(std::string_view response, std::string & name, nlohmann::json & arguments, std::string * out_error) {
