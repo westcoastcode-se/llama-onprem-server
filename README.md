@@ -22,7 +22,7 @@ good for that kind of hardware.
 # Setup Dev
 
 Install the necessary tools needed for the project to work — C++ development tools with CMake and Python.
-Optionally with CUDA as well
+Optionally with CUDA as well. Replace `pacman` with `apt` if you are building on a Debian system.
 
 ```bash
 sudo pacman -S --needed base-devel git cmake ninja python curl cuda
@@ -32,7 +32,7 @@ Models can be found on https://huggingface.co, for example: https://huggingface.
 
 ## Checking out and building llama.cpp outside this project
 
-This project is customized to be built using CUDA. This might be extended in the future.
+Here is an example on how to build llama.cpp from scratch. You don't need to do this beforehand if you don't want to.
 
 ```bash
 # Clone llama.cpp
