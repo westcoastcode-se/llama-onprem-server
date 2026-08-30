@@ -27,22 +27,22 @@ function(configure_localai_target target)
         ${CMAKE_SOURCE_DIR}/vendors/llama.cpp/vendor)
     if (CMAKE_BUILD_TYPE STREQUAL "Release")
         if (MSVC)
-            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
+            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
         else ()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -O3 -fno-math-errno -fno-trapping-math -Wstrict-overflow -std=c++23 "-DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -O3 -fno-math-errno -fno-trapping-math -Wstrict-overflow -std=c++23 "-DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
         endif ()
     elseif (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
         if (MSVC)
-            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
+            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
         else ()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -O3  -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -O3  -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
             target_link_libraries(${target} PRIVATE  -fno-omit-frame-pointer -Wstrict-overflow -g)
         endif ()
     else ()
         if (MSVC)
-            target_compile_options(${target} PRIVATE /W4 /wd4100 /FA /arch:SSE2 /DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
+            target_compile_options(${target} PRIVATE /W4 /wd4100 /FA /arch:SSE2 /DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
         else ()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
             target_link_libraries(${target} PRIVATE -fno-omit-frame-pointer -Wstrict-overflow -g)
         endif ()
     endif ()
@@ -98,9 +98,11 @@ target_link_libraries(fat_client PRIVATE llama CURL::libcurl ${CMAKE_THREAD_LIBS
 #
 # 4. Tests
 #
-add_executable(test_components
+add_executable(tests
+    tests/tests.cpp
+    tests/common/tools/test_tool_execute_command.cpp
     tests/test_components.cpp
     ${COMMON_TOOL_SOURCES}
     src/common/agent.cpp)
-configure_localai_target(test_components)
-target_link_libraries(test_components PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+configure_localai_target(tests)
+target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})

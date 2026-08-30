@@ -7,14 +7,7 @@
 #include "common/protocol.hpp"
 #include "common/tools.hpp"
 #include "common/utf8.hpp"
-#include <cassert>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <thread>
+#include "tests.hpp"
 
 void test_tools() {
     std::cout << "[TEST] Running tool tests..." << std::endl;
@@ -1141,18 +1134,6 @@ void test_command_execution() {
 
     auto tools = get_registered_tools();
 
-    // 1. Test direct slash command `/exec echo 'hello from test'`
-    {
-        std::string user_input = "/exec echo 'hello from test'";
-        assert(user_input.rfind("/exec ", 0) == 0);
-        size_t space_pos = user_input.find(' ');
-        std::string cmd = user_input.substr(space_pos + 1);
-        nlohmann::json args = {{"command", cmd}};
-        std::string res = run_tool(tools, "execute_command", args);
-        assert(res.find("hello from test") != std::string::npos);
-        assert(res.find("Exit code: 0") != std::string::npos);
-    }
-
     // 2. Test `/sh`, `/run`, `/cmd` prefixes
     {
         for (const char * prefix : {"/sh ", "/run ", "/cmd "}) {
@@ -1774,7 +1755,7 @@ void test_agent_backend_and_common_runner() {
     std::cout << "[TEST] Agent backend and common runner tests passed!" << std::endl;
 }
 
-int main() {
+void test_components() {
     test_tools();
     test_search_text();
     test_tool_call_parsing();
@@ -1792,5 +1773,4 @@ int main() {
     test_thinking_stream_filter();
     test_agent_backend_and_common_runner();
     std::cout << "\nALL TESTS PASSED SUCCESSFULLY!" << std::endl;
-    return 0;
 }
