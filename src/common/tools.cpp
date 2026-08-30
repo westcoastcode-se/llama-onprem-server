@@ -135,7 +135,7 @@ std::string build_system_prompt(std::span<const Tool> tools, std::string_view cu
     }
 
     ss << "## Tool Calling Format:\n";
-    ss << "To invoke a tool, output exactly:\n";
+    ss << "To invoke a tool, output valid JSON inside a tool_call XML tag exactly:\n";
     ss << "<tool_call>\n";
     ss << "{\n";
     ss << "  \"name\": \"<tool_name>\",\n";
@@ -198,18 +198,108 @@ std::string run_tool(std::span<const Tool> tools, std::string_view name, const n
 // Tool Call Parsing
 // ---------------------------------------------------------------------------
 
-/**
- * @brief Extracts a balanced JSON object {...} from a substring.
- */
-static std::string_view extract_json_object(std::string_view text, size_t from) {
-    const size_t begin = text.find('{', from);
+static void sanitize_json(std::string & s) {
+    bool in_str = false;
+    bool esc = false;
+    size_t last_comma_pos = std::string::npos;
+
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_str = false;
+            }
+            continue;
+        }
+
+        if (c == '"') {
+            in_str = true;
+            last_comma_pos = std::string::npos;
+        } else if (c == ',') {
+            last_comma_pos = i;
+        } else if (c == '}' || c == ']') {
+            if (last_comma_pos != std::string::npos) {
+                s[last_comma_pos] = ' ';
+                last_comma_pos = std::string::npos;
+            }
+        } else if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+            last_comma_pos = std::string::npos;
+        }
+    }
+}
+
+static std::string escape_control_chars_in_strings(const std::string & s) {
+    std::string res;
+    res.reserve(s.size() + 16);
+    bool in_str = false;
+    bool esc = false;
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (in_str) {
+            if (esc) {
+                esc = false;
+                res.push_back(c);
+            } else if (c == '\\') {
+                esc = true;
+                res.push_back(c);
+            } else if (c == '"') {
+                in_str = false;
+                res.push_back(c);
+            } else if (c == '\n') {
+                res.append("\\n");
+            } else if (c == '\r') {
+                res.append("\\r");
+            } else if (c == '\t') {
+                res.append("\\t");
+            } else {
+                res.push_back(c);
+            }
+        } else {
+            if (c == '"') {
+                in_str = true;
+            }
+            res.push_back(c);
+        }
+    }
+    return res;
+}
+
+static bool try_parse_json_lenient(std::string_view json_str, nlohmann::json & out_json) {
+    try {
+        out_json = nlohmann::json::parse(json_str);
+        return true;
+    } catch (...) {}
+
+    std::string s(json_str);
+    sanitize_json(s);
+    try {
+        out_json = nlohmann::json::parse(s);
+        return true;
+    } catch (...) {}
+
+    std::string escaped = escape_control_chars_in_strings(s);
+    try {
+        out_json = nlohmann::json::parse(escaped);
+        return true;
+    } catch (...) {}
+
+    return false;
+}
+
+static bool try_extract_and_parse_json(std::string_view text, size_t from, char start_char, nlohmann::json & out_json, size_t & out_end_pos) {
+    const size_t begin = text.find(start_char, from);
     if (begin == std::string_view::npos) {
-        return "";
+        return false;
     }
 
-    int depth = 0;
+    std::vector<char> stack;
     bool in_string = false;
     bool escaped = false;
+
     for (size_t i = begin; i < text.size(); ++i) {
         const char c = text[i];
         if (in_string) {
@@ -222,56 +312,79 @@ static std::string_view extract_json_object(std::string_view text, size_t from) 
             }
             continue;
         }
+
         if (c == '"') {
             in_string = true;
         } else if (c == '{') {
-            ++depth;
-        } else if (c == '}') {
-            --depth;
-            if (depth == 0) {
-                return text.substr(begin, i - begin + 1);
-            }
-        }
-    }
-    return "";
-}
-
-/**
- * @brief Extracts a balanced JSON array [...] from a substring.
- */
-static std::string_view extract_json_array(std::string_view text, size_t from) {
-    const size_t begin = text.find('[', from);
-    if (begin == std::string_view::npos) {
-        return "";
-    }
-
-    int depth = 0;
-    bool in_string = false;
-    bool escaped = false;
-    for (size_t i = begin; i < text.size(); ++i) {
-        const char c = text[i];
-        if (in_string) {
-            if (escaped) {
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == '"') {
-                in_string = false;
-            }
-            continue;
-        }
-        if (c == '"') {
-            in_string = true;
+            stack.push_back('{');
         } else if (c == '[') {
-            ++depth;
+            stack.push_back('[');
+        } else if (c == '}') {
+            if (!stack.empty() && stack.back() == '{') {
+                stack.pop_back();
+                if (stack.empty()) {
+                    std::string_view balanced = text.substr(begin, i - begin + 1);
+                    if (try_parse_json_lenient(balanced, out_json)) {
+                        out_end_pos = i + 1;
+                        return true;
+                    }
+                }
+            }
         } else if (c == ']') {
-            --depth;
-            if (depth == 0) {
-                return text.substr(begin, i - begin + 1);
+            if (!stack.empty() && stack.back() == '[') {
+                stack.pop_back();
+                if (stack.empty()) {
+                    std::string_view balanced = text.substr(begin, i - begin + 1);
+                    if (try_parse_json_lenient(balanced, out_json)) {
+                        out_end_pos = i + 1;
+                        return true;
+                    }
+                }
             }
         }
     }
-    return "";
+
+    // If balanced extraction didn't complete, attempt to repair unclosed structure
+    if (!stack.empty() || in_string) {
+        std::string repaired(text.substr(begin));
+        if (in_string) {
+            while (!repaired.empty() && (repaired.back() == ' ' || repaired.back() == '\t' ||
+                                         repaired.back() == '\r' || repaired.back() == '\n')) {
+                repaired.pop_back();
+            }
+            if (!repaired.empty() && repaired.back() == '\\') {
+                repaired.pop_back();
+            }
+            repaired.push_back('"');
+        }
+
+        // Trim trailing whitespace
+        while (!repaired.empty() && (repaired.back() == ' ' || repaired.back() == '\t' ||
+                                     repaired.back() == '\r' || repaired.back() == '\n')) {
+            repaired.pop_back();
+        }
+
+        if (!repaired.empty() && repaired.back() == ',') {
+            repaired.pop_back();
+        } else if (!repaired.empty() && repaired.back() == ':') {
+            repaired.append(" null");
+        }
+
+        for (auto it = stack.rbegin(); it != stack.rend(); ++it) {
+            if (*it == '{') {
+                repaired.push_back('}');
+            } else if (*it == '[') {
+                repaired.push_back(']');
+            }
+        }
+
+        if (try_parse_json_lenient(repaired, out_json)) {
+            out_end_pos = text.size();
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static bool extract_single_tool_call(const nlohmann::json & j, ToolCall & tc) {
@@ -321,23 +434,19 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
     size_t obj_pos = text.find('{');
 
     if (arr_pos != std::string_view::npos && (obj_pos == std::string_view::npos || arr_pos < obj_pos)) {
-        std::string_view arr_str = extract_json_array(text, arr_pos);
-        if (!arr_str.empty()) {
-            try {
-                auto j = nlohmann::json::parse(arr_str);
-                if (j.is_array()) {
-                    for (const auto & elem : j) {
-                        ToolCall tc;
-                        if (extract_single_tool_call(elem, tc)) {
-                            tool_calls.push_back(std::move(tc));
-                        }
-                    }
-                    if (!tool_calls.empty()) {
-                        return;
+        nlohmann::json j;
+        size_t end_pos = 0;
+        if (try_extract_and_parse_json(text, arr_pos, '[', j, end_pos)) {
+            if (j.is_array()) {
+                for (const auto & elem : j) {
+                    ToolCall tc;
+                    if (extract_single_tool_call(elem, tc)) {
+                        tool_calls.push_back(std::move(tc));
                     }
                 }
-            } catch (...) {
-                // Not a valid JSON array, fallback to objects
+                if (!tool_calls.empty()) {
+                    return;
+                }
             }
         }
     }
@@ -345,22 +454,20 @@ static void parse_tool_calls_from_text_segment(std::string_view text, std::vecto
     // 2. Scan all JSON objects {...} in this segment
     size_t cur = 0;
     while (cur < text.size()) {
-        std::string_view json_str = extract_json_object(text, cur);
-        if (json_str.empty()) break;
+        size_t next_obj = text.find('{', cur);
+        if (next_obj == std::string_view::npos) break;
 
-        try {
-            auto j = nlohmann::json::parse(json_str);
+        nlohmann::json j;
+        size_t end_pos = 0;
+        if (try_extract_and_parse_json(text, next_obj, '{', j, end_pos)) {
             ToolCall tc;
             if (extract_single_tool_call(j, tc)) {
                 tool_calls.push_back(std::move(tc));
             }
-        } catch (...) {
-            // ignore non-json
+            cur = (end_pos > next_obj) ? end_pos : (next_obj + 1);
+        } else {
+            cur = next_obj + 1;
         }
-
-        size_t next_pos = text.find('{', cur);
-        if (next_pos == std::string_view::npos) break;
-        cur = next_pos + (json_str.empty() ? 1 : json_str.size());
     }
 }
 
@@ -410,7 +517,20 @@ bool parse_tool_calls(std::string_view response, std::vector<ToolCall> & tool_ca
             content_end = close_pos;
             search_pos = close_pos + tag.close_tag.size();
         } else {
-            search_pos = content_start;
+            size_t next_open = std::string_view::npos;
+            for (size_t i = 0; i < sizeof(k_tags) / sizeof(k_tags[0]); ++i) {
+                size_t p = response.find(k_tags[i].open_tag, content_start);
+                if (p != std::string_view::npos && (next_open == std::string_view::npos || p < next_open)) {
+                    next_open = p;
+                }
+            }
+            if (next_open != std::string_view::npos) {
+                content_end = next_open;
+                search_pos = next_open;
+            } else {
+                content_end = response.size();
+                search_pos = response.size();
+            }
         }
 
         std::string_view tag_content = response.substr(content_start, content_end - content_start);

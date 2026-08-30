@@ -299,6 +299,55 @@ void test_tool_call_parsing() {
     assert(tool_calls[1].name == "web_fetch");
     assert(tool_calls[1].arguments["url"] == "http://example.com/2");
 
+    // 4. Unclosed JSON object tests
+    // 4a. Missing outer brace in <tool_call>
+    std::string unclosed_outer = "<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\"path\": \"unclosed1.txt\"}\n</tool_call>";
+    parsed = parse_tool_call(unclosed_outer, tool_name, args);
+    assert(parsed);
+    assert(tool_name == "read_file");
+    assert(args["path"] == "unclosed1.txt");
+
+    // 4b. Missing inner and outer braces in <tool_call>
+    std::string unclosed_inner_outer = "<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\"path\": \"unclosed2.txt\"\n</tool_call>";
+    parsed = parse_tool_call(unclosed_inner_outer, tool_name, args);
+    assert(parsed);
+    assert(tool_name == "read_file");
+    assert(args["path"] == "unclosed2.txt");
+
+    // 4c. Missing closing quote and braces in <tool_call>
+    std::string unclosed_quote_braces = "<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\"path\": \"unclosed3.txt\n</tool_call>";
+    parsed = parse_tool_call(unclosed_quote_braces, tool_name, args);
+    assert(parsed);
+    assert(tool_name == "read_file");
+    assert(args["path"] == "unclosed3.txt");
+
+    // 4d. No closing </tool_call> tag AND unclosed JSON object
+    std::string unclosed_tag_and_json = "I'll check the file:\n<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\"path\": \"unclosed_notag.txt\"";
+    parsed = parse_tool_call(unclosed_tag_and_json, tool_name, args);
+    assert(parsed);
+    assert(tool_name == "read_file");
+    assert(args["path"] == "unclosed_notag.txt");
+
+    // 4e. Trailing comma before closing braces
+    std::string trailing_comma_json = "<tool_call>\n{\n  \"name\": \"read_file\",\n  \"arguments\": {\"path\": \"comma.txt\",},\n}\n</tool_call>";
+    parsed = parse_tool_call(trailing_comma_json, tool_name, args);
+    assert(parsed);
+    assert(tool_name == "read_file");
+    assert(args["path"] == "comma.txt");
+
+    // 4f. Unclosed array in <tool_calls> tag
+    std::string unclosed_array = "<tool_calls>\n[\n"
+                                 "  {\"name\": \"execute_command\", \"arguments\": {\"command\": \"ls\"}},\n"
+                                 "  {\"name\": \"read_file\", \"arguments\": {\"path\": \"arr.txt\"}\n"
+                                 "</tool_calls>";
+    tool_calls.clear();
+    assert(parse_tool_calls(unclosed_array, tool_calls));
+    assert(tool_calls.size() == 2);
+    assert(tool_calls[0].name == "execute_command");
+    assert(tool_calls[0].arguments["command"] == "ls");
+    assert(tool_calls[1].name == "read_file");
+    assert(tool_calls[1].arguments["path"] == "arr.txt");
+
     std::cout << "[TEST] Tool call parsing tests passed!" << std::endl;
 }
 
