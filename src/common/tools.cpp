@@ -804,39 +804,66 @@ std::string strip_think_tags(std::string_view text) {
 }
 
 std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thinking, const std::string_view text,
-    const std::string_view tag, std::size_t pos) {
+    const std::string_view tag, const std::size_t pos) {
     using size_type = std::string_view::size_type;
     size_type depth = 1;
+    size_type seek_pos = pos;
     size_type end = text.size() - 1;
-    for (; pos < text.size(); ++pos) {
+    for (; seek_pos < text.size(); ++seek_pos) {
         // Search for the tag end
-        end = text.find_first_of('<', pos);
+        end = text.find_first_of('<', seek_pos);
         if (end == std::string::npos || end >= text.size()) {
-            break;
+            seek_pos = end = text.size();
+            continue;
+        }
+
+        // Error case when the tag ends with a non-closed tag
+        // <think>lorem ipsum<
+        if (end + 1 >= text.size()) {
+            thinking = text.substr(pos + 1, end - pos - 1);
+            return end + 1;
         }
 
         // Is this an end tag?
+        seek_pos = end + 1;
         if (text[end + 1] != '/') {
-            pos = end + 1;
+            continue;
+        }
+
+        // Error case when tag ends with an unfinished end-tag
+        // <think>lorem ipsum</thi
+        if (text.length() - seek_pos < tag.size()) {
+            thinking = text.substr(pos + 1, end - pos - 1);
+            return end + 1;
+        }
+
+        end = text.find_first_of('>', seek_pos + 1);
+        if (end == std::string::npos) {
+            end = text.size();
             continue;
         }
 
         // Remove the suffix dash in case of <think/>
-        std::string_view found_tag = text.substr(pos + 1, end - pos - 1);
+        std::string_view found_tag = text.substr(seek_pos + 1, end - seek_pos - 1);
         if (found_tag == tag) {
             depth--;
             if (depth == 0) {
-                break;
+                thinking = text.substr(pos + 1, end - pos - 3 - tag.size());
+                return end;
             }
         }
     }
 
-    if (end == std::string_view::npos) {
-        thinking = text.substr(pos);
-        return end;
-    }
-    thinking = text.substr(end);
-    return end + 1;
+    // If we've reached here then the text might end with an incomplete end-tag:
+    // 1. <think>lorem ipsum</thi
+    // 2. <think>lorem ipsum<
+    // 3. <think>lorem ipsum
+    //
+    // So, lets seek backwards
+
+    // <think>lorem ipsum
+    thinking = text.substr(pos, end - pos);
+    return end;
 }
 
 ResponseBlocks ResponseBlocks::from_text(const std::string_view text) {
@@ -863,11 +890,20 @@ ResponseBlocks ResponseBlocks::from_text(const std::string_view text) {
 
             // Is this a think block?
             if (tag == "think" || tag == "thinking" || tag == "reasoning" || tag == "thought") {
+                blocks.flags |= thinking_bit;
                 pos = extract_string(blocks.thinking, text, tag, end);
                 if (pos != std::string_view::npos) {
-                    blocks.flags |= ResponseBlocks::thinking_bit;
+                    blocks.flags |= thinking_done_bit;
                 }
-            } else {
+                continue;
+            }
+
+            // Is this a call block?
+            if (tag == "tool_call" || tag == "tool_calls") {
+                std::string_view value;
+                pos = extract_string(value, text, tag, end);
+                blocks.tool_calls.emplace_back(value, true);
+                continue;
             }
 
             pos = end;

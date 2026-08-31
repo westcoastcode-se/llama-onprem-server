@@ -72,19 +72,26 @@ std::string strip_think_tags(std::string_view text);
  */
 class ResponseBlocks {
 public:
+    struct ToolCall {
+        std::string_view value{};
+        bool is_done{};
+    };
+
     // The thinking block
     std::string_view thinking{};
     // A vector of tool calls that the AI wants to execute
-    std::vector<std::string_view> tool_calls{};
+    std::vector<ToolCall> tool_calls{};
     // The text inside a question block - in case the AI want more information from the user
     std::string_view questions{};
     // An array of all answers that the client is allowed to select
     std::vector<std::string_view> answers{};
 
+    // Thinking
     static constexpr int thinking_bit = 1 << 0;
-    static constexpr int tool_calls_bit = 1 << 1;
-    static constexpr int questions_bit = 1 << 2;
-    static constexpr int answers_bit = 1 << 3;
+    // Thinking is done
+    static constexpr int thinking_done_bit = 1 << 1;
+
+
     static constexpr int done_bit = 1 << 4;
 
     // Flags containing information on which blocks was present in the response
