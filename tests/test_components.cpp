@@ -9,7 +9,7 @@
 #include "common/utf8.hpp"
 #include "tests.hpp"
 
-void test_tools() {
+void test_tools1() {
     std::cout << "[TEST] Running tool tests..." << std::endl;
     auto tools = get_registered_tools();
     assert(tools.size() >= 7);
@@ -1134,19 +1134,7 @@ void test_command_execution() {
 
     auto tools = get_registered_tools();
 
-    // 2. Test `/sh`, `/run`, `/cmd` prefixes
-    {
-        for (const char * prefix : {"/sh ", "/run ", "/cmd "}) {
-            std::string user_input = std::string(prefix) + "echo 'prefix test'";
-            size_t space_pos = user_input.find(' ');
-            std::string cmd = user_input.substr(space_pos + 1);
-            nlohmann::json args = {{"command", cmd}};
-            std::string res = run_tool(tools, "execute_command", args);
-            assert(res.find("prefix test") != std::string::npos);
-        }
-    }
-
-    // 3. Test end-to-end single command turn via socket mock
+    // 1. Test end-to-end single command turn via socket mock
     {
         int test_port = 19888;
         std::string host = "127.0.0.1";
@@ -1756,7 +1744,7 @@ void test_agent_backend_and_common_runner() {
 }
 
 void test_components() {
-    test_tools();
+    test_tools1();
     test_search_text();
     test_tool_call_parsing();
     test_protocol_and_sockets();

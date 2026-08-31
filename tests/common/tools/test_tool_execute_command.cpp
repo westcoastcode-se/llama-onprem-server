@@ -2,7 +2,6 @@
 // File containing tests for the read_file tool
 //
 
-
 #include "common/tools.hpp"
 #include "../../tests.hpp"
 

@@ -803,6 +803,79 @@ std::string strip_think_tags(std::string_view text) {
     return result.substr(first, last - first + 1);
 }
 
+std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thinking, const std::string_view text,
+    const std::string_view tag, std::size_t pos) {
+    using size_type = std::string_view::size_type;
+    size_type depth = 1;
+    size_type end = text.size() - 1;
+    for (; pos < text.size(); ++pos) {
+        // Search for the tag end
+        end = text.find_first_of('<', pos);
+        if (end == std::string::npos || end >= text.size()) {
+            break;
+        }
+
+        // Is this an end tag?
+        if (text[end + 1] != '/') {
+            pos = end + 1;
+            continue;
+        }
+
+        // Remove the suffix dash in case of <think/>
+        std::string_view found_tag = text.substr(pos + 1, end - pos - 1);
+        if (found_tag == tag) {
+            depth--;
+            if (depth == 0) {
+                break;
+            }
+        }
+    }
+
+    if (end == std::string_view::npos) {
+        thinking = text.substr(pos);
+        return end;
+    }
+    thinking = text.substr(end);
+    return end + 1;
+}
+
+ResponseBlocks ResponseBlocks::from_text(const std::string_view text) {
+    using size_type = std::string_view::size_type;
+    if (text.empty()) {
+        return {};
+    }
+
+    ResponseBlocks blocks{};
+    size_type pos = text.find_first_of('<');
+    for (; pos < text.size(); ++pos) {
+        if (text[pos] == '<') {
+            // Search for the tag end
+            const size_type end = text.find_first_of('>', pos);
+            if (end == std::string::npos) {
+                break;
+            }
+
+            // Remove the suffix dash in case of <think/>
+            std::string_view tag = text.substr(pos + 1, end - pos - 1);
+            if (text[end - 1] == '/') {
+                tag = tag.substr(0, tag.size() - 1);
+            }
+
+            // Is this a think block?
+            if (tag == "think" || tag == "thinking" || tag == "reasoning" || tag == "thought") {
+                pos = extract_string(blocks.thinking, text, tag, end);
+                if (pos != std::string_view::npos) {
+                    blocks.flags |= ResponseBlocks::thinking_bit;
+                }
+            } else {
+            }
+
+            pos = end;
+        }
+    }
+    return blocks;
+}
+
 // ---------------------------------------------------------------------------
 // Thinking Stream Filter Implementation
 // ---------------------------------------------------------------------------

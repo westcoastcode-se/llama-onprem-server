@@ -100,6 +100,7 @@ target_link_libraries(fat_client PRIVATE llama CURL::libcurl ${CMAKE_THREAD_LIBS
 #
 add_executable(tests
     tests/tests.cpp
+    tests/common/test_tools.cpp
     tests/common/tools/test_tool_execute_command.cpp
     tests/test_components.cpp
     ${COMMON_TOOL_SOURCES}
