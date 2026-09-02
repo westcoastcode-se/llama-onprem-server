@@ -92,6 +92,35 @@ int test_strip_response_stream_think_and_tool_call_multi_line() {
 }
 
 /**
+ * Verify the strip_response_stream function, which basically gives us
+ * The important parts from the response into usable blocks, such as the think text, the tool_calls, questions etc.
+ */
+int test_strip_response_stream_think_and_multiple_tool_call_one_line() {
+    const auto block = ResponseBlocks::from_text("<think>Lorem Ipsum</think><tool_call>{a}</tool_call><tool_call>{b}</tool_call>");
+    assertEquals("Lorem Ipsum", block.thinking);
+    assertEquals(2, block.tool_calls.size());
+    assertTrue(block.tool_calls[0].is_done);
+    assertEquals("{a}", block.tool_calls[0].value);
+    assertTrue(block.tool_calls[1].is_done);
+    assertEquals("{b}", block.tool_calls[1].value);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Verify the strip_response_stream function, which basically gives us
+ * The important parts from the response into usable blocks, such as the think text, the tool_calls, questions etc.
+ */
+int test_strip_response_stream_think_and_multiple_tool_call_multi_line() {
+    const auto block = ResponseBlocks::from_text("<think>\nLorem Ipsum\n</think>\n<tool_call>\n{a}\n</tool_call><tool_call>\n{b}\n</tool_call>\n");
+    assertEquals("Lorem Ipsum", block.thinking);
+    assertEquals(2, block.tool_calls.size());
+    assertTrue(block.tool_calls[0].is_done);
+    assertEquals("{a}", block.tool_calls[0].value);
+    assertTrue(block.tool_calls[1].is_done);
+    assertEquals("{b}", block.tool_calls[1].value);
+    return EXIT_SUCCESS;
+}
+/**
  * Run all generic tools functions tests
  */
 void test_tools() {
@@ -103,4 +132,6 @@ void test_tools() {
 
     RUN_TEST(test_strip_response_stream_think_and_tool_call_one_line);
     RUN_TEST(test_strip_response_stream_think_and_tool_call_multi_line);
+    RUN_TEST(test_strip_response_stream_think_and_multiple_tool_call_one_line);
+    RUN_TEST(test_strip_response_stream_think_and_multiple_tool_call_multi_line);
 }
