@@ -121,6 +121,35 @@ public:
 };
 
 /**
+ * Trim the supplied string by removing spaces, newlines and tabs at the start and the end of the string
+ *
+ * @param text The text to trim
+ * @return The trimmed string
+ */
+constexpr std::string_view string_view_trim(std::string_view text)
+{
+    constexpr std::string_view exclude = " \n\t\r\0";
+    if (const size_t leftShift = text.find_first_not_of(exclude);
+        leftShift != std::string_view::npos
+    ) {
+        text.remove_prefix(leftShift);
+    }
+    else {
+        return {};
+    }
+
+    if (const size_t rightShift = text.find_last_not_of(exclude);
+        rightShift != std::string_view::npos
+    ) {
+        text.remove_suffix(text.size() - rightShift - 1);
+    }
+    else {
+        return {};
+    }
+    return text;
+}
+
+/**
  * @brief Streaming filter that intercepts and handles thinking tags from LLM output in real time.
  * Suppresses empty thought blocks and routes active thinking tokens to the thinking callback.
  */

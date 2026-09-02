@@ -820,7 +820,7 @@ std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thi
         // Error case when the tag ends with a non-closed tag
         // <think>lorem ipsum<
         if (end + 1 >= text.size()) {
-            thinking = text.substr(pos + 1, end - pos - 1);
+            thinking = string_view_trim(text.substr(pos + 1, end - pos - 1));
             return end + 1;
         }
 
@@ -833,7 +833,7 @@ std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thi
         // Error case when tag ends with an unfinished end-tag
         // <think>lorem ipsum</thi
         if (text.length() - seek_pos < tag.size()) {
-            thinking = text.substr(pos + 1, end - pos - 1);
+            thinking = string_view_trim(text.substr(pos + 1, end - pos - 1));
             return end + 1;
         }
 
@@ -848,21 +848,14 @@ std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thi
         if (found_tag == tag) {
             depth--;
             if (depth == 0) {
-                thinking = text.substr(pos + 1, end - pos - 3 - tag.size());
+                thinking = string_view_trim(text.substr(pos + 1, end - pos - 3 - tag.size()));
                 return end;
             }
         }
     }
 
-    // If we've reached here then the text might end with an incomplete end-tag:
-    // 1. <think>lorem ipsum</thi
-    // 2. <think>lorem ipsum<
-    // 3. <think>lorem ipsum
-    //
-    // So, lets seek backwards
-
     // <think>lorem ipsum
-    thinking = text.substr(pos, end - pos);
+    thinking = string_view_trim(text.substr(pos, end - pos));
     return end;
 }
 

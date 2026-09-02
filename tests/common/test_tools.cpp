@@ -25,7 +25,7 @@ int test_strip_response_stream_think_multiline_line() {
     const auto block = ResponseBlocks::from_text("<think>\nLorem Ipsum\n</think>\n");
     assertTrue((block.flags & ResponseBlocks::thinking_bit) == ResponseBlocks::thinking_bit);
     assertTrue((block.flags & ResponseBlocks::thinking_done_bit) == ResponseBlocks::thinking_done_bit);
-    assertEquals("\nLorem Ipsum\n", block.thinking);
+    assertEquals("Lorem Ipsum", block.thinking);
     return EXIT_SUCCESS;
 }
 
@@ -84,10 +84,10 @@ int test_strip_response_stream_think_and_tool_call_one_line() {
  */
 int test_strip_response_stream_think_and_tool_call_multi_line() {
     const auto block = ResponseBlocks::from_text("<think>\nLorem Ipsum\n</think>\n<tool_call>\n{}\n</tool_call>\n");
-    assertEquals("\nLorem Ipsum\n", block.thinking);
+    assertEquals("Lorem Ipsum", block.thinking);
     assertEquals(1, block.tool_calls.size());
     assertTrue(block.tool_calls[0].is_done);
-    assertEquals("\n{}\n", block.tool_calls[0].value);
+    assertEquals("{}", block.tool_calls[0].value);
     return EXIT_SUCCESS;
 }
 
