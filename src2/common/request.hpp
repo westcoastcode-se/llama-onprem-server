@@ -1,11 +1,11 @@
 #pragma once
 
 #include "buffer.hpp"
+#include "errors.hpp"
+#include "log.hpp"
 
 #include <optional>
 #include <string_view>
-
-#include "errors.hpp"
 
 namespace callisto {
     /**
@@ -72,6 +72,27 @@ namespace callisto {
 
             const uint32_t json_start_index = json.data() - buffer.data().data();
             return {json_length, json_start_index};
+        }
+
+        /**
+         * @param socket
+         * @param buffer
+         * @return
+         */
+        static nlohmann::json read_request(const TcpSocket::Ptr &socket, Buffer &buffer) {
+            socket->read(buffer);
+            const auto [length, json_offset] = validate_and_get_length(buffer);
+            if (buffer.data().length() < length) {
+                // Read the rest of the data
+                const auto n = socket->read(buffer, length - buffer.data().length());
+                if (n != length) {
+                    throw TcpSocket::read_failed{};
+                }
+            }
+
+            const std::string_view json = buffer.data().substr(json_offset);
+            log_debug("Received json: ", json);
+            return nlohmann::json::parse(json, nullptr, false, true);
         }
 
         static std::optional<std::tuple<std::string_view, std::string_view, std::string_view> > split3(

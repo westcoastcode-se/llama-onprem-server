@@ -9,6 +9,7 @@
 #include <csignal>
 #include <mutex>
 #include <queue>
+#include <iostream>
 
 namespace callisto {
     static std::function<void(int)> shutdown_handler;
@@ -43,6 +44,27 @@ namespace callisto {
         std::atomic_bool running{false};
 
         /**
+         * Authenticate
+         *
+         * @param buffer
+         * @param string
+         */
+        void send_auth_request(Buffer & buffer, const std::string & string) {
+            const nlohmann::json auth_request = {
+                {"type", "auth"},
+                {"token", config.api_key}
+            };
+            socket->send_json(buffer, auth_request);
+            buffer.clear();
+
+            // Wait for server_info response and print out information of it
+            const nlohmann::json server_info = Request::read_request(socket, buffer);
+            std::cout << "Server: " << config.address << ":" << config.port << std::endl;
+            std::cout << "Model: " << server_info["model"].get<std::string>() << std::endl;
+            std::cout << "Context: 0 / " << server_info["context"].get<int32_t>() << std::endl;
+        }
+
+        /**
          * Start the server and accept incoming connections
          *
          * @param config The server configuration
@@ -54,13 +76,13 @@ namespace callisto {
 
             log_info("authenticating");
             Buffer buffer;
-            const nlohmann::json auth_request = {
-                {"type", "auth"},
-                {"token", config.api_key}
-            };
-            socket->send_json(buffer, auth_request);
-            running = true;
+            send_auth_request(buffer, config.api_key);
 
+            running = true;
+            while (running) {
+                std::cout << "> ";
+                std::cin.get();
+            }
             socket = {};
         }
 
@@ -69,25 +91,6 @@ namespace callisto {
          */
         void stop() {
             running = false;
-        }
-
-        /**
-         *
-         * @param buffer The buffer to read data from
-         */
-        nlohmann::json client_read_request(const TcpSocket::Ptr &client, Buffer &buffer) {
-            const auto [length, json_offset] = Request::validate_and_get_length(buffer);
-            if (buffer.data().length() < length) {
-                // Read the rest of the data
-                const auto n = client->read(buffer, length - buffer.data().length());
-                if (n != length) {
-                    throw TcpSocket::read_failed{};
-                }
-            }
-
-            const std::string_view json = buffer.data().substr(json_offset);
-            log_info("Received json: ", json);
-            return nlohmann::json::parse(json, nullptr, false, true);
         }
 
         /**
@@ -103,7 +106,7 @@ namespace callisto {
                         continue;
                     }
                     const auto r = client->read(buffer);
-                    client_read_request(client, buffer);
+                    Request::read_request(client, buffer);
                     buffer.clear();
                 }
             } catch (base_error &e) {

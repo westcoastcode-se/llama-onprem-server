@@ -13,9 +13,10 @@ namespace callisto {
      */
     class Logger {
     public:
-        static constexpr int LEVEL_INFO = 0;
-        static constexpr int LEVEL_ERROR = 1;
-        static constexpr int LEVEL_OFF = 2;
+        static constexpr int LEVEL_DEBUG = 0;
+        static constexpr int LEVEL_INFO = 1;
+        static constexpr int LEVEL_ERROR = 2;
+        static constexpr int LEVEL_OFF = 3;
 
         /**
          * @return true if the log is quiet
@@ -77,6 +78,21 @@ namespace callisto {
             std::ospanstream ss(buffer);
             Logger::log_trait(ss, arg, args...);
             Logger::write(Logger::LEVEL_INFO, ss.span());
+            ss.seekp(0);
+        }
+    }
+
+    /**
+     * @tparam Str
+     * @param arg
+     * @param args
+     */
+    template <typename S, typename... Str> static void log_debug(const S& arg, Str&&... args) {
+        if (Logger::is_level(Logger::LEVEL_DEBUG)) {
+            std::array<char, 1024> buffer; // NOLINT(*-pro-type-member-init)
+            std::ospanstream ss(buffer);
+            Logger::log_trait(ss, arg, args...);
+            Logger::write(Logger::LEVEL_DEBUG, ss.span());
             ss.seekp(0);
         }
     }

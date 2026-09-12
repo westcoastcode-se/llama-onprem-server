@@ -27,6 +27,17 @@ namespace callisto {
         shutdown_handler(signal);
     }
 
+    struct ConnectedClient {
+        // Socket to read and send data over
+        TcpSocket::Ptr socket;
+        // Unique id for the client - used primarily for logging
+        uint32_t id;
+
+        friend std::ostream &operator<<(std::ostream &s, const ConnectedClient &c) {
+            return s << "client(" << c.id << ")";
+        }
+    };
+
     /**
      * Since this system is designed for on-prem installations, only one AI process is allowed
      * to run one request at a time (because, seriously, one AI process will take pretty much all the systems resources).
@@ -52,7 +63,6 @@ namespace callisto {
         typedef std::unique_ptr<ClientThread> Ptr;
 
         std::thread thread;
-        std::atomic_bool running;
     };
 
     /**
@@ -84,8 +94,8 @@ namespace callisto {
          * @param client The new client
          */
         void add_client_thread(TcpSocket::Ptr &&client) {
-            std::thread t(&Server::client_thread, this, std::move(client));
-            client_threads.emplace_back(new ClientThread{.thread = std::move(t), .running = true});
+            std::thread t(&Server::client_thread, this, ConnectedClient{std::move(client), 10});
+            client_threads.emplace_back(new ClientThread{.thread = std::move(t)});
         }
 
         /**
@@ -124,22 +134,18 @@ namespace callisto {
         }
 
         /**
+         * Send information on the server to the client
          *
-         * @param buffer The buffer to read data from
+         * @param client
+         * @param buffer
          */
-        nlohmann::json client_read_request(const TcpSocket::Ptr &client, Buffer &buffer) {
-            const auto [length, json_offset] = Request::validate_and_get_length(buffer);
-            if (buffer.data().length() < length) {
-                // Read the rest of the data
-                const auto n = client->read(buffer, length - buffer.data().length());
-                if (n != length) {
-                    throw TcpSocket::read_failed{};
-                }
-            }
-
-            const std::string_view json = buffer.data().substr(json_offset);
-            log_info("Received json: ", json);
-            return nlohmann::json::parse(json, nullptr, false, true);
+        void send_server_info(const ConnectedClient &client, Buffer &buffer) {
+            const nlohmann::json auth_request = {
+                {"type", "server_info"},
+                {"model", config.model_path},
+                {"context", config.context}
+            };
+            client.socket->send_json(buffer, auth_request);
         }
 
         /**
@@ -148,17 +154,28 @@ namespace callisto {
          * @param client
          * @param buffer
          */
-        void authenticate_client(const TcpSocket::Ptr &client, Buffer &buffer) {
-            const auto r = client->read(buffer);
-            const auto json = client_read_request(client, buffer);
-            if (json["type"] != std::string_view("auth")) {
+        void authenticate_client(const ConnectedClient &client, Buffer &buffer) {
+            const auto json = Request::read_request(client.socket, buffer);
+            if (json.value("type", std::string_view()) != std::string_view("auth")) {
                 throw auth_error{};
             }
-            if (json["token"] != config.api_key) {
+            if (json.value("token", std::string_view()) != config.api_key) {
                 throw auth_error{};
             }
-            log_info("client authenticated");
+            log_info(client, " is now authenticated");
             buffer.clear();
+
+            // Send information back to the client
+            send_server_info(client, buffer);
+        }
+
+        /**
+         * Handle a client request
+         *
+         * @param client
+         * @param json
+         */
+        void handle_client_request(const ConnectedClient &client, const nlohmann::json &json) {
         }
 
         /**
@@ -166,24 +183,24 @@ namespace callisto {
          *
          * @param client Client
          */
-        void client_thread(const TcpSocket::Ptr client) {
+        void client_thread(const ConnectedClient client) {
             try {
                 // Validate client auth token
                 Buffer buffer;
                 authenticate_client(client, buffer);
 
                 while (running) {
-                    if (!client->poll_incoming()) {
+                    if (!client.socket->poll_incoming()) {
                         continue;
                     }
-                    const auto r = client->read(buffer);
-                    client_read_request(client, buffer);
+                    const auto json = Request::read_request(client.socket, buffer);
                     buffer.clear();
+                    handle_client_request(client, json);
                 }
             } catch (base_error &e) {
-                log_error("failed to parse request: ", e.what());
+                log_error(client, " | failed to parse request: ", e.what());
             }
-            log_info("client disconnected");
+            log_info(client, " disconnected");
         }
     };
 }
