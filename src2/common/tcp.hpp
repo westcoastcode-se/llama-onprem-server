@@ -58,7 +58,14 @@ namespace callisto {
             }
         }
 
-        void send_json(Buffer &buffer, const nlohmann::json &json) {
+        /**
+         *
+         * @tparam T The buffer type
+         * @param buffer The buffer that we can use when sending data
+         * @param json The json body
+         */
+        template<class T>
+        void pack_and_send(TBuffer<T> &buffer, const nlohmann::json &json) {
             const auto value = json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 
             buffer.put("CALLISTO/1.0 ");
@@ -66,9 +73,17 @@ namespace callisto {
             buffer.put(" ");
             buffer.put(value);
             send_all(buffer.data());
+            buffer.clear();
         }
 
-        static std::unique_ptr<TcpSocket> connect(const std::string_view &host, const int port) {
+        /**
+         * Connect to a server
+         *
+         * @param host The host we want to connect to
+         * @param port The port
+         * @return A socket, if connecting was successful
+         */
+        static Ptr connect(const std::string_view &host, const int port) {
             addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;
@@ -110,7 +125,7 @@ namespace callisto {
             return std::make_unique<TcpSocket>(fd);
         }
 
-        static std::unique_ptr<TcpSocket> listen(const std::string_view host, const unsigned short port) {
+        static Ptr listen(const std::string_view host, const unsigned short port) {
             addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;
@@ -172,7 +187,8 @@ namespace callisto {
          * @param chunk_size The maximum number of bytes to read in each chunk.
          * @return The number of bytes read.
          */
-        ssize_t read(Buffer &buffer, const size_t chunk_size = 8096) const {
+        template<class T>
+        ssize_t read(TBuffer<T> &buffer, const size_t chunk_size = 8096) const {
             const auto n = buffer.read(fd_, chunk_size);
             if (n == -1) {
                 throw read_failed{};
@@ -180,7 +196,7 @@ namespace callisto {
             return n;
         }
 
-        void send_all(const std::string_view data) const {
+        void send_all(const std::span<std::byte> data) const {
             if (fd_ < 0) throw socket_closed{};
             size_t total_sent = 0;
             auto len = data.size();

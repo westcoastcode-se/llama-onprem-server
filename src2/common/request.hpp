@@ -54,8 +54,9 @@ namespace callisto {
          * @param buffer The buffer
          * @return the lenghth of the request
          */
-        static std::tuple<uint32_t, uint32_t> validate_and_get_length(const Buffer &buffer) {
-            const auto parts = split3(buffer.data());
+        template<class T>
+        static std::tuple<uint32_t, uint32_t> validate_and_get_length(const TBuffer<T> &buffer) {
+            const auto parts = split3(buffer.string());
             if (!parts) {
                 throw invalid_request{};
             }
@@ -70,7 +71,7 @@ namespace callisto {
             std::ispanstream s(std::span(length.data(), length.size()));
             s >> json_length;
 
-            const uint32_t json_start_index = json.data() - buffer.data().data();
+            const uint32_t json_start_index = json.data() - buffer.string().data();
             return {json_length, json_start_index};
         }
 
@@ -79,18 +80,20 @@ namespace callisto {
          * @param buffer
          * @return
          */
-        static nlohmann::json read_request(const TcpSocket::Ptr &socket, Buffer &buffer) {
+        template<class T>
+        static nlohmann::json read_request(const TcpSocket::Ptr &socket, TBuffer<T> &buffer) {
             socket->read(buffer);
             const auto [length, json_offset] = validate_and_get_length(buffer);
-            if (buffer.data().length() < length) {
+            const auto buffer_data = buffer.string();
+            if (buffer_data.size() < length) {
                 // Read the rest of the data
-                const auto n = socket->read(buffer, length - buffer.data().length());
+                const auto n = socket->read(buffer, length - buffer_data.size());
                 if (n != length) {
                     throw TcpSocket::read_failed{};
                 }
             }
 
-            const std::string_view json = buffer.data().substr(json_offset);
+            const std::string_view json = buffer.string().substr(json_offset);
             log_debug("Received json: ", json);
             return nlohmann::json::parse(json, nullptr, false, true);
         }
@@ -107,25 +110,6 @@ namespace callisto {
                 sv.substr(0, pos1), // del 1
                 sv.substr(pos1 + 1, pos2 - pos1 - 1), // del 2
                 sv.substr(pos2 + 1) // del 3
-            };
-        }
-
-        static std::optional<std::tuple<std::string_view, std::string_view, std::string_view, std::string_view> >
-        split4(const std::string_view sv, const char delim = ' ') {
-            const size_t pos1 = sv.find(delim);
-            if (pos1 == std::string_view::npos) return std::nullopt;
-
-            const size_t pos2 = sv.find(delim, pos1 + 1);
-            if (pos2 == std::string_view::npos) return std::nullopt;
-
-            const size_t pos3 = sv.find(delim, pos2 + 1);
-            if (pos3 == std::string_view::npos) return std::nullopt;
-
-            return std::tuple{
-                sv.substr(0, pos1), // del 1
-                sv.substr(pos1 + 1, pos2 - pos1 - 1), // del 2
-                sv.substr(pos2 + 1, pos3 - pos2 - 1), // del 3
-                sv.substr(pos3 + 1) // del 3
             };
         }
     };

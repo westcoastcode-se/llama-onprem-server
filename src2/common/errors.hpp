@@ -14,4 +14,11 @@ namespace callisto {
             return "authentication failed";
         }
     };
+
+    /**
+     * Abort the current processor
+     */
+    struct abort : base_error {
+
+    };
 }

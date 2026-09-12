@@ -1,5 +1,6 @@
 #include "common/tcp.hpp"
 #include "common/request.hpp"
+#include "common/protocol.hpp"
 
 #include <functional>
 #include <atomic>
@@ -17,13 +18,6 @@ namespace callisto {
     static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
     static inline void signal_handler(const int signal) {
-        if (is_terminating.test_and_set()) {
-            // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
-            // this is for better developer experience, we can remove when the server is stable enough
-            fprintf(stderr, "Received second interrupt, terminating immediately.\n");
-            exit(1);
-        }
-
         shutdown_handler(signal);
     }
 
@@ -87,14 +81,15 @@ namespace callisto {
         WorkQueue work_queue;
         std::vector<ClientThread::Ptr> client_threads;
         std::atomic_bool running{false};
+        std::atomic_int next_id{};
 
         /**
          * Add a new client and spawn a new thread for it
          *
          * @param client The new client
          */
-        void add_client_thread(TcpSocket::Ptr &&client) {
-            std::thread t(&Server::client_thread, this, ConnectedClient{std::move(client), 10});
+        void add_client_thread(TcpSocket::Ptr &&client, const uint32_t id) {
+            std::thread t(&Server::client_thread, this, ConnectedClient{std::move(client), id});
             client_threads.emplace_back(new ClientThread{.thread = std::move(t)});
         }
 
@@ -104,7 +99,7 @@ namespace callisto {
          * @param config The server configuration
          */
         void start(const Config &config) {
-            log_info("starting server");
+            log_info("starting server1");
             this->config = config;
             listener = TcpSocket::listen(config.address, config.port);
             running = true;
@@ -115,9 +110,10 @@ namespace callisto {
                 std::string client_ip;
                 int client_port = 0;
                 try {
+                    const auto id = next_id++;
                     auto client = listener->accept(&client_ip, &client_port);
-                    log_info("accepted connection from {}:{}", client_ip, client_port);
-                    add_client_thread(std::move(client));
+                    log_info("client(", id, ") has connected from ", client_ip, ":", client_port);
+                    add_client_thread(std::move(client), id);
                 } catch (TcpSocket::accept_failed) {
                     // Ignore and continue
                     continue;
@@ -139,13 +135,8 @@ namespace callisto {
          * @param client
          * @param buffer
          */
-        void send_server_info(const ConnectedClient &client, Buffer &buffer) {
-            const nlohmann::json auth_request = {
-                {"type", "server_info"},
-                {"model", config.model_path},
-                {"context", config.context}
-            };
-            client.socket->send_json(buffer, auth_request);
+        template<class T>
+        void send_server_info(const ConnectedClient &client, TBuffer<T> &buffer) {
         }
 
         /**
@@ -154,7 +145,8 @@ namespace callisto {
          * @param client
          * @param buffer
          */
-        void authenticate_client(const ConnectedClient &client, Buffer &buffer) {
+        template<class T>
+        void authenticate_client(const ConnectedClient &client, TBuffer<T> &buffer) {
             const auto json = Request::read_request(client.socket, buffer);
             if (json.value("type", std::string_view()) != std::string_view("auth")) {
                 throw auth_error{};
@@ -166,7 +158,7 @@ namespace callisto {
             buffer.clear();
 
             // Send information back to the client
-            send_server_info(client, buffer);
+            Requests::server_info(client.socket, buffer, config.model_path, config.context);
         }
 
         /**
@@ -186,7 +178,7 @@ namespace callisto {
         void client_thread(const ConnectedClient client) {
             try {
                 // Validate client auth token
-                Buffer buffer;
+                TBuffer<HeapByteBuffer> buffer;
                 authenticate_client(client, buffer);
 
                 while (running) {
@@ -226,6 +218,9 @@ int main() {
     signal(SIGINT, callisto::signal_handler);
 
     // Start the server
+    // TODO: Add arguments
+    // TODO: Allow running the client on the server
+    // TODO: Allow running the server without allowing remote access
     try {
         server.start({.api_key = "SUPERSECRET"});
     } catch (const std::exception &_) {
