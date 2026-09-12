@@ -53,6 +53,7 @@ endfunction()
 #
 set(COMMON_TOOL_SOURCES
     src/common/tools.cpp
+    src/common/log.cpp
     src/common/tools/web_utils.cpp
     src/common/tools/tool_execute_command.cpp
     src/common/tools/tool_read_file.cpp
@@ -64,6 +65,26 @@ set(COMMON_TOOL_SOURCES
     src/common/tools/tool_web_search.cpp
     src/common/tools/tool_subagent.cpp
 )
+
+#
+# 1. Callisto Client
+#
+add_executable(callisto_client
+        src2/client.cpp
+        src2/common/log.cpp
+        src/llm/llm_engine.cpp)
+configure_localai_target(callisto_client)
+target_link_libraries(callisto_client PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+
+#
+# 2. Callisto Server
+#
+add_executable(callisto_server
+        src2/server.cpp
+        src2/common/log.cpp
+        src/llm/llm_engine.cpp)
+configure_localai_target(callisto_server)
+target_link_libraries(callisto_server PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # 1. Server
