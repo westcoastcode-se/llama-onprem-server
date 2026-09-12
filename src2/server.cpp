@@ -99,7 +99,7 @@ namespace callisto {
          * @param config The server configuration
          */
         void start(const Config &config) {
-            log_info("starting server1");
+            log_info("starting server");
             this->config = config;
             listener = TcpSocket::listen(config.address, config.port);
             running = true;
@@ -168,6 +168,9 @@ namespace callisto {
          * @param json
          */
         void handle_client_request(const ConnectedClient &client, const nlohmann::json &json) {
+            if (json["type"] == std::string_view("chat")) {
+                log_info(client, " | chat message=", json.value("message", std::string_view()));
+            }
         }
 
         /**

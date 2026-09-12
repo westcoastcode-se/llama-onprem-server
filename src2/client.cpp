@@ -81,7 +81,7 @@ namespace callisto {
                 std::getline(std::cin, chat_message);
 
                 // Send message to agent
-                agent.chat(chat_message);
+                agent.chat(buffer, chat_message);
             }
             socket = {};
         }

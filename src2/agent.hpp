@@ -28,16 +28,6 @@ namespace callisto {
     struct Agent {
         virtual ~Agent() = default;
 
-        /**
-         * @param message The chat message
-         */
-        void chat(std::string_view message) {
-            std::cout << Colors::reset;
-            std::cout << Colors::gray << "thinking> ";
-            // ...
-            std::cout << Colors::reset;
-        }
-
         virtual bool is_aborting() = 0;
 
         virtual bool is_running() = 0;
@@ -59,6 +49,22 @@ namespace callisto {
 
         explicit RemoteAgent(const TcpSocket::Ptr &socket)
             : socket(socket) {
+        }
+
+        /**
+         * @param message The chat message
+         */
+        void chat(TBuffer<HeapByteBuffer>& buffer, std::string_view message) {
+            //std::cout << Colors::reset;
+            //std::cout << Colors::gray << "thinking> ";
+            // ...
+            //std::cout << Colors::reset;
+
+            const nlohmann::json request = {
+                {"type", "chat"},
+                {"message", message}
+            };
+            socket->pack_and_send(buffer, request);
         }
 
         /**
