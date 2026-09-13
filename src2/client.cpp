@@ -44,14 +44,15 @@ namespace callisto {
          */
         void send_auth_request(TBuffer<HeapByteBuffer> &buffer, const std::string &string) {
             log_info("authenticating");
-            Requests::auth_request(socket, buffer, config.api_key);
+            socket->pack_and_send(buffer, requests::AuthRequest{.token = string}.to_json());
 
             // Wait for server_info response and print out information of it
-            const nlohmann::json server_info = Request::read_request(socket, buffer);
-            std::cout << "Server: " << config.address << ":" << config.port << std::endl;
-            std::cout << "Model: " << server_info["model"].get<std::string>() << std::endl;
-            std::cout << "Context: 0 / " << server_info["context"].get<int32_t>() << std::endl;
+            const auto server_info = requests::ServerInfo::from_json(Request::read_request(socket, buffer));
             buffer.clear();
+
+            std::cout << "Server: " << config.address << ":" << config.port << std::endl;
+            std::cout << "Model: " << server_info.model_path << std::endl;
+            std::cout << "Context: 0 / " << server_info.context << std::endl;
         }
 
         /**
@@ -107,27 +108,6 @@ namespace callisto {
                 return;
             }
             running = false;
-        }
-
-        /**
-         * Method called from a thread dedicated for the supplied client
-         *
-         * @param client Client
-         */
-        void client_thread(const TcpSocket::Ptr client) {
-            TBuffer<HeapByteBuffer> buffer;
-            try {
-                while (running) {
-                    if (!client->poll_incoming()) {
-                        continue;
-                    }
-                    const auto r = client->read(buffer);
-                    Request::read_request(client, buffer);
-                    buffer.clear();
-                }
-            } catch (base_error &e) {
-                log_error("failed to parse request: ", e.what());
-            }
         }
     };
 }

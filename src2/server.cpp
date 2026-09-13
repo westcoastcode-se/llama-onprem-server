@@ -76,7 +76,7 @@ namespace callisto {
 
         Config config;
         WorkQueue work_queue;
-        std::vector<unique_ptr<ClientThread>> client_threads;
+        std::vector<unique_ptr<ClientThread> > client_threads;
         std::atomic_bool running{false};
         std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
         std::atomic_int next_id{};
@@ -107,19 +107,21 @@ namespace callisto {
                 try {
                     auto client = listener->accept(&client_ip, &client_port);
                     const auto id = next_id++;
-                    log_info("client(", id, ") has connected from ", client_ip, ":", client_port);
+                    log_info("client(", id, ") | connected from ", client_ip, ":", client_port);
                     add_client_thread(std::move(client), id);
                 } catch (const TcpSocket::accept_failed &_) {
                     // Ignore and continue
                     continue;
                 }
             }
+            log_info("server shutdown");
         }
 
         /**
          * Stop the server from running
          */
         void stop() {
+            log_info("stopping server");
             if (is_terminating.test_and_set()) {
                 log_error("received second interrupt, terminating immediately.");
                 exit(1);
@@ -146,6 +148,7 @@ namespace callisto {
          */
         template<class T>
         void authenticate_client(const ConnectedClient &client, TBuffer<T> &buffer) {
+            log_info(client, " | authenticating");
             const auto json = Request::read_request(client.socket, buffer);
             if (json.value("type", std::string_view()) != std::string_view("auth")) {
                 throw auth_error{};
@@ -153,11 +156,13 @@ namespace callisto {
             if (json.value("token", std::string_view()) != config.api_key) {
                 throw auth_error{};
             }
-            log_info(client, " is now authenticated");
+            log_info(client, " | is now authenticated");
             buffer.clear();
 
             // Send information back to the client
-            Requests::server_info(client.socket, buffer, config.model_path, config.context);
+            client.socket->pack_and_send(buffer, requests::ServerInfo{
+                                             .model_path = config.model_path, .context = config.context,
+                                         }.to_json());
         }
 
         /**
@@ -220,8 +225,8 @@ int main() {
     // TODO: Allow running the server without allowing remote access
     try {
         server.start();
-    } catch (const std::exception &_) {
-        log_error("could not start server");
+    } catch (const std::exception &e) {
+        log_error("could not start server: ", e.what());
     }
     return 0;
 }

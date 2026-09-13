@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <span>
+#include <nlohmann/json.hpp>
 
 namespace callisto {
     using string = std::string;
@@ -16,4 +17,6 @@ namespace callisto {
     using unique_ptr = std::unique_ptr<T>;
 
     using bytes = std::span<std::byte>;
+
+    using json = nlohmann::json;
 }

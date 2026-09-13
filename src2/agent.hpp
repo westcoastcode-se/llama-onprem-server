@@ -43,18 +43,18 @@ namespace callisto {
         struct Session {
         };
 
-        const TcpSocket::Ptr &socket;
+        const unique_ptr<TcpSocket> &socket;
         std::atomic_bool requesting{false};
         std::atomic_bool aborting{false};
 
-        explicit RemoteAgent(const TcpSocket::Ptr &socket)
+        explicit RemoteAgent(const unique_ptr<TcpSocket> &socket)
             : socket(socket) {
         }
 
         /**
          * @param message The chat message
          */
-        void chat(TBuffer<HeapByteBuffer>& buffer, std::string_view message) {
+        void chat(TBuffer<HeapByteBuffer> &buffer, std::string_view message) {
             //std::cout << Colors::reset;
             //std::cout << Colors::gray << "thinking> ";
             // ...
