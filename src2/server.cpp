@@ -15,7 +15,6 @@
 
 namespace callisto {
     static std::function<void(int)> shutdown_handler;
-    static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
     static inline void signal_handler(const int signal) {
         shutdown_handler(signal);
@@ -81,6 +80,7 @@ namespace callisto {
         WorkQueue work_queue;
         std::vector<ClientThread::Ptr> client_threads;
         std::atomic_bool running{false};
+        std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
         std::atomic_int next_id{};
 
         /**
@@ -95,12 +95,9 @@ namespace callisto {
 
         /**
          * Start the server and accept incoming connections
-         *
-         * @param config The server configuration
          */
-        void start(const Config &config) {
+        void start() {
             log_info("starting server");
-            this->config = config;
             listener = TcpSocket::listen(config.address, config.port);
             running = true;
             while (running) {
@@ -126,6 +123,11 @@ namespace callisto {
          * Stop the server from running
          */
         void stop() {
+            if (is_terminating.test_and_set()) {
+                log_error("received second interrupt, terminating immediately.");
+                exit(1);
+                return;
+            }
             running = false;
         }
 
@@ -207,15 +209,10 @@ int main() {
     using callisto::log_info;
     using callisto::log_error;
 
-    Server server;
+    Server server{.config = {.api_key = "SUPERSECRET"}};
 
     // Listen for interrupts
     callisto::shutdown_handler = [&server](int _) {
-        if (callisto::is_terminating.test_and_set()) {
-            log_error("Received second interrupt, terminating immediately.");
-            exit(1);
-            return;
-        }
         server.stop();
     };
     signal(SIGINT, callisto::signal_handler);
@@ -225,7 +222,7 @@ int main() {
     // TODO: Allow running the client on the server
     // TODO: Allow running the server without allowing remote access
     try {
-        server.start({.api_key = "SUPERSECRET"});
+        server.start();
     } catch (const std::exception &_) {
         log_error("could not start server");
     }
