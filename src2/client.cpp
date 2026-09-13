@@ -48,7 +48,6 @@ namespace callisto {
 
             // Wait for server_info response and print out information of it
             const auto server_info = Request::read_json<requests::ServerInfo>(socket, buffer);
-            buffer.clear();
 
             std::cout << "Server: " << config.address << ":" << config.port << std::endl;
             std::cout << "Model: " << server_info.model_path << std::endl;
@@ -71,6 +70,9 @@ namespace callisto {
                 log_error("failed to authenticate: ", e.what());
                 return;
             }
+
+            // Immediately send a new session request
+            socket->pack_and_send(buffer, requests::NewSessionRequest{}.to_json());
 
             running = true;
             while (running) {

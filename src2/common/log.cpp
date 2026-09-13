@@ -4,7 +4,7 @@
 namespace callisto {
     int logger_level = Logger::LEVEL_INFO;
 
-    bool Logger::is_level(const int level) { return level == logger_level; }
+    bool Logger::is_level(const int level) { return level >= logger_level; }
 
     void Logger::set_level(const int level) { logger_level = level; }
 

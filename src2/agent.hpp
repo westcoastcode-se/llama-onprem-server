@@ -46,6 +46,7 @@ namespace callisto {
         const unique_ptr<TcpSocket> &socket;
         std::atomic_bool requesting{false};
         std::atomic_bool aborting{false};
+        int32_t session_id{0};
 
         explicit RemoteAgent(const unique_ptr<TcpSocket> &socket)
             : socket(socket) {
@@ -60,11 +61,45 @@ namespace callisto {
             // ...
             //std::cout << Colors::reset;
 
-            const nlohmann::json request = {
-                {"type", "chat"},
-                {"message", message}
-            };
-            socket->pack_and_send(buffer, requests::ChatRequest{.message = message}.to_json());
+            // Send chat request
+            socket->pack_and_send(buffer, requests::ChatRequest{
+                                      .message = message, .session_id = session_id
+                                  }.to_json());
+
+
+            bool thinking = false;
+
+            // Now wait for response data response. Expected responses are:
+            // TokenResponse, TokensDoneResponse, TasksRequest, ErrorResponse
+            while (!is_aborting()) {
+                if (!socket->poll_incoming()) {
+                    continue;
+                }
+
+                buffer.clear();
+                const auto j = Request::read_request(socket, buffer);
+                const auto type = j.value("type", string());
+
+                if (type == requests::TokenResponse::type) {
+                    const auto token = requests::TokenResponse::from_json(j);
+                    if (!thinking) {
+                        std::cout << Colors::gray << "thinking>" << Colors::reset;
+                        thinking = true;
+                    }
+                    std::cout << Colors::gray << ' ' << token.piece << Colors::reset;
+                } else if (type == requests::TokensDoneResponse::type) {
+                    const auto token = requests::TokensDoneResponse::from_json(j);
+                    std::cout << std::endl << Colors::yellow << "response> " << token.response;
+                    std::cout << Colors::reset << std::endl;
+                    break;
+                } else if (type == requests::ErrorResponse::type) {
+                    const auto err = requests::ErrorResponse::from_json(j);
+                    // TODO: Add support for handling some errors, such as compaction required
+                    break;
+                }
+            }
+
+            std::cout << Colors::reset;
         }
 
         /**

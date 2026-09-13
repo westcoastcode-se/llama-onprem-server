@@ -13,12 +13,15 @@ namespace callisto {
      */
     struct Request {
         /**
-         * Header: <VERSION> <API_KEY> <LENGTH> <BODY>
+         * Header: <VERSION> <LENGTH:10><BODY>
          *
          * The length if the complete size of both the header and the body
          */
         struct Headers {
-            static constexpr std::string VERSION = "CALLISTO/1.0";
+            // The header version
+            static constexpr std::string VERSION = "CALLISTO/1";
+            // Header is the size of the "<VERSION> <char:10>" containing the size of the message
+            static constexpr int32_t HEADER_LENGTH = (VERSION.length()) + 1 + 10;
         };
 
         /**
@@ -64,13 +67,13 @@ namespace callisto {
          * @return the lenghth of the request
          */
         template<class T>
-        static std::tuple<uint32_t, uint32_t> validate_and_get_length(const TBuffer<T> &buffer) {
-            const auto parts = split3(buffer.string());
+        static uint32_t validate_and_get_length(const TBuffer<T> &buffer) {
+            const auto parts = split2(buffer.string());
             if (!parts) {
                 throw invalid_request{};
             }
 
-            auto [version, length, json] = *parts;
+            auto [version, length] = *parts;
             if (version != Headers::VERSION) {
                 throw invalid_version{};
             }
@@ -79,9 +82,7 @@ namespace callisto {
             uint32_t json_length;
             std::ispanstream s(std::span(length.data(), length.size()));
             s >> json_length;
-
-            const uint32_t json_start_index = json.data() - buffer.string().data();
-            return {json_length, json_start_index};
+            return json_length;
         }
 
         /**
@@ -91,18 +92,21 @@ namespace callisto {
          */
         template<class BUFFER>
         static json read_request(const unique_ptr<TcpSocket> &socket, TBuffer<BUFFER> &buffer) {
-            socket->read(buffer);
-            const auto [length, json_offset] = validate_and_get_length(buffer);
-            const auto buffer_data = buffer.string();
-            if (buffer_data.size() < length) {
-                // Read the rest of the data
-                const auto n = socket->read(buffer, length - buffer_data.size());
-                if (n != length) {
-                    throw TcpSocket::read_failed{};
-                }
+            // Clear the buffer in preparation for the request
+            buffer.clear();
+
+            // Read the header
+            if (socket->read(buffer, Headers::HEADER_LENGTH) != Headers::HEADER_LENGTH) {
+                throw invalid_request{};
+            }
+            // Read the body
+            const auto body_length = validate_and_get_length(buffer);
+            buffer.clear();
+            if (socket->read(buffer, body_length) != body_length) {
+                throw invalid_request{};
             }
 
-            const std::string_view json = buffer.string().substr(json_offset);
+            const std::string_view json = buffer.string();
             log_debug("Received json: ", json);
             return nlohmann::json::parse(json, nullptr, false, true);
         }
@@ -121,6 +125,17 @@ namespace callisto {
                 throw invalid_request{};
             }
             return T::from_json(j);
+        }
+
+        static std::optional<std::tuple<std::string_view, std::string_view> > split2(
+            const std::string_view sv, const char delim = ' ') {
+            const size_t pos1 = sv.find(delim);
+            if (pos1 == std::string_view::npos) return std::nullopt;
+
+            return std::tuple{
+                sv.substr(0, pos1), // del 1
+                sv.substr(pos1 + 1)
+            };
         }
 
         static std::optional<std::tuple<std::string_view, std::string_view, std::string_view> > split3(

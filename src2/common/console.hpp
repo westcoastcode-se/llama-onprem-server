@@ -7,7 +7,7 @@ namespace callisto {
         inline constexpr const char *dim = "\033[2m";
         inline constexpr const char *red = "\033[31m";
         inline constexpr const char *green = "\033[32m";
-        inline constexpr const char *yello = "\033[33m";
+        inline constexpr const char *yellow = "\033[33m";
         inline constexpr const char *blue = "\033[34m";
         inline constexpr const char *magenta = "\033[35m";
         inline constexpr const char *cyan = "\033[36m";

@@ -140,17 +140,20 @@ namespace callisto {
             static constexpr string_view type = "error";
 
             string message;
+            int32_t code;
 
             [[nodiscard]] json to_json() const {
                 return {
                     {"type", type},
-                    {"message", message}
+                    {"message", message},
+                    {"code", code}
                 };
             }
 
             static ErrorResponse from_json(const json &j) {
                 ErrorResponse msg;
                 msg.message = j.value("message", "");
+                msg.code = j.value("code", 0);
                 return msg;
             }
         };
@@ -193,20 +196,62 @@ namespace callisto {
             }
         };
 
-        struct ChatRequest {
-            static constexpr string_view type = "chat";
-            string_view message;
+        /**
+         * Create a new ai session
+         */
+        struct NewSessionRequest {
+            static constexpr string_view type = "new_session";
 
             [[nodiscard]] json to_json() const {
                 return {
                     {"type", type},
-                    {"message", message}
+                };
+            }
+
+            static NewSessionRequest from_json(const json &j) {
+                return {};
+            }
+        };
+
+        /**
+         * A new session is created
+         */
+        struct SessionCreatedResponse {
+            static constexpr string_view type = "session_created";
+            int32_t session_id;
+
+            [[nodiscard]] json to_json() const {
+                return {
+                    {"type", type},
+                    {"session_id", session_id}
+                };
+            }
+
+            static SessionCreatedResponse from_json(const json &j) {
+                SessionCreatedResponse msg;
+                msg.session_id = j.value("session_id", 0);
+                return msg;
+            }
+        };
+
+        struct ChatRequest {
+            static constexpr string_view type = "chat";
+
+            string_view message;
+            int32_t session_id;
+
+            [[nodiscard]] json to_json() const {
+                return {
+                    {"type", type},
+                    {"message", message},
+                    {"session_id", session_id}
                 };
             }
 
             static ChatRequest from_json(const json &j) {
                 ChatRequest msg;
                 msg.message = j.value("message", "");
+                msg.session_id = j.value("session_id", 0);
                 return msg;
             }
         };

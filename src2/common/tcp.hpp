@@ -77,6 +77,14 @@ namespace callisto {
             ::close(fd_);
         }
 
+        template<class BUFFER>
+        void put_header(TBuffer<BUFFER> &buffer, int32_t len) {
+            buffer.put("CALLISTO/1 ");
+            char tmp[12]{};
+            snprintf(tmp, 11, "%010d", len);
+            buffer.put(tmp);
+        }
+
         /**
          *
          * @tparam T The buffer type
@@ -86,13 +94,10 @@ namespace callisto {
         template<class T>
         void pack_and_send(TBuffer<T> &buffer, const json &j) {
             const auto value = j.dump(-1, ' ', false, json::error_handler_t::replace);
-
-            buffer.put("CALLISTO/1.0 ");
-            buffer.put(std::to_string(value.length()));
-            buffer.put(" ");
+            buffer.clear();
+            put_header(buffer, value.length());
             buffer.put(value);
             send_all(buffer.data());
-            buffer.clear();
         }
 
         /**
@@ -207,12 +212,19 @@ namespace callisto {
          * @return The number of bytes read.
          */
         template<class T>
-        ssize_t read(TBuffer<T> &buffer, const size_t chunk_size = 8096) const {
-            const auto n = buffer.read(fd_, chunk_size);
-            if (n == -1) {
-                throw read_failed{};
+        ssize_t read(TBuffer<T> &buffer, const size_t chunk_size) const {
+            int32_t bytes_left = chunk_size;
+            while (bytes_left > 0) {
+                const auto n = buffer.read(fd_, bytes_left);
+                if (n == -1) {
+                    throw read_failed{};
+                }
+                if (n == 0) {
+                    throw read_failed{};
+                }
+                bytes_left -= n;
             }
-            return n;
+            return chunk_size;
         }
 
         void send_all(const bytes data) const {

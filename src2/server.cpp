@@ -169,10 +169,22 @@ namespace callisto {
          * @param client
          * @param json
          */
-        void handle_client_request(const ConnectedClient &client, const nlohmann::json &json) {
-            if (json["type"] == requests::ChatRequest::type) {
-                const auto req = requests::ChatRequest::from_json(json);
+        void handle_client_request(TBuffer<HeapByteBuffer> &buffer, const ConnectedClient &client, const json &j) {
+            const auto type = j.value("type", string());
+            if (type == requests::ChatRequest::type) {
+                const auto req = requests::ChatRequest::from_json(j);
                 log_info(client, " | chat message=", req.message);
+
+                // Simulate AI response
+                client.socket->pack_and_send(
+                    buffer, requests::TokenResponse{.piece = "maybe", .context_used = 100}.to_json());
+                client.socket->pack_and_send(
+                    buffer, requests::TokenResponse{.piece = "this is what", .context_used = 100}.to_json());
+                client.socket->pack_and_send(
+                    buffer, requests::TokenResponse{.piece = "the user wants", .context_used = 100}.to_json());
+                client.socket->pack_and_send(
+                    buffer,
+                    requests::TokensDoneResponse{.response = "This is how it works...", .context_used = 100}.to_json());
             }
         }
 
@@ -193,8 +205,10 @@ namespace callisto {
                     }
                     const auto json = Request::read_request(client.socket, buffer);
                     buffer.clear();
-                    handle_client_request(client, json);
+                    handle_client_request(buffer, client, json);
                 }
+            } catch (TcpSocket::read_failed &_) {
+                log_debug(client, " | tcp socket read failed: Probably disconnected");
             } catch (base_error &e) {
                 log_error(client, " | unhandled error: ", e.what());
             }
