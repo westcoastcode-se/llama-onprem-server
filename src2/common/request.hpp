@@ -24,9 +24,18 @@ namespace callisto {
         /**
          *
          */
-        struct invalid_request : base_error {
-            const char *what() const noexcept {
-                return "invalid header";
+        struct request_error : base_error {
+            [[nodiscard]] const char *what() const noexcept override {
+                return "request_error";
+            }
+        };
+
+        /**
+         *
+         */
+        struct invalid_request : request_error {
+            [[nodiscard]] const char *what() const noexcept final {
+                return "invalid_request";
             }
         };
 
@@ -34,8 +43,8 @@ namespace callisto {
          *
          */
         struct invalid_version : base_error {
-            const char *what() const noexcept {
-                return "invalid version";
+            [[nodiscard]] const char *what() const noexcept final {
+                return "invalid_version";
             }
         };
 
@@ -43,8 +52,8 @@ namespace callisto {
          *
          */
         struct parse_error : base_error {
-            const char *what() const noexcept {
-                return "parse error";
+            [[nodiscard]] const char *what() const noexcept final {
+                return "parse_error";
             }
         };
 
@@ -81,7 +90,7 @@ namespace callisto {
          * @return
          */
         template<class T>
-        static nlohmann::json read_request(const TcpSocket::Ptr &socket, TBuffer<T> &buffer) {
+        static nlohmann::json read_request(const unique_ptr<TcpSocket> &socket, TBuffer<T> &buffer) {
             socket->read(buffer);
             const auto [length, json_offset] = validate_and_get_length(buffer);
             const auto buffer_data = buffer.string();

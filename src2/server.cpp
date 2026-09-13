@@ -22,7 +22,7 @@ namespace callisto {
 
     struct ConnectedClient {
         // Socket to read and send data over
-        TcpSocket::Ptr socket;
+        unique_ptr<TcpSocket> socket;
         // Unique id for the client - used primarily for logging
         uint32_t id;
 
@@ -53,8 +53,7 @@ namespace callisto {
     };
 
     struct ClientThread {
-        typedef std::unique_ptr<ClientThread> Ptr;
-
+        // Thread running the client socket connection
         std::thread thread;
     };
 
@@ -76,9 +75,8 @@ namespace callisto {
         };
 
         Config config;
-        std::unique_ptr<TcpSocket> listener;
         WorkQueue work_queue;
-        std::vector<ClientThread::Ptr> client_threads;
+        std::vector<unique_ptr<ClientThread>> client_threads;
         std::atomic_bool running{false};
         std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
         std::atomic_int next_id{};
@@ -88,7 +86,7 @@ namespace callisto {
          *
          * @param client The new client
          */
-        void add_client_thread(TcpSocket::Ptr &&client, const uint32_t id) {
+        void add_client_thread(unique_ptr<TcpSocket> &&client, const uint32_t id) {
             std::thread t(&Server::client_thread, this, ConnectedClient{std::move(client), id});
             client_threads.emplace_back(new ClientThread{.thread = std::move(t)});
         }
@@ -98,7 +96,7 @@ namespace callisto {
          */
         void start() {
             log_info("starting server");
-            listener = TcpSocket::listen(config.address, config.port);
+            const auto listener = TcpSocket::listen(config.address, config.port);
             running = true;
             while (running) {
                 if (!listener->poll_incoming()) {
@@ -107,16 +105,15 @@ namespace callisto {
                 std::string client_ip;
                 int client_port = 0;
                 try {
-                    const auto id = next_id++;
                     auto client = listener->accept(&client_ip, &client_port);
+                    const auto id = next_id++;
                     log_info("client(", id, ") has connected from ", client_ip, ":", client_port);
                     add_client_thread(std::move(client), id);
-                } catch (TcpSocket::accept_failed) {
+                } catch (const TcpSocket::accept_failed &_) {
                     // Ignore and continue
                     continue;
                 }
             }
-            listener = {};
         }
 
         /**
@@ -195,9 +192,9 @@ namespace callisto {
                     handle_client_request(client, json);
                 }
             } catch (base_error &e) {
-                log_error(client, " | failed to parse request: ", e.what());
+                log_error(client, " | unhandled error: ", e.what());
             }
-            log_info(client, " disconnected");
+            log_info(client, " | disconnected");
         }
     };
 }

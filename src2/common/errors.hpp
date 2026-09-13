@@ -2,6 +2,9 @@
 #include <exception>
 
 namespace callisto {
+    /**
+     *
+     */
     struct base_error : std::exception {
     };
 
@@ -10,8 +13,8 @@ namespace callisto {
      * Error that happens if a client authentication failed
      */
     struct auth_error : base_error {
-        const char *what() const noexcept override {
-            return "authentication failed";
+        [[nodiscard]] const char *what() const noexcept final {
+            return "auth_error";
         }
     };
 
@@ -19,6 +22,8 @@ namespace callisto {
      * Abort the current processor
      */
     struct abort : base_error {
-
+        [[nodiscard]] const char *what() const noexcept final {
+            return "abort";
+        }
     };
 }

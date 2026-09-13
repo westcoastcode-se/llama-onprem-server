@@ -2,8 +2,8 @@
 
 #include <array>
 #include <cassert>
-#include <span>
 #include <spanstream>
+#include "std.hpp"
 
 namespace callisto {
 

@@ -55,7 +55,7 @@ namespace callisto {
 
     struct Requests {
         template<class T>
-        static void server_info(const TcpSocket::Ptr &socket, TBuffer<T> &buffer,
+        static void server_info(const unique_ptr<TcpSocket> &socket, TBuffer<T> &buffer,
                                 std::string_view model_path, int32_t context) {
             const nlohmann::json auth_request = {
                 {"type", "server_info"},
@@ -66,7 +66,7 @@ namespace callisto {
         }
 
         template<class T>
-        static void auth_request(const TcpSocket::Ptr &socket, TBuffer<T> &buffer, const std::string_view token) {
+        static void auth_request(const unique_ptr<TcpSocket> &socket, TBuffer<T> &buffer, const std::string_view token) {
             const nlohmann::json auth_request = {
                 {"type", "auth"},
                 {"token", token}
@@ -75,7 +75,7 @@ namespace callisto {
         }
 
         template<class T>
-        static void abort_request(const TcpSocket::Ptr &socket, TBuffer<T> &buffer) {
+        static void abort_request(const unique_ptr<TcpSocket> &socket, TBuffer<T> &buffer) {
             const nlohmann::json request = {
                 {"type", "abort"}
             };

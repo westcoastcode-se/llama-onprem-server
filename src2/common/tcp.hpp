@@ -24,24 +24,46 @@ namespace callisto {
      * or extended implementations.
      */
     class TcpSocket {
-        int fd_ = -1;
+        const int fd_ = -1;
 
     public:
-        typedef std::unique_ptr<TcpSocket> Ptr;
-
-        struct connect_error : base_error {
+        /**
+         * Base error for all socket errors
+         */
+        struct socket_error : base_error {
+            [[nodiscard]] const char *what() const noexcept override {
+                return "socket_error";
+            }
         };
 
-        struct listen_error : base_error {
+        struct connect_error : socket_error {
+            [[nodiscard]] const char *what() const noexcept final {
+                return "connect_error";
+            }
         };
 
-        struct socket_closed : base_error {
+        struct listen_error : socket_error {
+            [[nodiscard]] const char *what() const noexcept final {
+                return "listen_error";
+            }
         };
 
-        struct accept_failed : base_error {
+        struct socket_closed : socket_error {
+            [[nodiscard]] const char *what() const noexcept final {
+                return "socket_closed";
+            }
         };
 
-        struct read_failed : base_error {
+        struct accept_failed : socket_error {
+            [[nodiscard]] const char *what() const noexcept final {
+                return "accept_failed";
+            }
+        };
+
+        struct read_failed : socket_error {
+            [[nodiscard]] const char *what() const noexcept final {
+                return "read_failed";
+            }
         };
 
         explicit TcpSocket(const int fd = -1) : fd_(fd) {
@@ -52,10 +74,7 @@ namespace callisto {
         }
 
         ~TcpSocket() {
-            if (fd_ >= 0) {
-                ::close(fd_);
-                fd_ = -1;
-            }
+            ::close(fd_);
         }
 
         /**
@@ -83,7 +102,7 @@ namespace callisto {
          * @param port The port
          * @return A socket, if connecting was successful
          */
-        static Ptr connect(const std::string_view &host, const int port) {
+        static unique_ptr<TcpSocket> connect(const std::string_view &host, const int port) {
             addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;
@@ -125,7 +144,7 @@ namespace callisto {
             return std::make_unique<TcpSocket>(fd);
         }
 
-        static Ptr listen(const std::string_view host, const unsigned short port) {
+        static unique_ptr<TcpSocket> listen(const std::string_view host, const unsigned short port) {
             addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;
@@ -196,7 +215,7 @@ namespace callisto {
             return n;
         }
 
-        void send_all(const std::span<std::byte> data) const {
+        void send_all(const bytes data) const {
             if (fd_ < 0) throw socket_closed{};
             size_t total_sent = 0;
             auto len = data.size();
@@ -211,13 +230,9 @@ namespace callisto {
             }
         }
 
-        void close() {
-            if (fd_) {
-                ::close(fd_);
-                fd_ = 0;
-            }
-        }
-
+        /**
+         * @return true if any incoming changes are made on this socket (connection attepmts, incoming data etc.)
+         */
         [[nodiscard]] bool poll_incoming() const {
             struct pollfd pfd{};
             pfd.fd = fd_;
@@ -234,7 +249,13 @@ namespace callisto {
             return true;
         }
 
-        Ptr accept(std::string *client_ip, int *client_port) {
+        /**
+         *
+         * @param client_ip Where to put the client's IP address
+         * @param client_port
+         * @return The accepted tcp connection
+         */
+        unique_ptr<TcpSocket> accept(string *client_ip, int *client_port) {
             if (fd_ < 0) throw socket_closed{};
             sockaddr_in client_addr{};
             socklen_t addr_len = sizeof(client_addr);
