@@ -23,11 +23,11 @@ namespace callisto {
     struct RemoteConnection {
         struct Config {
             // The server address
-            std::string_view address = "0.0.0.0";
+            string_view address = "0.0.0.0";
             // The server port
             int port = 8080;
             // API-key
-            std::string api_key;
+            string api_key;
         };
 
         Config config;
@@ -47,7 +47,7 @@ namespace callisto {
             socket->pack_and_send(buffer, requests::AuthRequest{.token = string}.to_json());
 
             // Wait for server_info response and print out information of it
-            const auto server_info = requests::ServerInfo::from_json(Request::read_request(socket, buffer));
+            const auto server_info = Request::read_json<requests::ServerInfo>(socket, buffer);
             buffer.clear();
 
             std::cout << "Server: " << config.address << ":" << config.port << std::endl;
@@ -127,5 +127,6 @@ int main() {
     } catch (const base_error &e) {
         log_error(e.what());
     }
+    std::cout.flush();
     return 0;
 }

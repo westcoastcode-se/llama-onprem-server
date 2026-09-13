@@ -89,8 +89,8 @@ namespace callisto {
          * @param buffer
          * @return
          */
-        template<class T>
-        static nlohmann::json read_request(const unique_ptr<TcpSocket> &socket, TBuffer<T> &buffer) {
+        template<class BUFFER>
+        static json read_request(const unique_ptr<TcpSocket> &socket, TBuffer<BUFFER> &buffer) {
             socket->read(buffer);
             const auto [length, json_offset] = validate_and_get_length(buffer);
             const auto buffer_data = buffer.string();
@@ -105,6 +105,22 @@ namespace callisto {
             const std::string_view json = buffer.string().substr(json_offset);
             log_debug("Received json: ", json);
             return nlohmann::json::parse(json, nullptr, false, true);
+        }
+
+        /**
+         * @tparam T The model type
+         * @tparam BUFFER The buffer implementation
+         * @param socket Socket
+         * @param buffer Buffer
+         * @return The deserialized json object
+         */
+        template<class T, class BUFFER>
+        static T read_json(const unique_ptr<TcpSocket> &socket, TBuffer<BUFFER> &buffer) {
+            const auto j = read_request(socket, buffer);
+            if (j["type"] != T::type) {
+                throw invalid_request{};
+            }
+            return T::from_json(j);
         }
 
         static std::optional<std::tuple<std::string_view, std::string_view, std::string_view> > split3(

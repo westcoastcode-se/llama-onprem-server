@@ -54,7 +54,7 @@ namespace callisto {
         /**
          * @param message The chat message
          */
-        void chat(TBuffer<HeapByteBuffer> &buffer, std::string_view message) {
+        void chat(TBuffer<HeapByteBuffer> &buffer, string_view message) {
             //std::cout << Colors::reset;
             //std::cout << Colors::gray << "thinking> ";
             // ...
@@ -64,7 +64,7 @@ namespace callisto {
                 {"type", "chat"},
                 {"message", message}
             };
-            socket->pack_and_send(buffer, request);
+            socket->pack_and_send(buffer, requests::ChatRequest{.message = message}.to_json());
         }
 
         /**
@@ -73,7 +73,7 @@ namespace callisto {
         void abort() {
             if (requesting && !aborting) {
                 TBuffer<StackByteBuffer<512> > buffer;
-                Requests::abort_request(socket, buffer);
+                socket->pack_and_send(buffer, requests::AbortRequest{}.to_json());
                 aborting = true;
             }
         }

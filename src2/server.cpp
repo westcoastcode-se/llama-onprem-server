@@ -8,6 +8,7 @@
 #include <deque>
 #include <thread>
 #include <csignal>
+#include <iostream>
 #include <mutex>
 #include <queue>
 
@@ -63,15 +64,15 @@ namespace callisto {
     struct Server {
         struct Config {
             // The server address
-            std::string_view address = "0.0.0.0";
+            string_view address = "0.0.0.0";
             // The server port
             int port = 8080;
             // Path to the model
-            std::string model_path;
+            string model_path;
             // Allowed context size
             int context = 100000;
             // API-key
-            std::string api_key;
+            string api_key;
         };
 
         Config config;
@@ -149,11 +150,8 @@ namespace callisto {
         template<class T>
         void authenticate_client(const ConnectedClient &client, TBuffer<T> &buffer) {
             log_info(client, " | authenticating");
-            const auto json = Request::read_request(client.socket, buffer);
-            if (json.value("type", std::string_view()) != std::string_view("auth")) {
-                throw auth_error{};
-            }
-            if (json.value("token", std::string_view()) != config.api_key) {
+            const auto json = Request::read_json<requests::AuthRequest>(client.socket, buffer);
+            if (json.token != config.api_key) {
                 throw auth_error{};
             }
             log_info(client, " | is now authenticated");
@@ -172,8 +170,9 @@ namespace callisto {
          * @param json
          */
         void handle_client_request(const ConnectedClient &client, const nlohmann::json &json) {
-            if (json["type"] == std::string_view("chat")) {
-                log_info(client, " | chat message=", json.value("message", std::string_view()));
+            if (json["type"] == requests::ChatRequest::type) {
+                const auto req = requests::ChatRequest::from_json(json);
+                log_info(client, " | chat message=", req.message);
             }
         }
 
@@ -228,5 +227,6 @@ int main() {
     } catch (const std::exception &e) {
         log_error("could not start server: ", e.what());
     }
+    std::cout.flush();
     return 0;
 }

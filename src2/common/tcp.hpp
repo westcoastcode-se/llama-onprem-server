@@ -81,11 +81,11 @@ namespace callisto {
          *
          * @tparam T The buffer type
          * @param buffer The buffer that we can use when sending data
-         * @param json The json body
+         * @param j The json body
          */
         template<class T>
-        void pack_and_send(TBuffer<T> &buffer, const nlohmann::json &json) {
-            const auto value = json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        void pack_and_send(TBuffer<T> &buffer, const json &j) {
+            const auto value = j.dump(-1, ' ', false, json::error_handler_t::replace);
 
             buffer.put("CALLISTO/1.0 ");
             buffer.put(std::to_string(value.length()));
@@ -102,7 +102,7 @@ namespace callisto {
          * @param port The port
          * @return A socket, if connecting was successful
          */
-        static unique_ptr<TcpSocket> connect(const std::string_view &host, const int port) {
+        static unique_ptr<TcpSocket> connect(string_view host, const int port) {
             addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;
@@ -144,7 +144,7 @@ namespace callisto {
             return std::make_unique<TcpSocket>(fd);
         }
 
-        static unique_ptr<TcpSocket> listen(const std::string_view host, const unsigned short port) {
+        static unique_ptr<TcpSocket> listen(string_view host, const unsigned short port) {
             addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;

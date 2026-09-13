@@ -58,6 +58,8 @@ namespace callisto {
          * Information from the server about the AI model and it's capabilities
          */
         struct ServerInfo {
+            static constexpr string_view type = "server_info";
+
             // Model path
             string model_path;
             // Context information
@@ -65,7 +67,7 @@ namespace callisto {
 
             [[nodiscard]] json to_json() const {
                 return {
-                    {"type", "server_info"},
+                    {"type", type},
                     {"model", model_path},
                     {"context", context}
                 };
@@ -83,6 +85,8 @@ namespace callisto {
          * Response from the server of the AI's currently generated token
          */
         struct TokenResponse {
+            static constexpr string_view type = "token";
+
             // A piece of text
             string piece;
             // How much context is used
@@ -90,7 +94,7 @@ namespace callisto {
 
             [[nodiscard]] json to_json() const {
                 return {
-                    {"type", "token"},
+                    {"type", type},
                     {"piece", piece},
                     {"context_used", context_used}
                 };
@@ -108,12 +112,14 @@ namespace callisto {
          * Response of the complete chat request
          */
         struct TokensDoneResponse {
+            static constexpr string_view type = "tokens_done";
+
             string response;
             int32_t context_used;
 
             [[nodiscard]] json to_json() const {
                 return {
-                    {"type", "tokens_done"},
+                    {"type", type},
                     {"response", response},
                     {"context_used", context_used}
                 };
@@ -131,11 +137,13 @@ namespace callisto {
          * Response sent to the server if an error occurred while generating the response
          */
         struct ErrorResponse {
+            static constexpr string_view type = "error";
+
             string message;
 
             [[nodiscard]] json to_json() const {
                 return {
-                    {"type", "error"},
+                    {"type", type},
                     {"message", message}
                 };
             }
@@ -148,11 +156,13 @@ namespace callisto {
         };
 
         struct AuthRequest {
+            static constexpr string_view type = "auth";
+
             string token;
 
             [[nodiscard]] json to_json() const {
                 return {
-                    {"type", "auth"},
+                    {"type", type},
                     {"token", token}
                 };
             }
@@ -163,15 +173,42 @@ namespace callisto {
                 return msg;
             }
         };
-    }
 
-    struct Requests {
-        template<class T>
-        static void abort_request(const unique_ptr<TcpSocket> &socket, TBuffer<T> &buffer) {
-            const nlohmann::json request = {
-                {"type", "abort"}
-            };
-            socket->pack_and_send(buffer, request);
-        }
-    };
+        /**
+         * Abort request
+         */
+        struct AbortRequest {
+            static constexpr string_view type = "abort";
+
+            string token;
+
+            [[nodiscard]] json to_json() const {
+                return {
+                    {"type", type}
+                };
+            }
+
+            static AuthRequest from_json(const json &j) {
+                return {};
+            }
+        };
+
+        struct ChatRequest {
+            static constexpr string_view type = "chat";
+            string_view message;
+
+            [[nodiscard]] json to_json() const {
+                return {
+                    {"type", type},
+                    {"message", message}
+                };
+            }
+
+            static ChatRequest from_json(const json &j) {
+                ChatRequest msg;
+                msg.message = j.value("message", "");
+                return msg;
+            }
+        };
+    }
 }
