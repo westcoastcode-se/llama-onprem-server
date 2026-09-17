@@ -56,11 +56,6 @@ namespace callisto {
          * @param message The chat message
          */
         void chat(TBuffer<HeapByteBuffer> &buffer, string_view message) {
-            //std::cout << Colors::reset;
-            //std::cout << Colors::gray << "thinking> ";
-            // ...
-            //std::cout << Colors::reset;
-
             // Send chat request
             socket->pack_and_send(buffer, requests::ChatRequest{
                                       .message = message, .session_id = session_id
@@ -76,7 +71,6 @@ namespace callisto {
                     continue;
                 }
 
-                buffer.clear();
                 const auto j = Request::read_request(socket, buffer);
                 const auto type = j.value("type", string());
 

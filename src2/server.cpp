@@ -21,9 +21,18 @@ namespace callisto {
         shutdown_handler(signal);
     }
 
+    struct ClientSession {
+        // session id
+        int32_t id;
+        // history of messages
+        std::vector<string> history{};
+    };
+
     struct ConnectedClient {
         // Socket to read and send data over
         unique_ptr<TcpSocket> socket;
+        // Active client sessions
+        std::vector<ClientSession> sessions{};
         // Unique id for the client - used primarily for logging
         uint32_t id;
 
@@ -132,16 +141,6 @@ namespace callisto {
         }
 
         /**
-         * Send information on the server to the client
-         *
-         * @param client
-         * @param buffer
-         */
-        template<class T>
-        void send_server_info(const ConnectedClient &client, TBuffer<T> &buffer) {
-        }
-
-        /**
          * Authenticate the new client
          *
          * @param client
@@ -150,8 +149,8 @@ namespace callisto {
         template<class T>
         void authenticate_client(const ConnectedClient &client, TBuffer<T> &buffer) {
             log_info(client, " | authenticating");
-            const auto json = Request::read_json<requests::AuthRequest>(client.socket, buffer);
-            if (json.token != config.api_key) {
+            const auto& [token] = Request::read_json<requests::AuthRequest>(client.socket, buffer);
+            if (token != config.api_key) {
                 throw auth_error{};
             }
             log_info(client, " | is now authenticated");
@@ -166,12 +165,21 @@ namespace callisto {
         /**
          * Handle a client request
          *
-         * @param client
-         * @param json
+         * @param buffer The buffer
+         * @param client The cliente
+         * @param j raw json request
          */
-        void handle_client_request(TBuffer<HeapByteBuffer> &buffer, const ConnectedClient &client, const json &j) {
+        void handle_client_request(TBuffer<HeapByteBuffer> &buffer, ConnectedClient &client, const json &j) {
             const auto type = j.value("type", string());
-            if (type == requests::ChatRequest::type) {
+            if (type == requests::NewSessionRequest::type)
+            {
+                const auto req = requests::NewSessionRequest::from_json(j);
+                const int32_t session_id = (int32_t)client.sessions.size();
+                client.sessions.push_back({.id = session_id, .history = {}});
+                client.socket->pack_and_send(buffer,
+                    requests::SessionCreatedResponse{.session_id = session_id}.to_json());
+            }
+            else if (type == requests::ChatRequest::type) {
                 const auto req = requests::ChatRequest::from_json(j);
                 log_info(client, " | chat message=", req.message);
 
@@ -204,7 +212,6 @@ namespace callisto {
                         continue;
                     }
                     const auto json = Request::read_request(client.socket, buffer);
-                    buffer.clear();
                     handle_client_request(buffer, client, json);
                 }
             } catch (TcpSocket::read_failed &_) {

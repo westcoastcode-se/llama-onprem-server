@@ -86,9 +86,11 @@ namespace callisto {
         }
 
         /**
-         * @param socket
-         * @param buffer
-         * @return
+         * Read a request from the supplied socket
+         *
+         * @param socket The socket
+         * @param buffer Memory buffer
+         * @return Raw json object
          */
         template<class BUFFER>
         static json read_request(const unique_ptr<TcpSocket> &socket, TBuffer<BUFFER> &buffer) {

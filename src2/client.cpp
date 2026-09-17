@@ -56,8 +56,6 @@ namespace callisto {
 
         /**
          * Start the server and accept incoming connections
-         *
-         * @param config The server configuration
          */
         void start() {
             log_info("connecting to ", config.address, ":", config.port);
