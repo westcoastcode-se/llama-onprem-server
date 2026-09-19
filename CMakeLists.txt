@@ -74,6 +74,7 @@ add_executable(callisto_server
         src3/http/routes.cpp
         src3/jobs/jobs.cpp
         src3/sessions/sessions.cpp
+        src3/agent/response_parse.cpp
         src3/llm/llm_engine.cpp)
 configure_localai_target(callisto_server)
 # Prefer src3 headers over src/ (same relative paths like llm/llm_engine.hpp)

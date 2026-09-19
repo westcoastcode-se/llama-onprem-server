@@ -128,11 +128,12 @@ int main(int argc, char **argv)
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
-    // Token stream waits inside the chunk provider; allow long writes
+    // Timeouts
     svr.set_read_timeout(30, 0);
     svr.set_write_timeout(300, 0);
     svr.set_keep_alive_timeout(300);
 
+    // Custom exception handler
     svr.set_exception_handler([](const auto &, auto &res, std::exception_ptr ep) {
         try
         {
@@ -146,20 +147,25 @@ int main(int argc, char **argv)
             res.status = 404;
             res.set_content(error_json("not_found", e.what()), "application/json");
         }
-        catch (const BadRequest &e)
-        {
-            res.status = 400;
-            res.set_content(error_json("bad_request", e.what()), "application/json");
-        }
         catch (const Busy &e)
         {
             res.status = 503;
             res.set_content(error_json("busy", e.what()), "application/json");
         }
+        catch (const BadRequest &e)
+        {
+            res.status = 400;
+            res.set_content(error_json("bad_request", e.what()), "application/json");
+        }
+        catch (const json::exception &e)
+        {
+            res.status = 400;
+            res.set_content(error_json("bad_request", e.what()), "application/json");
+        }
         catch (const std::exception &e)
         {
-            res.status = 500;
-            res.set_content(error_json("internal", e.what()), "application/json");
+            res.status = 400;
+            res.set_content(error_json("bad_request", e.what()), "application/json");
         }
     });
 

@@ -1,8 +1,11 @@
 #pragma once
 
 #include "api/messages.hpp"
+#include "agent/response_parse.hpp"
 #include "jobs/token_buffer.hpp"
 #include "llm/llm_engine.hpp"
+#include "std.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -14,7 +17,6 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <vector>
 
 enum class TaskState
 {
@@ -22,10 +24,10 @@ enum class TaskState
     Running,
     Done,
     Error,
-    Cancelled,
+    Cancelled
 };
 
-inline const char *to_string(const TaskState s)
+inline const char *to_string(TaskState s)
 {
     switch (s)
     {
@@ -45,11 +47,12 @@ inline const char *to_string(const TaskState s)
 
 struct Task
 {
-    typedef string Key;
+    using Key = std::string;
 
     Key key;
     MessagesRequest request;
-    shared_ptr<TokenBuffer> buffer = std::make_shared<TokenBuffer>();
+    std::shared_ptr<TokenBuffer> buffer = std::make_shared<TokenBuffer>();
+
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point finished_at{};
 
@@ -58,9 +61,13 @@ struct Task
 
     mutable std::mutex mutex;
     TaskState state = TaskState::Queued;
-    string error;
-    string result;
-    bool cancel_requested = false;
+    std::string error;
+    std::string result;
+    std::atomic<bool> cancel_requested{false};
+
+    // Parsed after successful generation (client-side tools / questions).
+    std::vector<ParsedToolCall> tool_calls;
+    std::optional<ParsedQuestion> question;
 
     void set_state(TaskState s)
     {
@@ -78,44 +85,24 @@ struct Task
         return state;
     }
 
-    void request_cancel()
-    {
-        {
-            std::lock_guard lock(mutex);
-            cancel_requested = true;
-            if (state == TaskState::Queued)
-            {
-                state = TaskState::Cancelled;
-                finished_at = std::chrono::steady_clock::now();
-            }
-        }
-        buffer->cancel();
-    }
-
-    [[nodiscard]] bool is_cancel_requested() const
+    void set_error(std::string msg)
     {
         std::lock_guard lock(mutex);
-        return cancel_requested;
+        error = std::move(msg);
+        state = TaskState::Error;
+        finished_at = std::chrono::steady_clock::now();
     }
 
-    void set_result(string text)
+    void set_result(std::string text)
     {
         std::lock_guard lock(mutex);
         result = std::move(text);
     }
 
-    [[nodiscard]] string get_result() const
+    [[nodiscard]] std::string get_result() const
     {
         std::lock_guard lock(mutex);
         return result;
-    }
-
-    void set_error(std::string err)
-    {
-        std::lock_guard lock(mutex);
-        error = std::move(err);
-        state = TaskState::Error;
-        finished_at = std::chrono::steady_clock::now();
     }
 
     [[nodiscard]] std::string get_error() const
@@ -123,66 +110,92 @@ struct Task
         std::lock_guard lock(mutex);
         return error;
     }
+
+    void request_cancel()
+    {
+        cancel_requested.store(true, std::memory_order_relaxed);
+        if (buffer)
+        {
+            buffer->cancel();
+        }
+    }
+
+    [[nodiscard]] bool is_cancel_requested() const
+    {
+        return cancel_requested.load(std::memory_order_relaxed);
+    }
+
+    void set_actions(ParsedAssistantActions actions)
+    {
+        std::lock_guard lock(mutex);
+        tool_calls = std::move(actions.tool_calls);
+        question = std::move(actions.question);
+    }
+
+    [[nodiscard]] MessageStatusResponse to_status() const
+    {
+        std::lock_guard lock(mutex);
+        MessageStatusResponse r;
+        r.key = key;
+        r.state = to_string(state);
+        r.done = state == TaskState::Done || state == TaskState::Error || state == TaskState::Cancelled;
+        r.content = result;
+        r.error = error;
+        r.tool_calls = tool_calls;
+        r.question = question;
+        return r;
+    }
 };
 
 /**
- * Single-flight GPU worker + short queue (max ~2 clients).
- * POST enqueues; worker runs LlamaEngine::chat; tokens go to TokenBuffer.
+ * Single-flight GPU worker + short queue (max 2).
+ * REST clients get a key immediately; tokens stream via TokenBuffer.
  */
 class Jobs
 {
   public:
-    static constexpr size_t kMaxQueue = 16;
+    static constexpr size_t kMaxQueue = 2;
     static constexpr std::chrono::seconds kFinishedTtl{300};
 
     explicit Jobs(LlamaEngine &engine);
-
     ~Jobs();
 
     Jobs(const Jobs &) = delete;
     Jobs &operator=(const Jobs &) = delete;
+
+    void stop();
 
     /**
      * Enqueue a chat job.
      * @param on_finished optional callback invoked once when task finishes (any terminal state).
      * @return key, or nullopt if queue is full (caller should 503).
      */
-    optional<Task::Key> submit(MessagesRequest request,
-                               std::function<void(const Task &)> on_finished = nullptr);
+    std::optional<Task::Key> submit(MessagesRequest request,
+                                    std::function<void(const Task &)> on_finished = nullptr);
 
-    shared_ptr<Task> get_task(const Task::Key &key);
+    std::shared_ptr<Task> get_task(const Task::Key &key);
 
-    /** Cancel and mark for GC. */
+    /**
+     *
+     * @param key The task key
+     * @return
+     */
     bool cancel(const Task::Key &key);
 
     void gc();
 
-    void stop();
-
   private:
-    /**
-     * Garbage collect unsafely. It is assumed that you've locked the mutex beforehand
-     */
-    void unsafe_gc();
-
-    void worker_loop();
-
-    /**
-     * @return A new, unique, key
-     */
-    Task::Key next_key();
-
-    /**
-     * @return Pop the queue for new tasks unsafely. It is assumed that you've locked the mutex beforehand
-     */
-    std::shared_ptr<Task> unsafe_pop_next_queued();
-
     LlamaEngine &engine_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::unordered_map<std::string, std::shared_ptr<Task>> tasks_;
-    std::deque<std::string> queue_;
+    std::unordered_map<Task::Key, std::shared_ptr<Task>> tasks_;
+    std::deque<Task::Key> queue_;
     std::atomic<uint64_t> key_counter_{1};
     std::atomic<bool> stop_{false};
     std::thread worker_;
+
+    Task::Key next_key();
+    void worker_loop();
+    void unsafe_gc();
+    std::shared_ptr<Task> unsafe_pop_next_queued();
 };

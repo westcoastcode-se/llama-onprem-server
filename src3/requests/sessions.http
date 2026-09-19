@@ -1,33 +1,66 @@
-### Create a chat session (optional system + seed messages)
+### Create agent session (default system includes tool_call + question protocol)
 POST http://localhost:8080/v1/sessions
 Content-Type: application/json
 
 {
-  "system": "You are a helpful assistant.",
+  "agent": true,
   "messages": []
 }
 
 ###
-### Get session (history + state)
+### Get session (history + state + pending tool_calls/question)
 GET http://localhost:8080/v1/sessions/1
 
 ###
-### Post a user turn → returns job key (stream via /v1/messages/:key/tokens)
+### Post a user turn → {session_id,key}
 POST http://localhost:8080/v1/sessions/1/messages
 Content-Type: application/json
 
 {
-  "content": "Vad är färgen blå?"
+  "content": "Lista filer i projektet och föreslå nästa steg"
 }
 
 ###
-### Stream tokens for the job key from the previous response
+### Stream tokens
 GET http://localhost:8080/v1/messages/1/tokens
 
 ###
-### Job status / final content
+### Job status (includes tool_calls / question when done)
 GET http://localhost:8080/v1/messages/1
 
 ###
-### Delete session (cancels active job if any)
+### Client ran tools — send results, continues generation
+POST http://localhost:8080/v1/sessions/1/tools
+Content-Type: application/json
+
+{
+  "tool_results": [
+    {
+      "id": "1",
+      "name": "execute_command",
+      "content": "exit 0\nCMakeLists.txt\nsrc3\nREADME.md"
+    }
+  ]
+}
+
+###
+### Client answered a multiple-choice question
+POST http://localhost:8080/v1/sessions/1/answer
+Content-Type: application/json
+
+{
+  "answer_index": 0
+}
+
+###
+### Or free-form answer
+POST http://localhost:8080/v1/sessions/1/answer
+Content-Type: application/json
+
+{
+  "answer": "Gör option B"
+}
+
+###
+### Delete session
 DELETE http://localhost:8080/v1/sessions/1

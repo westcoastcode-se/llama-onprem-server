@@ -1,4 +1,5 @@
 #include "jobs/jobs.hpp"
+#include "agent/response_parse.hpp"
 #include <cstdio>
 
 Jobs::Jobs(LlamaEngine &engine) : engine_(engine)
@@ -111,7 +112,7 @@ std::shared_ptr<Task> Jobs::get_task(const std::string &key)
     return it->second;
 }
 
-bool Jobs::cancel(const std::string &key)
+bool Jobs::cancel(const Task::Key &key)
 {
     std::shared_ptr<Task> task;
     {
@@ -217,7 +218,7 @@ void Jobs::worker_loop()
         std::string response;
         try
         {
-            response = engine_.chat(msgs, [task, buffer](const string_view piece) -> bool {
+            response = engine_.chat(msgs, [task, buffer](std::string_view piece) -> bool {
                 if (task->is_cancel_requested() || buffer->is_cancelled())
                 {
                     return false;
@@ -250,6 +251,10 @@ void Jobs::worker_loop()
         }
 
         task->set_result(response.empty() ? buffer->full_result() : response);
+        {
+            auto actions = parse_assistant_actions(task->get_result());
+            task->set_actions(std::move(actions));
+        }
         task->set_state(TaskState::Done);
         buffer->set_done();
         notify_finished(task);
