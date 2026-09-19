@@ -67,23 +67,19 @@ set(COMMON_TOOL_SOURCES
 )
 
 #
-# 1. Callisto Client
-#
-add_executable(callisto_client
-        src2/client.cpp
-        src2/common/log.cpp
-        src/llm/llm_engine.cpp)
-configure_localai_target(callisto_client)
-target_link_libraries(callisto_client PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
-
-#
-# 2. Callisto Server
+# 2. Callisto Server (src3 REST + jobs)
 #
 add_executable(callisto_server
-        src2/server.cpp
-        src2/common/log.cpp
-        src/llm/llm_engine.cpp)
+        src3/main.cpp
+        src3/http/routes.cpp
+        src3/jobs/jobs.cpp
+        src3/sessions/sessions.cpp
+        src3/llm/llm_engine.cpp)
 configure_localai_target(callisto_server)
+# Prefer src3 headers over src/ (same relative paths like llm/llm_engine.hpp)
+target_include_directories(callisto_server BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/src3
+        ${CMAKE_SOURCE_DIR}/vendors/httplib)
 target_link_libraries(callisto_server PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
 
 #

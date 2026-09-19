@@ -43,10 +43,11 @@ cd llama.cpp
 export PATH=/opt/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/opt/cuda/lib64:$LD_LIBRARY_PATH
 
-# Compile llama.cpp with CUDA support
+# Compile llama.cpp including tools with CUDA support
 cmake -B build \
   -DGGML_CUDA=ON \
   -DCMAKE_CUDA_ARCHITECTURES="89" \
+  -DLLAMA_BUILD_SERVER=ON \
   -DCMAKE_BUILD_TYPE=Release \
   -G Ninja
 cmake --build build --config Release -j$(nproc)
@@ -60,6 +61,12 @@ pip install -r requirements.txt
 python <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
+EOF
+
+# Download prism-ml/Ternary-Bonsai-2-27B-gguf
+python <<EOF
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id="prism-ml/Ternary-Bonsai-2-27B-gguf", allow_patterns=["*Ternary-Bonsai-2-27B-PTQ1_0.gguf"], local_dir="Ternary-Bonsai-2-27B")
 EOF
 ```
 

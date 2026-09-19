@@ -1,0 +1,33 @@
+### Create a chat session (optional system + seed messages)
+POST http://localhost:8080/v1/sessions
+Content-Type: application/json
+
+{
+  "system": "You are a helpful assistant.",
+  "messages": []
+}
+
+###
+### Get session (history + state)
+GET http://localhost:8080/v1/sessions/1
+
+###
+### Post a user turn → returns job key (stream via /v1/messages/:key/tokens)
+POST http://localhost:8080/v1/sessions/1/messages
+Content-Type: application/json
+
+{
+  "content": "Vad är färgen blå?"
+}
+
+###
+### Stream tokens for the job key from the previous response
+GET http://localhost:8080/v1/messages/1/tokens
+
+###
+### Job status / final content
+GET http://localhost:8080/v1/messages/1
+
+###
+### Delete session (cancels active job if any)
+DELETE http://localhost:8080/v1/sessions/1
