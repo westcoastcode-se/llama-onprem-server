@@ -11,6 +11,7 @@ struct ChatMessage
     static constexpr string ROLE_ASSISTANT = "assistant";
     static constexpr string ROLE_USER = "user";
     static constexpr string ROLE_SYSTEM = "system";
+    static constexpr string ROLE_TOOL = "tool";
 
     string role;
     string content;
@@ -232,7 +233,7 @@ struct SessionResponse
             {
                 tarr.push_back(tc.to_json());
             }
-            j["tool_calls"] = tarr;
+            j["pending_tool_calls"] = tarr;
         }
 
         if (pending_question)
