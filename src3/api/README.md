@@ -1,0 +1,1 @@
+Folder containing REST API Models shared between the server and the client.

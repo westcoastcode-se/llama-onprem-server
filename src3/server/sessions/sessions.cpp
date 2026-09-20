@@ -8,7 +8,7 @@ Sessions::Sessions(Jobs &jobs) : jobs_(jobs)
 {
 }
 
-Session::Key Sessions::next_id()
+SessionID Sessions::next_id()
 {
     return std::to_string(id_counter_.fetch_add(1, std::memory_order_relaxed));
 }
@@ -20,7 +20,7 @@ void Sessions::unsafe_gc()
     {
         auto &s = it->second;
         std::lock_guard slock(s->mutex);
-        const bool idle = s->active_job_key.empty() && s->wait_state == SessionWaitState::Idle;
+        const bool idle = !s->active_job_key.has_value() && s->wait_state == SessionWaitState::Idle;
         if (idle && now - s->last_active > kIdleTtl)
         {
             it = sessions_.erase(it);
@@ -61,7 +61,7 @@ std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
     return session;
 }
 
-std::shared_ptr<Session> Sessions::get(const Session::Key &id)
+std::shared_ptr<Session> Sessions::get(const SessionID &id)
 {
     std::lock_guard lock(mutex_);
     auto it = sessions_.find(id);
@@ -72,7 +72,7 @@ std::shared_ptr<Session> Sessions::get(const Session::Key &id)
     return it->second;
 }
 
-shared_ptr<Session> Sessions::destroy(const Session::Key &id)
+shared_ptr<Session> Sessions::destroy(const SessionID &id)
 {
     shared_ptr<Session> session;
     {
@@ -85,15 +85,19 @@ shared_ptr<Session> Sessions::destroy(const Session::Key &id)
         session = it->second;
         sessions_.erase(it);
     }
-    Task::Key job_key;
+
+    optional<Task::Key> job_key;
     {
         std::lock_guard slock(session->mutex);
         job_key = session->active_job_key;
     }
-    if (!job_key.empty())
+
+    // If this session has a job running then cancel it
+    if (job_key.has_value())
     {
-        jobs_.cancel(job_key);
+        jobs_.cancel(job_key.value());
     }
+
     return session;
 }
 
@@ -105,7 +109,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
         // Stale callback (e.g. cancelled previous job)
         return;
     }
-    session->active_job_key.clear();
+    session->active_job_key.reset();
     session->touch();
 
     if (task.get_state() != TaskState::Done)
@@ -179,7 +183,7 @@ optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &sess
     {
         std::lock_guard slock(session->mutex);
         session->wait_state = SessionWaitState::Idle;
-        session->active_job_key.clear();
+        session->active_job_key.reset();
         return std::nullopt;
     }
 
@@ -190,7 +194,7 @@ optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &sess
     return key;
 }
 
-optional<Task::Key> Sessions::post_message(const Session::Key &id, SessionMessageRequest msg)
+optional<Task::Key> Sessions::post_message(const SessionID &id, const SessionMessageRequest& msg)
 {
     auto session = get(id);
     if (!session)
@@ -204,7 +208,7 @@ optional<Task::Key> Sessions::post_message(const Session::Key &id, SessionMessag
 
     {
         std::lock_guard slock(session->mutex);
-        if (!session->active_job_key.empty() || session->wait_state == SessionWaitState::Generating)
+        if (session->active_job_key.has_value() || session->wait_state == SessionWaitState::Generating)
         {
             throw Busy("session already has an active generation");
         }
@@ -229,7 +233,7 @@ optional<Task::Key> Sessions::post_message(const Session::Key &id, SessionMessag
     return key;
 }
 
-optional<Task::Key> Sessions::post_tool_results(const Session::Key &id, SessionToolResultsRequest body)
+optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const SessionToolResultsRequest& body)
 {
     auto session = get(id);
     if (!session)
@@ -243,7 +247,7 @@ optional<Task::Key> Sessions::post_tool_results(const Session::Key &id, SessionT
 
     {
         std::lock_guard slock(session->mutex);
-        if (!session->active_job_key.empty() || session->wait_state == SessionWaitState::Generating)
+        if (session->active_job_key.has_value() || session->wait_state == SessionWaitState::Generating)
         {
             throw Busy("session already has an active generation");
         }

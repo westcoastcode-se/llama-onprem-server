@@ -1,36 +1,7 @@
 #pragma once
 
 #include "../../common/std.hpp"
-
-/** Structured tool call the model wants the *client* to execute. */
-struct ParsedToolCall
-{
-    string id;
-    string name;
-    json arguments = json::object();
-
-    [[nodiscard]] json to_json() const
-    {
-        return {{"id", id}, {"name", name}, {"arguments", arguments}};
-    }
-};
-
-/** Model asks the user a question with optional multiple-choice answers. */
-struct ParsedQuestion
-{
-    string text;
-    vector<string> answers; // options; empty = free-form
-
-    [[nodiscard]] json to_json() const
-    {
-        json opts = json::array();
-        for (const auto &a : answers)
-        {
-            opts.push_back(a);
-        }
-        return {{"text", text}, {"answers", opts}};
-    }
-};
+#include "../../api/models.hpp"
 
 struct ParsedAssistantActions
 {

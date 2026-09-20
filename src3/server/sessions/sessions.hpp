@@ -44,12 +44,10 @@ inline const char *to_string(const SessionWaitState s)
 
 struct Session
 {
-    using Key = std::string;
-
-    Key id;
+    SessionID id;
     string system;
     vector<ChatMessage> messages;
-    Task::Key active_job_key;
+    optional<Task::Key> active_job_key;
     SessionWaitState wait_state = SessionWaitState::Idle;
     vector<ParsedToolCall> pending_tool_calls;
     optional<ParsedQuestion> pending_question;
@@ -86,7 +84,7 @@ struct Session
         r.active_job_key = active_job_key;
         r.state = to_string(wait_state);
         // If generating, prefer that over stale wait flags
-        if (!active_job_key.empty())
+        if (active_job_key)
         {
             r.state = "generating";
         }
@@ -123,7 +121,7 @@ class Sessions
      * @param id The session key
      * @return A session if found; empty otherwise
      */
-    shared_ptr<Session> get(const Session::Key &id);
+    shared_ptr<Session> get(const SessionID &id);
 
     /**
      * Destroy the session with the supplied key
@@ -131,31 +129,31 @@ class Sessions
      * @param id The session id
      * @return The destroyed session if found; empty otherwise
      */
-    shared_ptr<Session> destroy(const Session::Key &id);
+    shared_ptr<Session> destroy(const SessionID &id);
 
     /**
      * Append a user turn and enqueue a generation job.
      *
      * @return job key, or nullopt if queue full.
      */
-    optional<Task::Key> post_message(const Session::Key &id, SessionMessageRequest msg);
+    optional<Task::Key> post_message(const SessionID &id, const SessionMessageRequest& msg);
 
     /**
      * Client finished running pending tool_calls; append tool results and continue.
      *
      * @return new job key, or nullopt if queue full.
      */
-    optional<Task::Key> post_tool_results(const Session::Key &id, SessionToolResultsRequest body);
+    optional<Task::Key> post_tool_results(const SessionID &id, const SessionToolResultsRequest& body);
 
     void gc();
 
   private:
     Jobs &jobs_;
     std::mutex mutex_;
-    std::unordered_map<Session::Key, std::shared_ptr<Session>> sessions_;
+    std::unordered_map<SessionID, std::shared_ptr<Session>> sessions_;
     std::atomic<uint64_t> id_counter_{1};
 
-    Session::Key next_id();
+    SessionID next_id();
 
     void unsafe_gc();
 

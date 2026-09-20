@@ -1,25 +1,7 @@
 #pragma once
 
 #include "../agent/response_parse.hpp"
-
-struct ChatMessage
-{
-    string role;
-    string content;
-
-    static ChatMessage from_json(const nlohmann::json &j)
-    {
-        return ChatMessage{
-            .role = j.value("role", "user"),
-            .content = j.value("content", ""),
-        };
-    }
-
-    [[nodiscard]] nlohmann::json to_json() const
-    {
-        return {{"role", role}, {"content", content}};
-    }
-};
+#include "../../api/models.hpp"
 
 struct MessagesRequest
 {
