@@ -1,7 +1,6 @@
 #include "client/rest_client.hpp"
-#include "common/color.hpp"
+#include "client/config.hpp"
 #include "common/defer.hpp"
-#include "common/tools.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -18,152 +17,17 @@
 namespace
 {
 
-struct CliConfig
-{
-    std::string host = "127.0.0.1";
-    int port = 8080;
-    bool questions = true;
-    bool auto_approve = false;
-    bool quiet = false;
-    bool no_session = false; // one-shot: create session, one message, delete session
-    std::string system_prompt;
-    std::string single_command;
-    std::vector<std::string> allowed_tools;
-    int max_tool_rounds = 40;
-};
-
-void print_usage(const char *argv0)
-{
-    printf("\n%sCallisto REST Client%s\n", Color::BOLD, Color::RESET);
-    printf("Talks to callisto_server over HTTP (/v1/sessions).\n\n");
-    printf("Usage:\n");
-    printf("    %s [options] [prompt...]\n\n", argv0);
-    printf("Options:\n");
-    printf("    --host <host>         Server host (default: 127.0.0.1)\n");
-    printf("    -p, --port <int>      Server port (default: 8080)\n");
-    printf("    -c, -e, --command <s> Single prompt, print result, exit\n");
-    printf("    -s <prompt>           Extra system text (sent on session create)\n");
-    printf("    -q, --quiet           Only print assistant output / final result\n");
-    printf("    -y, --yes             Auto-approve all tool calls\n");
-    printf("    --allow-tool <name>   Auto-approve one tool (repeatable)\n");
-    printf("    --allow-tools <list>  Comma-separated auto-approve list\n");
-    printf("    --no-questions        Create session with questions:false\n");
-    printf("    --questions           Create session with questions:true (default)\n");
-    printf("    --oneshot             Temp session: one message, no tools loop, then delete\n");
-    printf("    -it <n>               Max tool/question rounds per user turn (default: 40)\n");
-    printf("    -h, --help            Show help\n\n");
-    printf("Interactive commands (session mode):\n");
-    printf("    /exit, /quit          End session\n");
-    printf("    /state                Print session JSON state\n");
-    printf("    /tools                List local tools\n");
-    printf("    /approval             Toggle auto-approve\n");
-    printf("    /help                 This help\n\n");
-}
-
-bool parse_args(int argc, char **argv, CliConfig &cfg)
-{
-    for (int i = 1; i < argc; ++i)
-    {
-        std::string arg = argv[i];
-        auto need = [&](const char *name) -> const char * {
-            if (i + 1 >= argc)
-            {
-                throw std::runtime_error(std::string("missing value for ") + name);
-            }
-            return argv[++i];
-        };
-
-        if (arg == "--host")
-        {
-            cfg.host = need("--host");
-        }
-        else if (arg == "-p" || arg == "--port")
-        {
-            cfg.port = std::stoi(need(arg.c_str()));
-        }
-        else if (arg == "-c" || arg == "-e" || arg == "--command" || arg == "--exec" ||
-                 arg == "--prompt")
-        {
-            cfg.single_command = need(arg.c_str());
-        }
-        else if (arg == "-s")
-        {
-            cfg.system_prompt = need("-s");
-        }
-        else if (arg == "-q" || arg == "--quiet" || arg == "--silent")
-        {
-            cfg.quiet = true;
-        }
-        else if (arg == "-y" || arg == "--yes" || arg == "--auto-approve")
-        {
-            cfg.auto_approve = true;
-        }
-        else if (arg == "--allow-tool" || arg == "--allow")
-        {
-            cfg.allowed_tools.push_back(need(arg.c_str()));
-        }
-        else if (arg.rfind("--allow-tool=", 0) == 0)
-        {
-            cfg.allowed_tools.push_back(arg.substr(13));
-        }
-        else if (arg == "--allow-tools" || arg == "--allowed-tools")
-        {
-            auto parsed = parse_allowed_tools(need(arg.c_str()));
-            cfg.allowed_tools.insert(cfg.allowed_tools.end(), parsed.begin(), parsed.end());
-        }
-        else if (arg == "--no-questions")
-        {
-            cfg.questions = false;
-        }
-        else if (arg == "--questions")
-        {
-            cfg.questions = true;
-        }
-        else if (arg == "--oneshot" || arg == "--no-session")
-        {
-            cfg.no_session = true;
-        }
-        else if (arg == "-it" && i + 1 < argc)
-        {
-            cfg.max_tool_rounds = std::stoi(need("-it"));
-        }
-        else if (arg == "-h" || arg == "--help")
-        {
-            print_usage(argv[0]);
-            std::exit(0);
-        }
-        else if (!arg.empty() && arg[0] != '-')
-        {
-            if (!cfg.single_command.empty())
-            {
-                cfg.single_command += " ";
-            }
-            cfg.single_command += arg;
-        }
-        else
-        {
-            fprintf(stderr, "unknown argument: %s\n", arg.c_str());
-            return false;
-        }
-    }
-    return true;
-}
-
 /** Poll until session is not generating (job callback may lag stream EOF slightly). */
-nlohmann::json wait_session_ready(RestClient &client, const std::string &session_id, int max_ms = 5000)
+SessionResponse wait_session_ready(RestClient &client, const std::string &session_id, int max_ms = 5000)
 {
     const int step = 50;
     int waited = 0;
-    nlohmann::json last;
+    SessionResponse last;
     while (waited <= max_ms)
     {
         last = client.get_session(session_id);
-        const std::string state = last.value("state", "");
-        if (state != "generating" && !last.contains("active_job_key"))
-        {
-            return last;
-        }
-        if (state != "generating" && last.value("active_job_key", "").empty())
+        const std::string state = last.state;
+        if (state != "generating" && !last.active_job_key.has_value())
         {
             return last;
         }
@@ -173,8 +37,7 @@ nlohmann::json wait_session_ready(RestClient &client, const std::string &session
     return last;
 }
 
-std::string stream_job(RestClient &client, const std::string &session_id, const std::string &job_key,
-                       bool quiet)
+std::string stream_job(RestClient &client, const std::string &session_id, const std::string &job_key, bool quiet)
 {
     ThinkingStreamFilter filter([quiet](std::string_view piece, bool is_thinking) {
         if (quiet)
@@ -205,19 +68,19 @@ std::string stream_job(RestClient &client, const std::string &session_id, const 
     return text;
 }
 
-json run_pending_tools(const json &session, span<const Tool> tools, CliConfig &cfg)
+json run_pending_tools(const SessionResponse &session, span<const Tool> tools, CliConfig &cfg)
 {
     json results = json::array();
-    if (!session.contains("tool_calls") || !session["tool_calls"].is_array())
+    if (session.pending_tool_calls.empty())
     {
         return results;
     }
 
-    for (const auto &tc : session["tool_calls"])
+    for (const auto &tc : session.pending_tool_calls)
     {
-        const string id = tc.value("id", "");
-        const string name = tc.value("name", "");
-        json args = tc.value("arguments", json::object());
+        const string id = tc.id;
+        const string name = tc.name;
+        json args = tc.arguments;
         if (!args.is_object())
         {
             args = json::object();
@@ -233,8 +96,7 @@ json run_pending_tools(const json &session, span<const Tool> tools, CliConfig &c
                 cfg.auto_approve = true;
                 if (!cfg.quiet)
                 {
-                    printf("%s[client] auto-approve enabled for remaining tools%s\n", Color::GREEN,
-                           Color::RESET);
+                    printf("%s[client] auto-approve enabled for remaining tools%s\n", Color::GREEN, Color::RESET);
                 }
             }
             else if (approval == ToolApproval::DENY)
@@ -252,8 +114,7 @@ json run_pending_tools(const json &session, span<const Tool> tools, CliConfig &c
 
         if (!cfg.quiet)
         {
-            printf("%s⚙️  [tool: %s%s%s]%s\n", Color::CYAN, Color::BOLD, name.c_str(), Color::CYAN,
-                   Color::RESET);
+            printf("%s⚙️  [tool: %s%s%s]%s\n", Color::CYAN, Color::BOLD, name.c_str(), Color::CYAN, Color::RESET);
             printf("%s   args: %s%s\n", Color::GRAY, args.dump().c_str(), Color::RESET);
         }
 
@@ -268,51 +129,38 @@ json run_pending_tools(const json &session, span<const Tool> tools, CliConfig &c
                 preview = preview.substr(0, 200) + "...";
             }
             std::replace(preview.begin(), preview.end(), '\n', ' ');
-            printf("%s📋 [%zu chars] %s%s\n", Color::MAGENTA, out.size(), preview.c_str(),
-                   Color::RESET);
+            printf("%s📋 [%zu chars] %s%s\n", Color::MAGENTA, out.size(), preview.c_str(), Color::RESET);
         }
         results.push_back(std::move(item));
     }
     return results;
 }
 
-std::optional<std::string> prompt_question_answer(const nlohmann::json &session, bool quiet)
+std::optional<std::string> prompt_question_answer(const SessionResponse &session)
 {
-    if (!session.contains("question") || !session["question"].is_object())
+    if (!session.pending_question.has_value())
     {
         return std::nullopt;
     }
-    const auto &q = session["question"];
-    const std::string text = q.value("text", "");
-    std::vector<std::string> answers;
-    if (q.contains("answers") && q["answers"].is_array())
-    {
-        for (const auto &a : q["answers"])
-        {
-            if (a.is_string())
-            {
-                answers.push_back(a.get<std::string>());
-            }
-        }
-    }
 
-    if (!quiet)
+    const auto &q = session.pending_question.value();
+    const std::string text = q.text;
+    std::vector<std::string> answers = q.answers;
+
+    printf("\n%s❓ %s%s\n", Color::YELLOW, text.c_str(), Color::RESET);
+    if (!answers.empty())
     {
-        printf("\n%s❓ %s%s\n", Color::YELLOW, text.c_str(), Color::RESET);
-        if (!answers.empty())
+        for (size_t i = 0; i < answers.size(); ++i)
         {
-            for (size_t i = 0; i < answers.size(); ++i)
-            {
-                printf("  %s[%zu]%s %s\n", Color::CYAN, i, Color::RESET, answers[i].c_str());
-            }
-            printf("%sChoose index, or type a free-form answer:%s ", Color::BOLD, Color::RESET);
+            printf("  %s[%zu]%s %s\n", Color::CYAN, i, Color::RESET, answers[i].c_str());
         }
-        else
-        {
-            printf("%sYour answer:%s ", Color::BOLD, Color::RESET);
-        }
-        fflush(stdout);
+        printf("%sChoose index, or type a free-form answer:%s ", Color::BOLD, Color::RESET);
     }
+    else
+    {
+        printf("%sYour answer:%s ", Color::BOLD, Color::RESET);
+    }
+    fflush(stdout);
 
     std::string line;
     if (!std::getline(std::cin, line))
@@ -346,10 +194,7 @@ std::optional<std::string> prompt_question_answer(const nlohmann::json &session,
     }
     if (line.empty())
     {
-        if (!quiet)
-        {
-            fprintf(stderr, "%sempty answer%s\n", Color::RED, Color::RESET);
-        }
+        fprintf(stderr, "%sempty answer%s\n", Color::RED, Color::RESET);
         return std::nullopt;
     }
     return line;
@@ -359,8 +204,8 @@ std::optional<std::string> prompt_question_answer(const nlohmann::json &session,
  * Drive one user turn: post message (or continue from existing job), stream, resolve
  * tools/questions until idle or rounds exhausted.
  */
-bool drive_session_turn(RestClient &client, const std::string &session_id, std::span<const Tool> tools,
-                        CliConfig &cfg, const std::string *initial_job_key = nullptr)
+bool drive_session_turn(RestClient &client, const std::string &session_id, std::span<const Tool> tools, CliConfig &cfg,
+                        const std::string *initial_job_key = nullptr)
 {
     std::string job_key = initial_job_key ? *initial_job_key : "";
     for (int round = 0; round < cfg.max_tool_rounds; ++round)
@@ -368,7 +213,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
         if (job_key.empty())
         {
             auto session = wait_session_ready(client, session_id);
-            const std::string state = session.value("state", "idle");
+            const std::string state = session.state;
             if (state == "idle")
             {
                 return true;
@@ -378,8 +223,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
                 auto results = run_pending_tools(session, tools, cfg);
                 if (results.empty())
                 {
-                    fprintf(stderr, "%s[client] awaiting_tools but no tool_calls%s\n", Color::RED,
-                            Color::RESET);
+                    fprintf(stderr, "%s[client] awaiting_tools but no tool_calls%s\n", Color::RED, Color::RESET);
                     return false;
                 }
                 auto resp = client.post_tool_results(session_id, results);
@@ -388,7 +232,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
             }
             if (state == "awaiting_question")
             {
-                auto ans = prompt_question_answer(session, cfg.quiet);
+                auto ans = prompt_question_answer(session);
                 if (!ans)
                 {
                     return false;
@@ -397,8 +241,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
                 job_key = resp.value("key", "");
                 continue;
             }
-            fprintf(stderr, "%s[client] unexpected session state: %s%s\n", Color::RED, state.c_str(),
-                    Color::RESET);
+            fprintf(stderr, "%s[client] unexpected session state: %s%s\n", Color::RED, state.c_str(), Color::RESET);
             return false;
         }
 
@@ -415,7 +258,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
         }
 
         auto session = wait_session_ready(client, session_id);
-        const std::string state = session.value("state", "idle");
+        const std::string state = session.state;
         if (state == "idle")
         {
             return true;
@@ -428,11 +271,8 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
 
 int run_oneshot(RestClient &client, CliConfig &cfg)
 {
-    auto created = client.create_session(CreateSessionRequest{
-        .system = cfg.system_prompt,
-        .messages = {},
-        .questions = false
-    });
+    auto created =
+        client.create_session(CreateSessionRequest{.system = cfg.system_prompt, .messages = {}, .questions = false});
     const SessionID session_id = created.id;
     defer(client.delete_session(session_id));
 
@@ -460,18 +300,14 @@ int run_oneshot(RestClient &client, CliConfig &cfg)
 
 int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
 {
-    auto created = client.create_session(CreateSessionRequest{
-        .system = cfg.system_prompt,
-        .messages = {},
-        .questions = cfg.questions
-    });
+    auto created = client.create_session(
+        CreateSessionRequest{.system = cfg.system_prompt, .messages = {}, .questions = cfg.questions});
     const SessionID session_id = created.id;
 
     if (!cfg.quiet)
     {
-        printf("%s[client] session %s at %s (questions=%s)%s\n", Color::CYAN,
-               session_id.c_str(), client.base_url().c_str(),
-               cfg.questions ? "true" : "false", Color::RESET);
+        printf("%s[client] session %s at %s (questions=%s)%s\n", Color::CYAN, session_id.c_str(),
+               client.base_url().c_str(), cfg.questions ? "true" : "false", Color::RESET);
     }
 
     defer(client.delete_session(session_id));
@@ -507,15 +343,13 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
             try
             {
                 auto s = client.get_session(session_id);
-                if (s.contains("messages") && s["messages"].is_array())
+
+                for (auto it = s.messages.rbegin(); it != s.messages.rend(); ++it)
                 {
-                    for (auto it = s["messages"].rbegin(); it != s["messages"].rend(); ++it)
+                    if (it->role == "assistant")
                     {
-                        if (it->value("role", "") == "assistant")
-                        {
-                            printf("%s\n", strip_think_tags(it->value("content", "")).c_str());
-                            break;
-                        }
+                        printf("%s\n", strip_think_tags(it->content).c_str());
+                        break;
                     }
                 }
             }
@@ -571,7 +405,7 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
             try
             {
                 auto s = client.get_session(session_id);
-                printf("%s\n", s.dump(2).c_str());
+                printf("%s\n", s.to_json().dump(2).c_str());
             }
             catch (const std::exception &e)
             {
@@ -609,15 +443,11 @@ int main(int argc, char **argv)
 {
     std::setlocale(LC_NUMERIC, "C");
 
+
     CliConfig cfg;
     try
     {
-        if (!parse_args(argc, argv, cfg))
-        {
-            print_usage(argv[0]);
-            curl_global_cleanup();
-            return 1;
-        }
+        cfg = CliConfig::from_args(argc, argv);
     }
     catch (const std::exception &e)
     {
@@ -642,8 +472,8 @@ int main(int argc, char **argv)
     }
     if (!client.health())
     {
-        fprintf(stderr, "%s[client] server not reachable at %s (/health)%s\n", Color::RED,
-                client.base_url().c_str(), Color::RESET);
+        fprintf(stderr, "%s[client] server not reachable at %s (/health)%s\n", Color::RED, client.base_url().c_str(),
+                Color::RESET);
         curl_global_cleanup();
         return 1;
     }

@@ -55,9 +55,9 @@ class RestClient
         return resp;
     }
 
-    json get_session(const std::string &id)
+    SessionResponse get_session(const SessionID &id)
     {
-        return request_json("GET", "/v1/sessions/" + id, std::nullopt, 200);
+        return SessionResponse::from_json(request_json("GET", "/v1/sessions/" + id, std::nullopt, 200));
     }
 
     void delete_session(const SessionID &id)

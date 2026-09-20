@@ -233,7 +233,7 @@ struct SessionResponse
 
         if (pending_question)
         {
-            j["question"] = pending_question->to_json();
+            j["pending_question"] = pending_question->to_json();
         }
 
         return j;
