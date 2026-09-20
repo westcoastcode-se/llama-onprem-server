@@ -25,7 +25,9 @@ struct Session
     optional<ParsedQuestion> pending_question;
     /** When false, do not pause on model <question> tags or teach question protocol. */
     bool questions_enabled = true;
+    // Timestamp when the session was created
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+    // Timestamp when the session was last active
     std::chrono::steady_clock::time_point last_active = std::chrono::steady_clock::now();
 
     mutable std::mutex mutex;
@@ -113,7 +115,7 @@ class Sessions
     /**
      * Client finished running pending tool_calls; append tool results and continue.
      *
-     * @return new job key, or nullopt if queue full.
+     * @return new job key, or empty if queue full.
      */
     optional<Task::Key> post_tool_results(const SessionID &id, const SessionToolResultsRequest& body);
 
@@ -122,7 +124,7 @@ class Sessions
   private:
     Jobs &jobs_;
     std::mutex mutex_;
-    std::unordered_map<SessionID, std::shared_ptr<Session>> sessions_;
+    std::unordered_map<SessionID, shared_ptr<Session>> sessions_;
     std::atomic<uint64_t> id_counter_{1};
 
     SessionID next_id();

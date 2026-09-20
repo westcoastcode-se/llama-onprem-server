@@ -8,6 +8,10 @@ using JobKey = string;
 
 struct ChatMessage
 {
+    static constexpr string ROLE_ASSISTANT = "assistant";
+    static constexpr string ROLE_USER = "user";
+    static constexpr string ROLE_SYSTEM = "system";
+
     string role;
     string content;
 

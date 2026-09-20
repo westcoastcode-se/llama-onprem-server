@@ -15,6 +15,8 @@ struct llama_vocab;
 struct LlamaConfig
 {
     std::string model_path;
+    string template_path;
+    bool resoning = true;
     int n_ctx = 4096;
     int n_batch = 2048;
     int n_gpu_layers = 99;
@@ -31,22 +33,22 @@ struct LlamaModelInitError : std::runtime_error
     using std::runtime_error::runtime_error;
 };
 
-// Token callback: return true to continue, false to abort generation
-using TokenCallback = std::function<bool(string_view piece)>;
+// Callback function in which we can use to stream token generation while the LLM is running.
+// The supplied string is given to you from the LLM to do as you see fit.
+//
+// Return true if you want to abort the token generation
+using TokenCallback = std::function<bool(string_view &&piece)>;
 
 class LlamaEngine
 {
   public:
-    LlamaEngine() = default;
-    ~LlamaEngine();
-
-    LlamaEngine(const LlamaEngine &) = delete;
-    LlamaEngine &operator=(const LlamaEngine &) = delete;
-
-    LlamaEngine(LlamaEngine &&other) noexcept;
-    LlamaEngine &operator=(LlamaEngine &&other) noexcept;
+    // How long token generation is allowed to run before forcefully stop it
+    // TODO: Implement
+    static constexpr std::chrono::seconds kFinishedTtl{300};
 
     static LlamaEngine create(const LlamaConfig &config);
+
+    void destroy();
 
     void reset();
 
@@ -65,7 +67,6 @@ class LlamaEngine
     [[nodiscard]] int get_used_context() const;
 
   private:
-    void free_resources();
     int format_chat_internal(std::span<const ChatMessage> msgs, bool add_assistant, std::vector<char> &out) const;
 
     LlamaConfig config_;

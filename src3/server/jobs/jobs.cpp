@@ -154,8 +154,17 @@ void Jobs::gc()
     unsafe_gc();
 }
 
-std::shared_ptr<Task> Jobs::unsafe_pop_next_queued()
+std::shared_ptr<Task> Jobs::pop_next_queued()
 {
+    // Wait for new tasks to be available or shutting down
+    std::unique_lock lock(mutex_);
+    cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+    if (stop_)
+    {
+        return {};
+    }
+
+    // Get the top-most job to run
     while (!queue_.empty())
     {
         auto key = queue_.front();
@@ -165,6 +174,8 @@ std::shared_ptr<Task> Jobs::unsafe_pop_next_queued()
         {
             continue;
         }
+
+        // Ignore any cancelled jobs and look for the next job
         auto task = it->second;
         if (task->is_cancel_requested() || task->get_state() == TaskState::Cancelled)
         {
@@ -172,6 +183,7 @@ std::shared_ptr<Task> Jobs::unsafe_pop_next_queued()
         }
         return task;
     }
+
     return {};
 }
 
@@ -179,16 +191,10 @@ void Jobs::worker_loop()
 {
     while (!stop_)
     {
-        std::shared_ptr<Task> task;
+        std::shared_ptr<Task> task = pop_next_queued();
+        if (stop_)
         {
-            // Wait for new tasks to be available
-            std::unique_lock lock(mutex_);
-            cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
-            if (stop_)
-            {
-                break;
-            }
-            task = unsafe_pop_next_queued();
+            break;
         }
         if (!task)
         {
@@ -210,7 +216,7 @@ void Jobs::worker_loop()
         std::vector<ChatMessage> msgs;
         if (!task->request.system.empty())
         {
-            msgs.push_back({"system", task->request.system});
+            msgs.push_back(ChatMessage{.role = ChatMessage::ROLE_SYSTEM, .content = task->request.system});
         }
         msgs.insert(msgs.end(), task->request.messages.begin(), task->request.messages.end());
 
@@ -218,7 +224,7 @@ void Jobs::worker_loop()
         std::string response;
         try
         {
-            response = engine_.chat(msgs, [task, buffer](string_view piece) -> bool {
+            response = engine_.chat(msgs, [task, buffer](string &&piece) {
                 if (task->is_cancel_requested() || buffer->is_cancelled())
                 {
                     return false;

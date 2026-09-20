@@ -1,3 +1,4 @@
+#include "common/defer.hpp"
 #include "common/log.hpp"
 #include "server/api/errors.hpp"
 #include "server/http/routes.hpp"
@@ -122,6 +123,7 @@ int main(int argc, char **argv)
         log_error("Failed to create LLamaEngine: ", e.what());
         return 1;
     }
+    defer(engine.destroy());
 
     Jobs jobs(engine);
     Sessions sessions(jobs);

@@ -64,7 +64,7 @@ std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
 std::shared_ptr<Session> Sessions::get(const SessionID &id)
 {
     std::lock_guard lock(mutex_);
-    auto it = sessions_.find(id);
+    const auto it = sessions_.find(id);
     if (it == sessions_.end())
     {
         return nullptr;
@@ -77,7 +77,7 @@ shared_ptr<Session> Sessions::destroy(const SessionID &id)
     shared_ptr<Session> session;
     {
         std::lock_guard lock(mutex_);
-        auto it = sessions_.find(id);
+        const auto it = sessions_.find(id);
         if (it == sessions_.end())
         {
             return {};
@@ -120,7 +120,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
     }
 
     const std::string content = task.get_result();
-    session->messages.push_back(ChatMessage{.role = "assistant", .content = content});
+    session->messages.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = content});
 
     // Prefer actions already parsed on the task (by Jobs worker)
     ParsedAssistantActions actions;
@@ -283,7 +283,7 @@ optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const Sessi
             }
         }
 
-        session->messages.push_back(ChatMessage{.role = "user", .content = combined.str()});
+        session->messages.push_back(ChatMessage{.role = ChatMessage::ROLE_USER, .content = combined.str()});
         session->clear_pending();
         session->wait_state = SessionWaitState::Idle;
         session->touch();
@@ -293,7 +293,7 @@ optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const Sessi
     if (!key)
     {
         std::lock_guard slock(session->mutex);
-        if (!session->messages.empty() && session->messages.back().role == "user" &&
+        if (!session->messages.empty() && session->messages.back().role == ChatMessage::ROLE_USER &&
             session->messages.back().content.starts_with("<tool_response>"))
         {
             session->messages.pop_back();

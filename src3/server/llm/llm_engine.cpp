@@ -6,49 +6,7 @@
 #include <cstring>
 #include <utility>
 
-LlamaEngine::~LlamaEngine()
-{
-    free_resources();
-}
-
-LlamaEngine::LlamaEngine(LlamaEngine &&other) noexcept
-    : config_(std::move(other.config_)), model_(other.model_), vocab_(other.vocab_), ctx_(other.ctx_),
-      smpl_(other.smpl_), chat_template_(other.chat_template_), cached_messages_(std::move(other.cached_messages_)),
-      formatted_buf_(std::move(other.formatted_buf_)), prev_formatted_len_(other.prev_formatted_len_)
-{
-    other.model_ = nullptr;
-    other.vocab_ = nullptr;
-    other.ctx_ = nullptr;
-    other.smpl_ = nullptr;
-    other.chat_template_ = nullptr;
-    other.prev_formatted_len_ = 0;
-}
-
-LlamaEngine &LlamaEngine::operator=(LlamaEngine &&other) noexcept
-{
-    if (this != &other)
-    {
-        free_resources();
-        config_ = std::move(other.config_);
-        model_ = other.model_;
-        vocab_ = other.vocab_;
-        ctx_ = other.ctx_;
-        smpl_ = other.smpl_;
-        chat_template_ = other.chat_template_;
-        cached_messages_ = std::move(other.cached_messages_);
-        formatted_buf_ = std::move(other.formatted_buf_);
-        prev_formatted_len_ = other.prev_formatted_len_;
-        other.model_ = nullptr;
-        other.vocab_ = nullptr;
-        other.ctx_ = nullptr;
-        other.smpl_ = nullptr;
-        other.chat_template_ = nullptr;
-        other.prev_formatted_len_ = 0;
-    }
-    return *this;
-}
-
-void LlamaEngine::free_resources()
+void LlamaEngine::destroy()
 {
     if (smpl_)
     {
@@ -274,7 +232,7 @@ std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_c
             std::string ready = utf8_buf.process(piece);
             if (!ready.empty())
             {
-                if (!token_cb(ready))
+                if (!token_cb(std::move(ready)))
                 {
                     break;
                 }
@@ -301,7 +259,7 @@ std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_c
         std::string remaining = utf8_buf.flush();
         if (!remaining.empty())
         {
-            token_cb(remaining);
+            token_cb(std::move(remaining));
         }
     }
 
@@ -358,7 +316,7 @@ std::string LlamaEngine::chat(std::span<const ChatMessage> messages, TokenCallba
     std::string response = generate(prompt, token_cb);
 
     cached_messages_.assign(messages.begin(), messages.end());
-    cached_messages_.push_back({"assistant", response});
+    cached_messages_.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT,.content = response});
 
     prev_formatted_len_ = format_chat_internal(cached_messages_, false, formatted_buf_);
     if (prev_formatted_len_ < 0)

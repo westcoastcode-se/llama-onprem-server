@@ -197,5 +197,5 @@ class Jobs
     Task::Key next_key();
     void worker_loop();
     void unsafe_gc();
-    std::shared_ptr<Task> unsafe_pop_next_queued();
+    std::shared_ptr<Task> pop_next_queued();
 };
