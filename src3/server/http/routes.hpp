@@ -1,7 +1,7 @@
 #pragma once
 
-#include "jobs/jobs.hpp"
-#include "sessions/sessions.hpp"
+#include "../jobs/jobs.hpp"
+#include "../sessions/sessions.hpp"
 #include <httplib.h>
 
 struct AppState

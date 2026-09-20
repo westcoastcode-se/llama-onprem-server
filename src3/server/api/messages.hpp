@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agent/response_parse.hpp"
+#include "../agent/response_parse.hpp"
 
 struct ChatMessage
 {

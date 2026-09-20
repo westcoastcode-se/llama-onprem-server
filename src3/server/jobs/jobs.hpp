@@ -1,10 +1,10 @@
 #pragma once
 
-#include "api/messages.hpp"
-#include "agent/response_parse.hpp"
-#include "jobs/token_buffer.hpp"
-#include "llm/llm_engine.hpp"
-#include "std.hpp"
+#include "../../common/std.hpp"
+#include "../agent/response_parse.hpp"
+#include "../api/messages.hpp"
+#include "../jobs/token_buffer.hpp"
+#include "../llm/llm_engine.hpp"
 
 #include <atomic>
 #include <chrono>

@@ -1,13 +1,13 @@
-#include "api/errors.hpp"
-#include "http/routes.hpp"
-#include "jobs/jobs.hpp"
-#include "llm/llm_engine.hpp"
-#include "sessions/sessions.hpp"
-#include <httplib.h>
+#include "server/api/errors.hpp"
+#include "server/http/routes.hpp"
+#include "server/jobs/jobs.hpp"
+#include "server/llm/llm_engine.hpp"
+#include "server/sessions/sessions.hpp"
 #include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <httplib.h>
 #include <string>
 
 namespace

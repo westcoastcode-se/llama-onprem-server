@@ -1,7 +1,7 @@
-#include "http/routes.hpp"
-#include "api/errors.hpp"
-#include "api/messages.hpp"
-#include "api/sessions.hpp"
+#include "../http/routes.hpp"
+#include "../api/errors.hpp"
+#include "../api/messages.hpp"
+#include "../api/sessions.hpp"
 #include "json.hpp"
 
 /**

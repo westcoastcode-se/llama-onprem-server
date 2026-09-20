@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../std.hpp"
+#include "../../common/std.hpp"
 
 /** Structured tool call the model wants the *client* to execute. */
 struct ParsedToolCall

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../std.hpp"
+#include "../../common/std.hpp"
 
 /**
  * Thread-safe bridge: LLM producer pushes token pieces; HTTP consumer pulls them.

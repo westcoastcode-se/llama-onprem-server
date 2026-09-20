@@ -1,10 +1,10 @@
 #pragma once
 
-#include "../std.hpp"
-#include "agent/response_parse.hpp"
-#include "api/messages.hpp"
-#include "api/sessions.hpp"
-#include "jobs/jobs.hpp"
+#include "../../common/std.hpp"
+#include "../agent/response_parse.hpp"
+#include "../api/messages.hpp"
+#include "../api/sessions.hpp"
+#include "../jobs/jobs.hpp"
 #include <atomic>
 #include <chrono>
 #include <memory>

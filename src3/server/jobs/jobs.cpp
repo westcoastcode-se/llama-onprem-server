@@ -1,5 +1,5 @@
-#include "jobs/jobs.hpp"
-#include "agent/response_parse.hpp"
+#include "../jobs/jobs.hpp"
+#include "../agent/response_parse.hpp"
 #include <cstdio>
 
 Jobs::Jobs(LlamaEngine &engine) : engine_(engine)

@@ -1,6 +1,6 @@
-#include "sessions/sessions.hpp"
-#include "agent/response_parse.hpp"
-#include "api/errors.hpp"
+#include "../sessions/sessions.hpp"
+#include "../agent/response_parse.hpp"
+#include "../api/errors.hpp"
 #include <cstdio>
 #include <sstream>
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "agent/response_parse.hpp"
-#include "api/messages.hpp"
+#include "../agent/response_parse.hpp"
+#include "../api/messages.hpp"
 #include "errors.hpp"
 
 struct CreateSessionRequest
