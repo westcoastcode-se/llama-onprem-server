@@ -3,6 +3,86 @@
 #include "../common/std.hpp"
 #include "errors.hpp"
 
+struct SessionWaitState
+{
+    enum Value : int32_t
+    {
+        // Unknown
+        Unknown = -1,
+        // Waiting for client messages
+        Idle,
+        // Generating a response
+        Generating,
+        // Waiting for a tool responses
+        AwaitingTools,
+        // Waiting for answers of questions sent to the client
+        AwaitingQuestion,
+    } value{Unknown};
+
+    SessionWaitState() = default;
+    SessionWaitState(Value value) : value{value}
+    {
+    }
+
+    bool operator==(const Value &v) const
+    {
+        return value == v;
+    }
+
+    bool operator != (const Value &v) const
+    {
+        return value != v;
+    }
+
+    [[nodiscard]] bool is_running() const
+    {
+        return value == Generating;
+    }
+
+    [[nodiscard]] bool is_sleeping() const
+    {
+        return !is_running();
+    }
+
+    const char *to_string() const
+    {
+        switch (value)
+        {
+        case Idle:
+            return "idle";
+        case Generating:
+            return "generating";
+        case AwaitingTools:
+            return "awaiting_tools";
+        case AwaitingQuestion:
+            return "awaiting_question";
+        default:
+            throw std::runtime_error{"unknown SessionWaitState: " + std::to_string(value)};
+        }
+    }
+
+    static SessionWaitState to_enum(const string &s)
+    {
+        if (s == "idle")
+        {
+            return Idle;
+        }
+        if (s == "generating")
+        {
+            return  Generating;
+        }
+        if (s == "awaiting_tools")
+        {
+            return AwaitingTools;
+        }
+        if (s == "awaiting_question")
+        {
+            return AwaitingQuestion;
+        }
+        throw std::runtime_error{"unknown SessionWaitState: " + s};
+    }
+};
+
 struct SessionMessageRequest
 {
     string content;

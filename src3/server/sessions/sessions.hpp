@@ -14,34 +14,6 @@
 #include <unordered_map>
 #include <vector>
 
-enum class SessionWaitState
-{
-    // Waiting for client messages
-    Idle,
-    // Generating a response
-    Generating,
-    // Waiting for a tool responses
-    AwaitingTools,
-    // Waiting for answers of questions sent to the client
-    AwaitingQuestion
-};
-
-inline const char *to_string(const SessionWaitState s)
-{
-    switch (s)
-    {
-    case SessionWaitState::Idle:
-        return "idle";
-    case SessionWaitState::Generating:
-        return "generating";
-    case SessionWaitState::AwaitingTools:
-        return "awaiting_tools";
-    case SessionWaitState::AwaitingQuestion:
-        return "awaiting_question";
-    }
-    return "unknown";
-}
-
 struct Session
 {
     SessionID id;
@@ -82,11 +54,11 @@ struct Session
         r.system = system;
         r.messages = messages;
         r.active_job_key = active_job_key;
-        r.state = to_string(wait_state);
+        r.state = wait_state;
         // If generating, prefer that over stale wait flags
         if (active_job_key)
         {
-            r.state = "generating";
+            r.state = SessionWaitState::Generating;
         }
         r.pending_tool_calls = pending_tool_calls;
         r.pending_question = pending_question;

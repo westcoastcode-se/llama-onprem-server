@@ -26,8 +26,7 @@ SessionResponse wait_session_ready(RestClient &client, const std::string &sessio
     while (waited <= max_ms)
     {
         last = client.get_session(session_id);
-        const std::string state = last.state;
-        if (state != "generating" && !last.active_job_key.has_value())
+        if (last.state.is_sleeping() && !last.active_job_key.has_value())
         {
             return last;
         }
@@ -213,12 +212,11 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
         if (job_key.empty())
         {
             auto session = wait_session_ready(client, session_id);
-            const std::string state = session.state;
-            if (state == "idle")
+            if (session.state.value == SessionWaitState::Idle)
             {
                 return true;
             }
-            if (state == "awaiting_tools")
+            if (session.state.value == SessionWaitState::AwaitingTools)
             {
                 auto results = run_pending_tools(session, tools, cfg);
                 if (results.empty())
@@ -230,7 +228,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
                 job_key = resp.value("key", "");
                 continue;
             }
-            if (state == "awaiting_question")
+            if (session.state.value == SessionWaitState::AwaitingQuestion)
             {
                 auto ans = prompt_question_answer(session);
                 if (!ans)
@@ -241,7 +239,6 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
                 job_key = resp.value("key", "");
                 continue;
             }
-            fprintf(stderr, "%s[client] unexpected session state: %s%s\n", Color::RED, state.c_str(), Color::RESET);
             return false;
         }
 
@@ -258,8 +255,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
         }
 
         auto session = wait_session_ready(client, session_id);
-        const std::string state = session.state;
-        if (state == "idle")
+        if (session.state.value == SessionWaitState::Idle)
         {
             return true;
         }
