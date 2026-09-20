@@ -3,38 +3,17 @@
 #include "../agent/response_parse.hpp"
 #include "../../api/models.hpp"
 
+/**
+ * Internal generation payload submitted to Jobs (built from a Session).
+ * Not exposed as a public REST body — use POST /v1/sessions/:id/messages instead.
+ */
 struct MessagesRequest
 {
     string system;
     vector<ChatMessage> messages;
-
-    static MessagesRequest from_json(const nlohmann::json &j)
-    {
-        MessagesRequest req;
-        req.system = j.value("system", "");
-        auto arr = j.value("messages", nlohmann::json::array());
-        if (arr.is_array())
-        {
-            req.messages.reserve(arr.size());
-            for (const auto &item : arr)
-            {
-                req.messages.push_back(ChatMessage::from_json(item));
-            }
-        }
-        return req;
-    }
 };
 
-struct MessagesResponse
-{
-    string key;
-
-    [[nodiscard]] nlohmann::json to_json() const
-    {
-        return {{"key", key}};
-    }
-};
-
+/** NDJSON line for GET /v1/sessions/:id/jobs/:key/tokens */
 struct MessageTokensResponse
 {
     string tokens;
@@ -46,6 +25,7 @@ struct MessageTokensResponse
     }
 };
 
+/** GET /v1/sessions/:id/jobs/:key */
 struct MessageStatusResponse
 {
     string key;

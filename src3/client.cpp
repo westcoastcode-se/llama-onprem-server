@@ -1,5 +1,6 @@
 #include "client/rest_client.hpp"
 #include "common/color.hpp"
+#include "common/defer.hpp"
 #include "common/tools.hpp"
 
 #include <algorithm>
@@ -24,7 +25,7 @@ struct CliConfig
     bool questions = true;
     bool auto_approve = false;
     bool quiet = false;
-    bool no_session = false; // one-shot /v1/messages
+    bool no_session = false; // one-shot: create session, one message, delete session
     std::string system_prompt;
     std::string single_command;
     std::vector<std::string> allowed_tools;
@@ -34,7 +35,7 @@ struct CliConfig
 void print_usage(const char *argv0)
 {
     printf("\n%sCallisto REST Client%s\n", Color::BOLD, Color::RESET);
-    printf("Talks to callisto_server over HTTP (/v1/sessions, /v1/messages).\n\n");
+    printf("Talks to callisto_server over HTTP (/v1/sessions).\n\n");
     printf("Usage:\n");
     printf("    %s [options] [prompt...]\n\n", argv0);
     printf("Options:\n");
@@ -48,7 +49,7 @@ void print_usage(const char *argv0)
     printf("    --allow-tools <list>  Comma-separated auto-approve list\n");
     printf("    --no-questions        Create session with questions:false\n");
     printf("    --questions           Create session with questions:true (default)\n");
-    printf("    --oneshot             Use POST /v1/messages only (no session/tools loop)\n");
+    printf("    --oneshot             Temp session: one message, no tools loop, then delete\n");
     printf("    -it <n>               Max tool/question rounds per user turn (default: 40)\n");
     printf("    -h, --help            Show help\n\n");
     printf("Interactive commands (session mode):\n");
@@ -172,7 +173,8 @@ nlohmann::json wait_session_ready(RestClient &client, const std::string &session
     return last;
 }
 
-std::string stream_job(RestClient &client, const std::string &job_key, bool quiet)
+std::string stream_job(RestClient &client, const std::string &session_id, const std::string &job_key,
+                       bool quiet)
 {
     ThinkingStreamFilter filter([quiet](std::string_view piece, bool is_thinking) {
         if (quiet)
@@ -190,7 +192,7 @@ std::string stream_job(RestClient &client, const std::string &job_key, bool quie
         fflush(stdout);
     });
 
-    std::string text = client.stream_tokens(job_key, [&](std::string_view piece) {
+    std::string text = client.stream_tokens(session_id, job_key, [&](std::string_view piece) {
         filter.process(piece);
         return true;
     });
@@ -400,7 +402,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
             return false;
         }
 
-        stream_job(client, job_key, cfg.quiet);
+        stream_job(client, session_id, job_key, cfg.quiet);
         job_key.clear();
 
         // Optional: surface job error
@@ -426,24 +428,40 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
 
 int run_oneshot(RestClient &client, CliConfig &cfg)
 {
-    nlohmann::json body;
-    body["system"] = cfg.system_prompt;
-    body["messages"] = nlohmann::json::array({nlohmann::json{{"role", "user"}, {"content", cfg.single_command}}});
+    // One-shot = temporary session: create → post message → stream → delete.
+    json create_body{
+        {"questions", false},
+        {"messages", json::array()},
+    };
+    if (!cfg.system_prompt.empty())
+    {
+        create_body["system"] = cfg.system_prompt;
+    }
 
-    auto resp = client.post_messages(body);
-    const std::string key = resp.value("key", "");
-    if (key.empty())
+    auto created = client.create_session(create_body);
+    const SessionID session_id = created.id;
+    defer(client.delete_session(session_id));
+
+    try
     {
-        fprintf(stderr, "no job key returned\n");
-        return 1;
+        auto resp = client.post_message(session_id, cfg.single_command);
+        const std::string key = resp.value("key", "");
+        if (key.empty())
+        {
+            fprintf(stderr, "no job key returned\n");
+            return 1;
+        }
+        std::string text = stream_job(client, session_id, key, cfg.quiet);
+        if (cfg.quiet)
+        {
+            printf("%s\n", strip_think_tags(text).c_str());
+        }
+        return 0;
     }
-    std::string text = stream_job(client, key, cfg.quiet);
-    if (cfg.quiet)
+    catch (...)
     {
-        // still print final (without think tags)
-        printf("%s\n", strip_think_tags(text).c_str());
+        throw;
     }
-    return 0;
 }
 
 int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
@@ -458,12 +476,7 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
     }
 
     auto created = client.create_session(create_body);
-    const std::string session_id = created.value("id", "");
-    if (session_id.empty())
-    {
-        fprintf(stderr, "create session: missing id\n");
-        return 1;
-    }
+    const SessionID session_id = created.id;
 
     if (!cfg.quiet)
     {
@@ -472,15 +485,7 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
                cfg.questions ? "true" : "false", Color::RESET);
     }
 
-    auto cleanup = [&]() {
-        try
-        {
-            client.delete_session(session_id);
-        }
-        catch (...)
-        {
-        }
-    };
+    defer(client.delete_session(session_id));
 
     auto handle_user_text = [&](const std::string &text) -> bool {
         if (text.empty())
@@ -529,7 +534,6 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
             {
             }
         }
-        cleanup();
         return rc;
     }
 
@@ -607,8 +611,6 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
             printf("\n");
         }
     }
-
-    cleanup();
     return 0;
 }
 

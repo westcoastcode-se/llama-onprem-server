@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../common/std.hpp"
+#include "../api/models.hpp"
 
 #include <functional>
 #include <httplib.h>
@@ -47,9 +48,11 @@ class RestClient
         return res && res->status == 200;
     }
 
-    json create_session(const json &body)
+    SessionResponse create_session(const json &body)
     {
-        return request_json("POST", "/v1/sessions", body, 201);
+        auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body, 201));
+        resp.validate();
+        return resp;
     }
 
     json get_session(const std::string &id)
@@ -57,7 +60,7 @@ class RestClient
         return request_json("GET", "/v1/sessions/" + id, std::nullopt, 200);
     }
 
-    void delete_session(const std::string &id)
+    void delete_session(const SessionID &id)
     {
         auto res = cli_.Delete("/v1/sessions/" + id);
         if (!res)
@@ -84,32 +87,27 @@ class RestClient
                             json{{"tool_results", tool_results}}, 200);
     }
 
-    /** One-shot generation without a session. */
-    json post_messages(const json &body)
+    json get_job(const std::string &session_id, const std::string &key)
     {
-        return request_json("POST", "/v1/messages", body, 200);
+        return request_json("GET", "/v1/sessions/" + session_id + "/jobs/" + key, std::nullopt, 200);
     }
 
-    json get_job(const std::string &key)
+    bool cancel_job(const std::string &session_id, const std::string &key)
     {
-        return request_json("GET", "/v1/messages/" + key, std::nullopt, 200);
-    }
-
-    bool cancel_job(const std::string &key)
-    {
-        auto res = cli_.Delete("/v1/messages/" + key);
+        auto res = cli_.Delete("/v1/sessions/" + session_id + "/jobs/" + key);
         return res && res->status == 200;
     }
 
     /**
-     * Stream NDJSON token lines from GET /v1/messages/:key/tokens.
+     * Stream NDJSON token lines from GET /v1/sessions/:id/jobs/:key/tokens.
      * Invokes cb for each tokens field; returns concatenated text.
      *
      * Note: ContentReceiver must keep returning true until the server closes the
      * chunked body. Returning false makes cpp-httplib treat the call as
      * Error::Canceled with a null Result (looks like "no response").
      */
-    std::string stream_tokens(const std::string &key, const TokenCallback &cb = nullptr)
+    std::string stream_tokens(const std::string &session_id, const std::string &key,
+                              const TokenCallback &cb = nullptr)
     {
         std::string accumulated;
         std::string line_buf;
@@ -117,7 +115,7 @@ class RestClient
         bool client_cancel = false;
 
         auto res = cli_.Get(
-            "/v1/messages/" + key + "/tokens",
+            "/v1/sessions/" + session_id + "/jobs/" + key + "/tokens",
             [&](const char *data, size_t len) {
                 if (saw_done)
                 {
@@ -201,7 +199,8 @@ class RestClient
         }
         if (res->status != 200)
         {
-            throw Error(res->status, res->body, "GET /v1/messages/" + key + "/tokens failed");
+            throw Error(res->status, res->body,
+                        "GET /v1/sessions/" + session_id + "/jobs/" + key + "/tokens failed");
         }
         return accumulated;
     }

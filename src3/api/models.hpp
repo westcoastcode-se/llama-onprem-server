@@ -238,7 +238,7 @@ struct SessionResponse
     static SessionResponse from_json(const json &j)
     {
         SessionResponse req;
-        req.id = j.value("system", SessionID());
+        req.id = j.value("id", SessionID());
         req.system = j.value("system", string());
 
         if (const auto arr = j.value("messages", json::array()); arr.is_array())

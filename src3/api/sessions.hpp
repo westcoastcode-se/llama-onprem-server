@@ -43,7 +43,7 @@ struct SessionMessageRequest
 struct SessionMessageResponse
 {
     string session_id;
-    string key; // job key for /v1/messages/:key/tokens
+    string key; // job key for GET /v1/sessions/:id/jobs/:key/tokens
 
     /**
      * Validate required properties

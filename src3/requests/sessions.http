@@ -31,12 +31,16 @@ Content-Type: application/json
 }
 
 ###
-### Stream tokens
-GET http://localhost:8080/v1/messages/1/tokens
+### Stream tokens (NDJSON). Replace :job with key from POST .../messages
+GET http://localhost:8080/v1/sessions/1/jobs/1/tokens
 
 ###
 ### Job status (includes tool_calls / question when done)
-GET http://localhost:8080/v1/messages/1
+GET http://localhost:8080/v1/sessions/1/jobs/1
+
+###
+### Cancel a running job
+DELETE http://localhost:8080/v1/sessions/1/jobs/1
 
 ###
 ### Client ran tools — send results, continues generation
@@ -61,6 +65,31 @@ Content-Type: application/json
 {
   "content": "Gör option B"
 }
+
+###
+### One-shot flow: create → message → stream → delete
+POST http://localhost:8080/v1/sessions
+Content-Type: application/json
+
+{
+  "questions": false,
+  "system": "You are an amazing AI",
+  "messages": []
+}
+
+###
+POST http://localhost:8080/v1/sessions/2/messages
+Content-Type: application/json
+
+{
+  "content": "Hej"
+}
+
+###
+GET http://localhost:8080/v1/sessions/2/jobs/1/tokens
+
+###
+DELETE http://localhost:8080/v1/sessions/2
 
 ###
 ### Delete session

@@ -4,11 +4,62 @@
 #include "../api/sessions.hpp"
 #include "json.hpp"
 
+namespace
+{
+/**
+ * Resolve a job that belongs to a session.
+ * Accepts the session's active job or any known job key while the session still exists
+ * (finished jobs clear active_job_key but remain queryable briefly for status/stream tail).
+ */
+std::shared_ptr<Task> require_session_job(AppState &state, const std::string &session_id,
+                                          const std::string &job_key)
+{
+    auto session = state.sessions.get(session_id);
+    if (!session)
+        throw NotFound("session not found");
+
+    auto task = state.jobs.get_task(job_key);
+    if (!task)
+        throw NotFound("job not found");
+
+    return task;
+}
+
+void send_job_token_stream(const httplib::Request &req, httplib::Response &res,
+                           const std::shared_ptr<Task> &task)
+{
+    auto buffer = task->buffer;
+    res.set_header("Cache-Control", "no-cache");
+    res.set_chunked_content_provider("application/x-ndjson",
+                                     [buffer, &req](size_t /*offset*/, httplib::DataSink &sink) {
+                                         if (req.is_connection_closed())
+                                         {
+                                             sink.done();
+                                             return false;
+                                         }
+
+                                         auto piece = buffer->wait_pull();
+                                         if (!piece)
+                                         {
+                                             MessageTokensResponse mm{.tokens = {}, .done = true};
+                                             auto line = mm.to_json().dump() + "\n";
+                                             if (!sink.write(line.data(), line.size()))
+                                             {
+                                                 return false;
+                                             }
+                                             sink.done();
+                                             return true;
+                                         }
+
+                                         MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false};
+                                         auto line = mm.to_json().dump() + "\n";
+                                         return sink.write(line.data(), line.size());
+                                     });
+}
+} // namespace
+
 /**
  * Register /v1/sessions endpoints
- *
- * @param s
- * @param state
  */
 void register_session_endpoints(httplib::Server &s, AppState &state)
 {
@@ -59,38 +110,12 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
             throw Busy("job queue is full");
         send_json(res, 200, SessionMessageResponse{.session_id = id, .key = *key});
     });
-}
 
-void register_endpoints(httplib::Server &s, AppState &state)
-{
-    s.Get("/health", [](const httplib::Request &, httplib::Response &res) { res.set_content("OK", "text/plain"); });
-
-    register_session_endpoints(s, state);
-
-    //
-    // Below are deprecated APIs
-    //
-
-    s.Post("/v1/messages", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto body = json::parse(req.body);
-        auto message = MessagesRequest::from_json(body);
-
-        auto key = state.jobs.submit(std::move(message));
-        if (!key)
-        {
-            res.status = 503;
-            res.set_content(error_json("busy", "job queue is full"), "application/json");
-            return;
-        }
-
-        send_json(res, 200, MessagesResponse{.key = *key});
-    });
-
-    s.Get("/v1/messages/:id", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
-        auto task = state.jobs.get_task(id);
-        if (!task)
-            throw NotFound("task not found");
+    // Job status for a generation started via this session
+    s.Get("/v1/sessions/:id/jobs/:job", [&state](const httplib::Request &req, httplib::Response &res) {
+        auto session_id = req.path_params.at("id");
+        auto job_key = req.path_params.at("job");
+        auto task = require_session_job(state, session_id, job_key);
 
         auto status = task->to_status();
         if (!status.done)
@@ -100,48 +125,31 @@ void register_endpoints(httplib::Server &s, AppState &state)
         send_json(res, 200, status);
     });
 
-    s.Delete("/v1/messages/:id", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
-        if (!state.jobs.cancel(id))
-            throw NotFound("task not found");
+    // Cancel a job for this session
+    s.Delete("/v1/sessions/:id/jobs/:job", [&state](const httplib::Request &req, httplib::Response &res) {
+        auto session_id = req.path_params.at("id");
+        auto job_key = req.path_params.at("job");
+        // Ensure session exists (and job is known)
+        require_session_job(state, session_id, job_key);
+        if (!state.jobs.cancel(job_key))
+            throw NotFound("job not found");
         res.status = 200;
         res.set_content(R"({"cancelled":true})", "application/json");
     });
 
     // NDJSON stream of token chunks until done
-    s.Get("/v1/messages/:id/tokens", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
-        auto task = state.jobs.get_task(id);
-        if (!task)
-            throw NotFound("task not found");
+    s.Get("/v1/sessions/:id/jobs/:job/tokens",
+          [&state](const httplib::Request &req, httplib::Response &res) {
+              auto session_id = req.path_params.at("id");
+              auto job_key = req.path_params.at("job");
+              auto task = require_session_job(state, session_id, job_key);
+              send_job_token_stream(req, res, task);
+          });
+}
 
-        auto buffer = task->buffer;
-        res.set_header("Cache-Control", "no-cache");
-        res.set_chunked_content_provider("application/x-ndjson",
-                                         [buffer, &req](size_t /*offset*/, httplib::DataSink &sink) {
-                                             if (req.is_connection_closed())
-                                             {
-                                                 sink.done();
-                                                 return false;
-                                             }
+void register_endpoints(httplib::Server &s, AppState &state)
+{
+    s.Get("/health", [](const httplib::Request &, httplib::Response &res) { res.set_content("OK", "text/plain"); });
 
-                                             auto piece = buffer->wait_pull();
-                                             if (!piece)
-                                             {
-                                                 // EOF
-                                                 MessageTokensResponse mm{.tokens = {}, .done = true};
-                                                 auto line = mm.to_json().dump() + "\n";
-                                                 if (!sink.write(line.data(), line.size()))
-                                                 {
-                                                     return false;
-                                                 }
-                                                 sink.done();
-                                                 return true;
-                                             }
-
-                                             MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false};
-                                             auto line = mm.to_json().dump() + "\n";
-                                             return sink.write(line.data(), line.size());
-                                         });
-    });
+    register_session_endpoints(s, state);
 }
