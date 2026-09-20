@@ -1,6 +1,6 @@
 #include "llm_engine.hpp"
-#include "utf8_stream.hpp"
 #include "llama.h"
+#include "utf8_stream.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -72,7 +72,7 @@ void LlamaEngine::free_resources()
     prev_formatted_len_ = 0;
 }
 
-LlamaEngine LlamaEngine::create(const LlamaConfig &config, std::string &error)
+LlamaEngine LlamaEngine::create(const LlamaConfig &config)
 {
     LlamaEngine engine;
     engine.config_ = config;
@@ -95,8 +95,7 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config, std::string &error)
     engine.model_ = llama_model_load_from_file(config.model_path.c_str(), model_params);
     if (!engine.model_)
     {
-        error = "unable to load model from " + config.model_path;
-        return engine;
+        throw ModelNotFound("unable to load model from " + config.model_path);
     }
 
     engine.vocab_ = llama_model_get_vocab(engine.model_);
@@ -110,10 +109,8 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config, std::string &error)
     engine.ctx_ = llama_init_from_model(engine.model_, ctx_params);
     if (!engine.ctx_)
     {
-        error = "failed to create llama_context";
         llama_model_free(engine.model_);
-        engine.model_ = nullptr;
-        return engine;
+        throw LlamaModelInitError("failed to create llama_context for " + config.model_path);
     }
 
     engine.smpl_ = llama_sampler_chain_init(llama_sampler_chain_default_params());
@@ -123,7 +120,6 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config, std::string &error)
 
     engine.formatted_buf_.resize(llama_n_ctx(engine.ctx_));
     engine.prev_formatted_len_ = 0;
-    error.clear();
     return engine;
 }
 

@@ -21,6 +21,16 @@ struct LlamaConfig
     float temperature = 0.7f;
 };
 
+struct ModelNotFound : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+
+struct LlamaModelInitError : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+
 // Token callback: return true to continue, false to abort generation
 using TokenCallback = std::function<bool(string_view piece)>;
 
@@ -36,7 +46,7 @@ class LlamaEngine
     LlamaEngine(LlamaEngine &&other) noexcept;
     LlamaEngine &operator=(LlamaEngine &&other) noexcept;
 
-    static LlamaEngine create(const LlamaConfig &config, std::string &error);
+    static LlamaEngine create(const LlamaConfig &config);
 
     void reset();
 

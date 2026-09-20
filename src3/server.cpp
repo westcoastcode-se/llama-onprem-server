@@ -1,3 +1,4 @@
+#include "common/log.hpp"
 #include "server/api/errors.hpp"
 #include "server/http/routes.hpp"
 #include "server/jobs/jobs.hpp"
@@ -50,7 +51,7 @@ void print_usage(const char *argv0)
 int main(int argc, char **argv)
 {
     LlamaConfig config;
-    std::string host = "0.0.0.0";
+    string host = "127.0.0.1";
     int port = 8080;
 
     for (int i = 1; i < argc; ++i)
@@ -111,11 +112,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::string error;
-    LlamaEngine engine = LlamaEngine::create(config, error);
-    if (!error.empty())
+    LlamaEngine engine;
+    try
     {
-        fprintf(stderr, "failed to create engine: %s\n", error.c_str());
+        engine = LlamaEngine::create(config);
+    }
+    catch (std::exception &e)
+    {
+        log_error("Failed to create LLamaEngine: ", e.what());
         return 1;
     }
 
@@ -172,10 +176,10 @@ int main(int argc, char **argv)
     AppState state{engine, jobs, sessions};
     register_endpoints(svr, state);
 
-    fprintf(stderr, "[http] listening on %s:%d\n", host.c_str(), port);
+    log_info("server listening on ", host, ":", port);
     if (!svr.listen(host, port))
     {
-        fprintf(stderr, "failed to listen on %s:%d\n", host.c_str(), port);
+        log_error("failed to listen on ", host, ":", port);
         return 1;
     }
 
