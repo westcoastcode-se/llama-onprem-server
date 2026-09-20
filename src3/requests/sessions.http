@@ -1,9 +1,19 @@
-### Create agent session (default system includes tool_call + question protocol)
+### Create session (empty system → default prompt with tool_call + question protocol)
 POST http://localhost:8080/v1/sessions
 Content-Type: application/json
 
 {
-  "agent": true,
+  "questions": true,
+  "messages": []
+}
+
+###
+### Create session without question protocol (tools still in default prompt)
+POST http://localhost:8080/v1/sessions
+Content-Type: application/json
+
+{
+  "questions": false,
   "messages": []
 }
 
@@ -44,21 +54,12 @@ Content-Type: application/json
 }
 
 ###
-### Client answered a multiple-choice question
-POST http://localhost:8080/v1/sessions/1/answer
+### Client answered a pending question (same as a normal user message)
+POST http://localhost:8080/v1/sessions/1/messages
 Content-Type: application/json
 
 {
-  "answer_index": 0
-}
-
-###
-### Or free-form answer
-POST http://localhost:8080/v1/sessions/1/answer
-Content-Type: application/json
-
-{
-  "answer": "Gör option B"
+  "content": "Gör option B"
 }
 
 ###

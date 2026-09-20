@@ -71,5 +71,9 @@ struct ParsedAssistantActions
  */
 ParsedAssistantActions parse_assistant_actions(std::string_view text);
 
-/** Default system prompt fragment: tools + questions for client-side agents. */
-std::string default_agent_system_prompt(std::string_view extra = "");
+/**
+ * Default system prompt: tools, and optionally question/answer protocol.
+ * @param extra optional user system text appended at the end
+ * @param allow_questions when false, omit <question>/<answer> instructions
+ */
+std::string default_agent_system_prompt(std::string_view extra = "", bool allow_questions = true);

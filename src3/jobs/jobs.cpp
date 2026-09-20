@@ -218,7 +218,7 @@ void Jobs::worker_loop()
         std::string response;
         try
         {
-            response = engine_.chat(msgs, [task, buffer](std::string_view piece) -> bool {
+            response = engine_.chat(msgs, [task, buffer](string_view piece) -> bool {
                 if (task->is_cancel_requested() || buffer->is_cancelled())
                 {
                     return false;

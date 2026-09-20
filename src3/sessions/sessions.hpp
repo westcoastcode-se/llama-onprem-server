@@ -53,6 +53,8 @@ struct Session
     SessionWaitState wait_state = SessionWaitState::Idle;
     vector<ParsedToolCall> pending_tool_calls;
     optional<ParsedQuestion> pending_question;
+    /** When false, do not pause on model <question> tags or teach question protocol. */
+    bool questions_enabled = true;
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point last_active = std::chrono::steady_clock::now();
 
@@ -90,6 +92,7 @@ struct Session
         }
         r.pending_tool_calls = pending_tool_calls;
         r.pending_question = pending_question;
+        r.questions = questions_enabled;
         return r;
     }
 };
@@ -135,21 +138,14 @@ class Sessions
      *
      * @return job key, or nullopt if queue full.
      */
-    optional<string> post_message(const Session::Key &id, SessionMessageRequest msg);
+    optional<Task::Key> post_message(const Session::Key &id, SessionMessageRequest msg);
 
     /**
      * Client finished running pending tool_calls; append tool results and continue.
      *
      * @return new job key, or nullopt if queue full.
      */
-    optional<string> post_tool_results(const Session::Key &id, SessionToolResultsRequest body);
-
-    /**
-     * Client answered a pending question; append answer and continue.
-     *
-     * @return new job key, or nullopt if queue full.
-     */
-    optional<string> post_answer(const Session::Key &id, SessionAnswerRequest body);
+    optional<Task::Key> post_tool_results(const Session::Key &id, SessionToolResultsRequest body);
 
     void gc();
 
@@ -163,7 +159,7 @@ class Sessions
 
     void unsafe_gc();
 
-    std::optional<std::string> enqueue_generation(const std::shared_ptr<Session> &session);
+    optional<Task::Key> enqueue_generation(const shared_ptr<Session> &session);
 
     void on_job_finished(const std::shared_ptr<Session> &session, const Task &task);
 };

@@ -39,6 +39,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         res.set_content(R"({"deleted":true})", "application/json");
     });
 
+    // Post a message to a session
     s.Post("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
         auto id = req.path_params.at("id");
         auto body = json::parse(req.body);
@@ -49,25 +50,13 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         send_json(res, 200, SessionMessageResponse{.session_id = id, .key = *key});
     });
 
+    // Post tool responses to the active session
     s.Post("/v1/sessions/:id/tools", [&state](const httplib::Request &req, httplib::Response &res) {
         auto id = req.path_params.at("id");
         auto body = json::parse(req.body.empty() ? "{}" : req.body);
         auto key = state.sessions.post_tool_results(id, SessionToolResultsRequest::from_json(body));
         if (!key)
             throw Busy("job queue is full");
-        send_json(res, 200, SessionMessageResponse{.session_id = id, .key = *key});
-    });
-
-    s.Post("/v1/sessions/:id/answer", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
-        auto body = json::parse(req.body.empty() ? "{}" : req.body);
-        auto key = state.sessions.post_answer(id, SessionAnswerRequest::from_json(body));
-        if (!key)
-        {
-            res.status = 503;
-            res.set_content(error_json("busy", "job queue is full"), "application/json");
-            return;
-        }
         send_json(res, 200, SessionMessageResponse{.session_id = id, .key = *key});
     });
 }
@@ -77,6 +66,10 @@ void register_endpoints(httplib::Server &s, AppState &state)
     s.Get("/health", [](const httplib::Request &, httplib::Response &res) { res.set_content("OK", "text/plain"); });
 
     register_session_endpoints(s, state);
+
+    //
+    // Below are deprecated APIs
+    //
 
     s.Post("/v1/messages", [&state](const httplib::Request &req, httplib::Response &res) {
         auto body = json::parse(req.body);
@@ -97,11 +90,7 @@ void register_endpoints(httplib::Server &s, AppState &state)
         auto id = req.path_params.at("id");
         auto task = state.jobs.get_task(id);
         if (!task)
-        {
-            res.status = 404;
-            res.set_content(error_json("not_found", "task not found"), "application/json");
-            return;
-        }
+            throw NotFound("task not found");
 
         auto status = task->to_status();
         if (!status.done)
@@ -114,11 +103,7 @@ void register_endpoints(httplib::Server &s, AppState &state)
     s.Delete("/v1/messages/:id", [&state](const httplib::Request &req, httplib::Response &res) {
         auto id = req.path_params.at("id");
         if (!state.jobs.cancel(id))
-        {
-            res.status = 404;
-            res.set_content(error_json("not_found", "task not found"), "application/json");
-            return;
-        }
+            throw NotFound("task not found");
         res.status = 200;
         res.set_content(R"({"cancelled":true})", "application/json");
     });
@@ -128,11 +113,7 @@ void register_endpoints(httplib::Server &s, AppState &state)
         auto id = req.path_params.at("id");
         auto task = state.jobs.get_task(id);
         if (!task)
-        {
-            res.status = 404;
-            res.set_content(error_json("not_found", "task not found"), "application/json");
-            return;
-        }
+            throw NotFound("task not found");
 
         auto buffer = task->buffer;
         res.set_header("Cache-Control", "no-cache");

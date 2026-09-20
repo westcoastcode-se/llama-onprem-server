@@ -11,4 +11,9 @@ struct AppState
     Sessions &sessions;
 };
 
+/**
+ *
+ * @param server The HTT server
+ * @param state Application state
+ */
 void register_endpoints(httplib::Server &server, AppState &state);

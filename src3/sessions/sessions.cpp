@@ -1,6 +1,6 @@
 #include "sessions/sessions.hpp"
-#include "api/errors.hpp"
 #include "agent/response_parse.hpp"
+#include "api/errors.hpp"
 #include <cstdio>
 #include <sstream>
 
@@ -41,21 +41,15 @@ std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
 
     auto session = std::make_shared<Session>();
     session->id = next_id();
-    if (req.system.empty() && req.agent)
+    session->questions_enabled = req.questions;
+    if (req.system.empty())
     {
-        session->system = default_agent_system_prompt();
+        session->system = default_agent_system_prompt("", req.questions);
     }
-    else if (!req.system.empty() && req.agent)
+    else if (req.system.find("<tool_call>") == std::string::npos)
     {
         // Keep user system text, append tool/question protocol if not already present
-        if (req.system.find("<tool_call>") == std::string::npos)
-        {
-            session->system = default_agent_system_prompt(req.system);
-        }
-        else
-        {
-            session->system = std::move(req.system);
-        }
+        session->system = default_agent_system_prompt(req.system, req.questions);
     }
     else
     {
@@ -138,6 +132,11 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
     }
 
     session->clear_pending();
+    // Drop question actions when the session was created without question support
+    if (!session->questions_enabled)
+    {
+        actions.question.reset();
+    }
     if (!actions.tool_calls.empty())
     {
         // Tool calls take precedence; client must resolve before question
@@ -156,7 +155,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
     }
 }
 
-std::optional<std::string> Sessions::enqueue_generation(const std::shared_ptr<Session> &session)
+optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &session)
 {
     MessagesRequest req;
     {
@@ -191,7 +190,7 @@ std::optional<std::string> Sessions::enqueue_generation(const std::shared_ptr<Se
     return key;
 }
 
-std::optional<std::string> Sessions::post_message(const Session::Key &id, SessionMessageRequest msg)
+optional<Task::Key> Sessions::post_message(const Session::Key &id, SessionMessageRequest msg)
 {
     auto session = get(id);
     if (!session)
@@ -230,8 +229,7 @@ std::optional<std::string> Sessions::post_message(const Session::Key &id, Sessio
     return key;
 }
 
-std::optional<std::string> Sessions::post_tool_results(const Session::Key &id,
-                                                      SessionToolResultsRequest body)
+optional<Task::Key> Sessions::post_tool_results(const Session::Key &id, SessionToolResultsRequest body)
 {
     auto session = get(id);
     if (!session)
@@ -249,8 +247,7 @@ std::optional<std::string> Sessions::post_tool_results(const Session::Key &id,
         {
             throw Busy("session already has an active generation");
         }
-        if (session->wait_state != SessionWaitState::AwaitingTools &&
-            session->pending_tool_calls.empty())
+        if (session->wait_state != SessionWaitState::AwaitingTools && session->pending_tool_calls.empty())
         {
             throw BadRequest("session is not awaiting tool results");
         }
@@ -292,69 +289,12 @@ std::optional<std::string> Sessions::post_tool_results(const Session::Key &id,
     if (!key)
     {
         std::lock_guard slock(session->mutex);
-        if (!session->messages.empty() && session->messages.back().role == "user" && session->messages.back().content.starts_with("<tool_response>"))
+        if (!session->messages.empty() && session->messages.back().role == "user" &&
+            session->messages.back().content.starts_with("<tool_response>"))
         {
             session->messages.pop_back();
         }
         session->wait_state = SessionWaitState::AwaitingTools;
-        return std::nullopt;
-    }
-    return key;
-}
-
-std::optional<std::string> Sessions::post_answer(const Session::Key &id, SessionAnswerRequest body)
-{
-    auto session = get(id);
-    if (!session)
-    {
-        throw NotFound("session not found");
-    }
-
-    std::string answer_text = body.answer;
-    {
-        std::lock_guard slock(session->mutex);
-        if (!session->active_job_key.empty() || session->wait_state == SessionWaitState::Generating)
-        {
-            throw Busy("session already has an active generation");
-        }
-        if (session->wait_state != SessionWaitState::AwaitingQuestion && !session->pending_question)
-        {
-            throw BadRequest("session is not awaiting an answer");
-        }
-
-        if (body.answer_index)
-        {
-            const auto &opts = session->pending_question ? session->pending_question->answers
-                                                         : std::vector<std::string>{};
-            const int idx = *body.answer_index;
-            if (idx < 0 || static_cast<size_t>(idx) >= opts.size())
-            {
-                throw BadRequest("answer_index out of range");
-            }
-            answer_text = opts[static_cast<size_t>(idx)];
-        }
-
-        if (answer_text.empty())
-        {
-            throw BadRequest("answer is required");
-        }
-
-        session->messages.push_back(ChatMessage{.role = "user", .content = answer_text});
-        session->clear_pending();
-        session->wait_state = SessionWaitState::Idle;
-        session->touch();
-    }
-
-    auto key = enqueue_generation(session);
-    if (!key)
-    {
-        std::lock_guard slock(session->mutex);
-        if (!session->messages.empty() && session->messages.back().role == "user" &&
-            session->messages.back().content == answer_text)
-        {
-            session->messages.pop_back();
-        }
-        session->wait_state = SessionWaitState::AwaitingQuestion;
         return std::nullopt;
     }
     return key;

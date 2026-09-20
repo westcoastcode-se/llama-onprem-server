@@ -9,7 +9,7 @@
 class TokenBuffer
 {
   public:
-    void push(std::string_view piece)
+    void push(string_view piece)
     {
         {
             std::lock_guard lock(mutex_);
@@ -55,9 +55,10 @@ class TokenBuffer
 
     /**
      * Block until a piece is available or generation finished.
+     *
      * @return nullopt when EOF (done and empty); empty string should not be returned for EOF.
      */
-    std::optional<std::string> wait_pull()
+    optional<string> wait_pull()
     {
         std::unique_lock lock(mutex_);
         cv_.wait(lock, [this] { return !pieces_.empty() || done_ || cancelled_; });
@@ -74,10 +75,10 @@ class TokenBuffer
      * Non-blocking pull of all currently available pieces.
      * @param out_done set true when generation finished and buffer drained.
      */
-    std::vector<std::string> pull_available(bool &out_done)
+    vector<string> pull_available(bool &out_done)
     {
         std::lock_guard lock(mutex_);
-        std::vector<std::string> out;
+        vector<string> out;
         out.reserve(pieces_.size());
         while (!pieces_.empty())
         {
@@ -88,13 +89,13 @@ class TokenBuffer
         return out;
     }
 
-    void append_result(std::string_view text)
+    void append_result(string_view text)
     {
         std::lock_guard lock(mutex_);
         full_result_.append(text);
     }
 
-    [[nodiscard]] std::string full_result() const
+    [[nodiscard]] string full_result() const
     {
         std::lock_guard lock(mutex_);
         return full_result_;

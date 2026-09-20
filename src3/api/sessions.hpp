@@ -6,17 +6,27 @@
 
 struct CreateSessionRequest
 {
+    // System prompt
     string system;
+
+    // Chat history, if any exists
     vector<ChatMessage> messages;
-    /** If true (default) and system empty, inject default agent prompt (tools + questions). */
-    bool agent = true;
+
+    /**
+     * If true (default), allow question protocol: include it in the default system prompt
+     * (when system is empty or lacks tool protocol) and pause on parsed <question> tags.
+     * The client replies with a normal POST .../messages turn.
+     * When false, questions are omitted from the prompt and ignored if the model still emits them.
+     * Tools are available whenever the (effective) system prompt describes them.
+     */
+    bool questions = true;
 
     static CreateSessionRequest from_json(const json &j)
     {
         CreateSessionRequest req;
         req.system = j.value("system", "");
-        req.agent = j.value("agent", true);
-        auto arr = j.value("messages", json::array());
+        req.questions = j.value("questions", true);
+        const auto arr = j.value("messages", json::array());
         if (arr.is_array())
         {
             req.messages.reserve(arr.size());
@@ -38,6 +48,7 @@ struct SessionResponse
     string state;          // idle|generating|awaiting_tools|awaiting_question
     vector<ParsedToolCall> pending_tool_calls;
     optional<ParsedQuestion> pending_question;
+    bool questions = true;
 
     [[nodiscard]] json to_json() const
     {
@@ -46,7 +57,11 @@ struct SessionResponse
         {
             arr.push_back(m.to_json());
         }
-        json j{{"id", id}, {"system", system}, {"messages", arr}, {"state", state}};
+        json j{{"id", id},
+               {"system", system},
+               {"messages", arr},
+               {"state", state},
+               {"questions", questions}};
         if (!active_job_key.empty())
         {
             j["active_job_key"] = active_job_key;
@@ -143,24 +158,3 @@ struct SessionToolResultsRequest
     }
 };
 
-struct SessionAnswerRequest
-{
-    string answer;
-    /** Optional index into pending question.answers (0-based). */
-    optional<int> answer_index;
-
-    static SessionAnswerRequest from_json(const json &j)
-    {
-        SessionAnswerRequest req;
-        req.answer = j.value("answer", j.value("content", ""));
-        if (j.contains("answer_index") && j["answer_index"].is_number_integer())
-        {
-            req.answer_index = j["answer_index"].get<int>();
-        }
-        else if (j.contains("index") && j["index"].is_number_integer())
-        {
-            req.answer_index = j["index"].get<int>();
-        }
-        return req;
-    }
-};

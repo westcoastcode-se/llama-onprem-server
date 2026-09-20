@@ -22,7 +22,7 @@ struct LlamaConfig
 };
 
 // Token callback: return true to continue, false to abort generation
-using TokenCallback = std::function<bool(std::string_view piece)>;
+using TokenCallback = std::function<bool(string_view piece)>;
 
 class LlamaEngine
 {

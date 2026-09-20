@@ -402,7 +402,7 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
     return actions;
 }
 
-std::string default_agent_system_prompt(std::string_view extra)
+std::string default_agent_system_prompt(std::string_view extra, bool allow_questions)
 {
     std::ostringstream ss;
     ss << "You are a coding agent. Solve the user's task carefully.\n\n";
@@ -419,13 +419,23 @@ std::string default_agent_system_prompt(std::string_view extra)
     ss << "- list_directory: {\"path\": \"<path>\"}\n";
     ss << "- file_search: {\"query\": \"...\"}\n";
     ss << "- search_text: {\"query\": \"...\", \"path\": \"<optional>\"}\n\n";
-    ss << "When several approaches are reasonable and you need the user to choose, ask with:\n";
-    ss << "<question>\nYour question text\n</question>\n";
-    ss << "<answer>Option A</answer>\n";
-    ss << "<answer>Option B</answer>\n";
-    ss << "(Include 2+ <answer> options when choices are clear; omit <answer> for free-form.)\n\n";
-    ss << "Do not invent tool results. Wait for the next user/tool message.\n";
-    ss << "When finished, reply with a clear final answer and no tool_call/question tags.\n";
+    if (allow_questions)
+    {
+        ss << "When several approaches are reasonable and you need the user to choose, ask with:\n";
+        ss << "<question>\nYour question text\n</question>\n";
+        ss << "<answer>Option A</answer>\n";
+        ss << "<answer>Option B</answer>\n";
+        ss << "(Include 2+ <answer> options when choices are clear; omit <answer> for free-form.)\n\n";
+        ss << "Do not invent tool results. Wait for the next user/tool message.\n";
+        ss << "When finished, reply with a clear final answer and no tool_call/question tags.\n";
+    }
+    else
+    {
+        ss << "Do not invent tool results. Wait for the next user/tool message.\n";
+        ss << "Do not use <question> or <answer> tags. Prefer a best-effort approach or "
+              "state assumptions instead of asking the user to choose.\n";
+        ss << "When finished, reply with a clear final answer and no tool_call tags.\n";
+    }
     if (!extra.empty())
     {
         ss << "\n";
