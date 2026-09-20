@@ -4,7 +4,7 @@
 #include "sessions.hpp"
 
 using SessionID = string;
-using MessageID = string;
+using JobKey = string;
 
 struct ChatMessage
 {
@@ -69,6 +69,10 @@ struct CreateSessionRequest
      * @deprecated The system prompt should be moved to the client and thus this property is no longer neccessary
      */
     bool questions = true;
+
+    void validate() const
+    {
+    }
 
     [[nodiscard]] json to_json() const
     {

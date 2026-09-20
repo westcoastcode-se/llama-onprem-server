@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../common/std.hpp"
 #include "../api/models.hpp"
+#include "../common/std.hpp"
 
 #include <functional>
 #include <httplib.h>
@@ -27,8 +27,7 @@ class RestClient
         }
     };
 
-    RestClient(string host, const int port)
-        : base_host_(std::move(host)), port_(port), cli_(base_host_, port_)
+    RestClient(string host, const int port) : base_host_(std::move(host)), port_(port), cli_(base_host_, port_)
     {
         cli_.set_connection_timeout(5, 0);
         cli_.set_read_timeout(600, 0);
@@ -48,9 +47,10 @@ class RestClient
         return res && res->status == 200;
     }
 
-    SessionResponse create_session(const json &body)
+    SessionResponse create_session(const CreateSessionRequest &body)
     {
-        auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body, 201));
+        body.validate();
+        auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body.to_json(), 201));
         resp.validate();
         return resp;
     }
@@ -74,25 +74,23 @@ class RestClient
     }
 
     /** POST message → {session_id,key} */
-    json post_message(const std::string &session_id, const std::string &content,
-                      const std::string &role = "user")
+    json post_message(const SessionID &session_id, const std::string &content, const std::string &role = "user")
     {
         return request_json("POST", "/v1/sessions/" + session_id + "/messages",
                             json{{"content", content}, {"role", role}}, 200);
     }
 
-    json post_tool_results(const std::string &session_id, const json &tool_results)
+    json post_tool_results(const SessionID &session_id, const json &tool_results)
     {
-        return request_json("POST", "/v1/sessions/" + session_id + "/tools",
-                            json{{"tool_results", tool_results}}, 200);
+        return request_json("POST", "/v1/sessions/" + session_id + "/tools", json{{"tool_results", tool_results}}, 200);
     }
 
-    json get_job(const std::string &session_id, const std::string &key)
+    json get_job(const SessionID &session_id, const JobKey &key)
     {
         return request_json("GET", "/v1/sessions/" + session_id + "/jobs/" + key, std::nullopt, 200);
     }
 
-    bool cancel_job(const std::string &session_id, const std::string &key)
+    bool cancel_job(const SessionID &session_id, const JobKey &key)
     {
         auto res = cli_.Delete("/v1/sessions/" + session_id + "/jobs/" + key);
         return res && res->status == 200;
@@ -106,17 +104,15 @@ class RestClient
      * chunked body. Returning false makes cpp-httplib treat the call as
      * Error::Canceled with a null Result (looks like "no response").
      */
-    std::string stream_tokens(const std::string &session_id, const std::string &key,
-                              const TokenCallback &cb = nullptr)
+    std::string stream_tokens(const SessionID &session_id, const JobKey &key, const TokenCallback &cb = nullptr)
     {
         std::string accumulated;
         std::string line_buf;
         bool saw_done = false;
         bool client_cancel = false;
 
-        auto res = cli_.Get(
-            "/v1/sessions/" + session_id + "/jobs/" + key + "/tokens",
-            [&](const char *data, size_t len) {
+        auto res =
+            cli_.Get("/v1/sessions/" + session_id + "/jobs/" + key + "/tokens", [&](const char *data, size_t len) {
                 if (saw_done)
                 {
                     // Drain any trailing bytes after the terminal NDJSON line.
@@ -194,13 +190,13 @@ class RestClient
                 return accumulated;
             }
             const auto err = res.error();
-            throw Error(0, "", "token stream failed: no response for job " + key +
-                                   " (httplib error " + std::to_string(static_cast<int>(err)) + ")");
+            throw Error(0, "",
+                        "token stream failed: no response for job " + key + " (httplib error " +
+                            std::to_string(static_cast<int>(err)) + ")");
         }
         if (res->status != 200)
         {
-            throw Error(res->status, res->body,
-                        "GET /v1/sessions/" + session_id + "/jobs/" + key + "/tokens failed");
+            throw Error(res->status, res->body, "GET /v1/sessions/" + session_id + "/jobs/" + key + "/tokens failed");
         }
         return accumulated;
     }
@@ -210,8 +206,7 @@ class RestClient
     int port_;
     httplib::Client cli_;
 
-    json request_json(const char *method, const std::string &path, std::optional<json> body,
-                      int expect_status)
+    json request_json(const char *method, const std::string &path, std::optional<json> body, int expect_status)
     {
         httplib::Result res;
         const std::string payload = body ? body->dump() : "";
@@ -234,8 +229,7 @@ class RestClient
 
         if (!res)
         {
-            throw Error(0, "", std::string(method) + " " + path + " failed: no response from " +
-                                   base_url());
+            throw Error(0, "", std::string(method) + " " + path + " failed: no response from " + base_url());
         }
         if (res->status != expect_status)
         {

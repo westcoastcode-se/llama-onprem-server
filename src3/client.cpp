@@ -428,17 +428,11 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
 
 int run_oneshot(RestClient &client, CliConfig &cfg)
 {
-    // One-shot = temporary session: create → post message → stream → delete.
-    json create_body{
-        {"questions", false},
-        {"messages", json::array()},
-    };
-    if (!cfg.system_prompt.empty())
-    {
-        create_body["system"] = cfg.system_prompt;
-    }
-
-    auto created = client.create_session(create_body);
+    auto created = client.create_session(CreateSessionRequest{
+        .system = cfg.system_prompt,
+        .messages = {},
+        .questions = false
+    });
     const SessionID session_id = created.id;
     defer(client.delete_session(session_id));
 
@@ -466,16 +460,11 @@ int run_oneshot(RestClient &client, CliConfig &cfg)
 
 int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
 {
-    json create_body{
-        {"questions", cfg.questions},
-        {"messages", json::array()},
-    };
-    if (!cfg.system_prompt.empty())
-    {
-        create_body["system"] = cfg.system_prompt;
-    }
-
-    auto created = client.create_session(create_body);
+    auto created = client.create_session(CreateSessionRequest{
+        .system = cfg.system_prompt,
+        .messages = {},
+        .questions = cfg.questions
+    });
     const SessionID session_id = created.id;
 
     if (!cfg.quiet)
