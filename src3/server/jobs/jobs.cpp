@@ -47,27 +47,12 @@ Task::Key Jobs::next_key()
     return std::to_string(key_counter_.fetch_add(1, std::memory_order_relaxed));
 }
 
-optional<Task::Key> Jobs::submit(MessagesRequest request, std::function<void(const Task &)> on_finished)
+Task::Key Jobs::submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished)
 {
     std::lock_guard lock(mutex_);
 
     // Opportunistic GC
     unsafe_gc();
-
-    // Verify that we aren't adding too many jobs at the same time - just in case.
-    size_t active = 0;
-    for (const auto &kv : tasks_)
-    {
-        auto st = kv.second->get_state();
-        if (st == TaskState::Queued || st == TaskState::Running)
-        {
-            ++active;
-        }
-    }
-    if (active >= kMaxQueue)
-    {
-        return std::nullopt;
-    }
 
     const auto task = std::make_shared<Task>();
     task->key = next_key();

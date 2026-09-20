@@ -43,10 +43,12 @@ cd llama.cpp
 export PATH=/opt/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/opt/cuda/lib64:$LD_LIBRARY_PATH
 
-# Compile llama.cpp including tools with CUDA support
+# Compile llama.cpp including tools with CUDA support.
+# You might have to replace the CMAKE_CUDA_ARCHITECTURE to whatever your system has access to.
+# Use: "nvidia-smi --query-gpu=name,compute_cap --format=csv" to find out
 cmake -B build \
   -DGGML_CUDA=ON \
-  -DCMAKE_CUDA_ARCHITECTURES="89" \
+  -DCMAKE_CUDA_ARCHITECTURES="80;86;89" \
   -DLLAMA_BUILD_SERVER=ON \
   -DCMAKE_BUILD_TYPE=Release \
   -G Ninja

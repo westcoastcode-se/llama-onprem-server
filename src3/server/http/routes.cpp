@@ -11,7 +11,7 @@ namespace
  * Accepts the session's active job or any known job key while the session still exists
  * (finished jobs clear active_job_key but remain queryable briefly for status/stream tail).
  */
-std::shared_ptr<Task> require_session_job(AppState &state, const std::string &session_id,
+std::shared_ptr<Task> require_session_job(AppState &state, const SessionID &session_id,
                                           const std::string &job_key)
 {
     auto session = state.sessions.get(session_id);
@@ -74,7 +74,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Get all information of the supplied session
     s.Get("/v1/sessions/:id", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
+        const SessionID id = std::stoll(req.path_params.at("id"));
         const auto session = state.sessions.get(id);
         if (!session)
             throw NotFound("session not found");
@@ -83,7 +83,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Delete a session
     s.Delete("/v1/sessions/:id", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
+        const SessionID id = std::stoll(req.path_params.at("id"));
         if (!state.sessions.destroy(id))
             throw NotFound("session not found");
         res.status = 200;
@@ -92,7 +92,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Post a message to a session
     s.Post("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
+        const SessionID id = std::stoll(req.path_params.at("id"));
         auto body = json::parse(req.body);
         auto msg = SessionMessageRequest::from_json(body);
         auto key = state.sessions.post_message(id, std::move(msg));
@@ -103,7 +103,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Post tool responses to the active session
     s.Post("/v1/sessions/:id/tools", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto id = req.path_params.at("id");
+        const SessionID id = std::stoll(req.path_params.at("id"));
         auto body = json::parse(req.body.empty() ? "{}" : req.body);
         auto key = state.sessions.post_tool_results(id, SessionToolResultsRequest::from_json(body));
         if (!key)
@@ -113,9 +113,9 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Job status for a generation started via this session
     s.Get("/v1/sessions/:id/jobs/:job", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto session_id = req.path_params.at("id");
+        const SessionID id = std::stoll(req.path_params.at("id"));
         auto job_key = req.path_params.at("job");
-        auto task = require_session_job(state, session_id, job_key);
+        auto task = require_session_job(state, id, job_key);
 
         auto status = task->to_status();
         if (!status.done)
@@ -127,10 +127,10 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Cancel a job for this session
     s.Delete("/v1/sessions/:id/jobs/:job", [&state](const httplib::Request &req, httplib::Response &res) {
-        auto session_id = req.path_params.at("id");
+        const SessionID id = std::stoll(req.path_params.at("id"));
         auto job_key = req.path_params.at("job");
         // Ensure session exists (and job is known)
-        require_session_job(state, session_id, job_key);
+        require_session_job(state, id, job_key);
         if (!state.jobs.cancel(job_key))
             throw NotFound("job not found");
         res.status = 200;
@@ -140,9 +140,9 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     // NDJSON stream of token chunks until done
     s.Get("/v1/sessions/:id/jobs/:job/tokens",
           [&state](const httplib::Request &req, httplib::Response &res) {
-              auto session_id = req.path_params.at("id");
+              const SessionID id = std::stoll(req.path_params.at("id"));
               auto job_key = req.path_params.at("job");
-              auto task = require_session_job(state, session_id, job_key);
+              auto task = require_session_job(state, id, job_key);
               send_job_token_stream(req, res, task);
           });
 }

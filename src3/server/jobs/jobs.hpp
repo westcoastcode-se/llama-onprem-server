@@ -27,7 +27,7 @@ enum class TaskState
     Cancelled
 };
 
-inline const char *to_string(TaskState s)
+inline const char *to_string(const TaskState s)
 {
     switch (s)
     {
@@ -148,13 +148,14 @@ struct Task
 };
 
 /**
- * Single-flight GPU worker + short queue (max 2).
+ * Single-flight GPU worker
+ *
  * REST clients get a key immediately; tokens stream via TokenBuffer.
  */
 class Jobs
 {
   public:
-    static constexpr size_t kMaxQueue = 2;
+    // TODO: Consider adding support for forcefully stopping long-running LLM requests
     static constexpr std::chrono::seconds kFinishedTtl{300};
 
     explicit Jobs(LlamaEngine &engine);
@@ -167,11 +168,12 @@ class Jobs
 
     /**
      * Enqueue a chat job.
+     *
+     * @param request The message to be processed by the LLM. This method takes over ownership of it
      * @param on_finished optional callback invoked once when task finishes (any terminal state).
-     * @return key, or nullopt if queue is full (caller should 503).
+     * @return A unique key that represents the job
      */
-    std::optional<Task::Key> submit(MessagesRequest request,
-                                    std::function<void(const Task &)> on_finished = nullptr);
+    Task::Key submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished = nullptr);
 
     std::shared_ptr<Task> get_task(const Task::Key &key);
 

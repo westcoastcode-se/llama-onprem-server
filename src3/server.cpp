@@ -1,6 +1,7 @@
 #include "common/defer.hpp"
 #include "common/log.hpp"
 #include "server/api/errors.hpp"
+#include "server/http/json.hpp"
 #include "server/http/routes.hpp"
 #include "server/jobs/jobs.hpp"
 #include "server/llm/llm_engine.hpp"
@@ -148,30 +149,25 @@ int main(int argc, char **argv)
                 std::rethrow_exception(ep);
             }
         }
-        catch (const NotFound &e)
+        catch (const NotFound &_)
         {
-            res.status = 404;
-            res.set_content(error_json("not_found", e.what()), "application/json");
+            send_json(res, 404, ErrorResponse{404, "not found"});
         }
-        catch (const Busy &e)
+        catch (const Busy &_)
         {
-            res.status = 503;
-            res.set_content(error_json("busy", e.what()), "application/json");
+            send_json(res, 503, ErrorResponse{503, "busy"});
         }
-        catch (const BadRequest &e)
+        catch (const BadRequest &_)
         {
-            res.status = 400;
-            res.set_content(error_json("bad_request", e.what()), "application/json");
+            send_json(res, 400, ErrorResponse{400, "bad request"});
         }
-        catch (const json::exception &e)
+        catch (const json::exception &_)
         {
-            res.status = 400;
-            res.set_content(error_json("bad_request", e.what()), "application/json");
+            send_json(res, 400, ErrorResponse{400, "bad request"});
         }
-        catch (const std::exception &e)
+        catch (const std::exception &_)
         {
-            res.status = 400;
-            res.set_content(error_json("bad_request", e.what()), "application/json");
+            send_json(res, 400, ErrorResponse{400, "bad request"});
         }
     });
 

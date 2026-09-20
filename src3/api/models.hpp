@@ -3,7 +3,6 @@
 #include "../common/std.hpp"
 #include "sessions.hpp"
 
-using SessionID = string;
 using JobKey = string;
 
 struct ChatMessage
@@ -175,11 +174,13 @@ struct ParsedQuestion
  */
 struct SessionResponse
 {
-    SessionID id;
-    string system;
+    // Unique ID for this session
+    SessionID id = 0;
+    // The system prompt
+    string system_prompt;
     vector<ChatMessage> messages;
     optional<string> active_job_key;
-    SessionWaitState state;
+    SessionState state;
 
     // Pending tool calls
     vector<ParsedToolCall> pending_tool_calls;
@@ -196,9 +197,9 @@ struct SessionResponse
      */
     void validate() const
     {
-        if (id.empty())
+        if (id == 0)
             throw BadRequest{"property 'id' is required"};
-        if (state.value == SessionWaitState::Unknown)
+        if (state.value == SessionState::Unknown)
             throw BadRequest{"property 'state' is required"};
     }
 
@@ -214,7 +215,7 @@ struct SessionResponse
         json j
         {
             {"id", id},
-            {"system", system},
+            {"system", system_prompt},
             {"messages", arr},
             {"state", state.to_string()},
             {"questions", questions}
@@ -248,7 +249,7 @@ struct SessionResponse
     {
         SessionResponse req;
         req.id = j.value("id", SessionID());
-        req.system = j.value("system", string());
+        req.system_prompt = j.value("system", string());
 
         if (const auto arr = j.value("messages", json::array()); arr.is_array())
         {
@@ -264,7 +265,7 @@ struct SessionResponse
             req.active_job_key = j.value("active_job_key", string());
         }
 
-        req.state = SessionWaitState::to_enum(j.value("state", string()));
+        req.state = SessionState::to_enum(j.value("state", string()));
 
         if (const auto arr = j.value("pending_tool_calls", json::array()); arr.is_array())
         {

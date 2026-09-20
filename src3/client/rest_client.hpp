@@ -16,12 +16,12 @@ class RestClient
   public:
     using TokenCallback = std::function<bool(string_view piece)>;
 
-    struct Error : std::runtime_error
+    struct ClientError : std::runtime_error
     {
         int status = 0;
         string body;
 
-        Error(int status, string body, const string &what)
+        ClientError(const int status, string body, const string &what)
             : std::runtime_error(what), status(status), body(std::move(body))
         {
         }
@@ -40,13 +40,23 @@ class RestClient
         return "http://" + base_host_ + ":" + std::to_string(port_);
     }
 
-    /** GET /health → true if body is OK */
+    /**
+     * Do a health check against the server
+     *
+     * @return true if the server is healthy
+     */
     bool health()
     {
         auto res = cli_.Get("/health");
         return res && res->status == 200;
     }
 
+    /**
+     * Create a new session
+     *
+     * @param body The creation request
+     * @return Information on the created session
+     */
     SessionResponse create_session(const CreateSessionRequest &body)
     {
         body.validate();
@@ -55,44 +65,73 @@ class RestClient
         return resp;
     }
 
+    /**
+     * Get information on a specific session
+     *
+     * @param id The unique session id
+     * @return Information on the session
+     */
     SessionResponse get_session(const SessionID &id)
     {
-        return SessionResponse::from_json(request_json("GET", "/v1/sessions/" + id, std::nullopt, 200));
+        return SessionResponse::from_json(request_json("GET", "/v1/sessions/" + std::to_string(id), std::nullopt, 200));
     }
 
+    /**
+     * Delete the session with the supplied id. This will cleanup all of it's resources
+     * on the server and abort any running chat request if running
+     *
+     * @param id The session id
+     */
     void delete_session(const SessionID &id)
     {
-        auto res = cli_.Delete("/v1/sessions/" + id);
+        auto res = cli_.Delete("/v1/sessions/" + std::to_string(id));
         if (!res)
         {
-            throw Error(0, "", "delete session failed: no response from " + base_url());
+            throw ClientError(0, "", "delete session failed: no response from " + base_url());
         }
         if (res->status != 200 && res->status != 404)
         {
-            throw Error(res->status, res->body, "DELETE /v1/sessions/" + id + " failed");
+            throw ClientError(res->status, res->body, "DELETE /v1/sessions/" + std::to_string(id) + " failed");
         }
     }
 
-    /** POST message → {session_id,key} */
-    json post_message(const SessionID &session_id, const std::string &content, const std::string &role = "user")
+    /**
+     * Post a new chat message to the supplied session
+     *
+     * @param session_id The unique session id
+     * @param request The session creation request
+     * @return Information on the chat message
+     */
+    SessionMessageResponse post_message(const SessionID &session_id, const SessionMessageRequest &request)
     {
-        return request_json("POST", "/v1/sessions/" + session_id + "/messages",
-                            json{{"content", content}, {"role", role}}, 200);
+        request.validate();
+        auto resp = SessionMessageResponse::from_json(
+            request_json("POST", "/v1/sessions/" + std::to_string(session_id) + "/messages", request.to_json(), 200));
+        resp.validate();
+        return resp;
     }
 
     json post_tool_results(const SessionID &session_id, const json &tool_results)
     {
-        return request_json("POST", "/v1/sessions/" + session_id + "/tools", json{{"tool_results", tool_results}}, 200);
+        return request_json("POST", "/v1/sessions/" + std::to_string(session_id) + "/tools",
+                            json{{"tool_results", tool_results}}, 200);
     }
 
     json get_job(const SessionID &session_id, const JobKey &key)
     {
-        return request_json("GET", "/v1/sessions/" + session_id + "/jobs/" + key, std::nullopt, 200);
+        return request_json("GET", "/v1/sessions/" + std::to_string(session_id) + "/jobs/" + key, std::nullopt, 200);
     }
 
+    /**
+     * Try to cancel a non-finished job
+     *
+     * @param session_id The session id
+     * @param key The job key
+     * @return true if the job was cancelled successfully
+     */
     bool cancel_job(const SessionID &session_id, const JobKey &key)
     {
-        auto res = cli_.Delete("/v1/sessions/" + session_id + "/jobs/" + key);
+        auto res = cli_.Delete("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + key);
         return res && res->status == 200;
     }
 
@@ -111,74 +150,74 @@ class RestClient
         bool saw_done = false;
         bool client_cancel = false;
 
-        auto res =
-            cli_.Get("/v1/sessions/" + session_id + "/jobs/" + key + "/tokens", [&](const char *data, size_t len) {
-                if (saw_done)
-                {
-                    // Drain any trailing bytes after the terminal NDJSON line.
-                    return true;
-                }
-                line_buf.append(data, len);
-                for (;;)
-                {
-                    auto pos = line_buf.find('\n');
-                    if (pos == std::string::npos)
-                    {
-                        break;
-                    }
-                    std::string line = line_buf.substr(0, pos);
-                    line_buf.erase(0, pos + 1);
-                    if (line.empty())
-                    {
-                        continue;
-                    }
-                    // Strip optional CR from CRLF-framed lines.
-                    if (!line.empty() && line.back() == '\r')
-                    {
-                        line.pop_back();
-                    }
-                    json j = json::parse(line, nullptr, false);
-                    if (j.is_discarded())
-                    {
-                        continue;
-                    }
-                    const bool done = j.value("done", false);
-                    std::string tokens;
-                    if (j.contains("tokens"))
-                    {
-                        if (j["tokens"].is_string())
-                        {
-                            tokens = j["tokens"].get<std::string>();
-                        }
-                        else if (j["tokens"].is_array())
-                        {
-                            for (const auto &t : j["tokens"])
-                            {
-                                if (t.is_string())
+        auto res = cli_.Get("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + key + "/tokens",
+                            [&](const char *data, size_t len) {
+                                if (saw_done)
                                 {
-                                    tokens += t.get<std::string>();
+                                    // Drain any trailing bytes after the terminal NDJSON line.
+                                    return true;
                                 }
-                            }
-                        }
-                    }
-                    if (!tokens.empty())
-                    {
-                        accumulated += tokens;
-                        if (cb && !cb(tokens))
-                        {
-                            client_cancel = true;
-                            return false; // intentional cancel from callback
-                        }
-                    }
-                    if (done)
-                    {
-                        saw_done = true;
-                        // Keep returning true so httplib finishes the chunked response cleanly.
-                        return true;
-                    }
-                }
-                return true;
-            });
+                                line_buf.append(data, len);
+                                for (;;)
+                                {
+                                    auto pos = line_buf.find('\n');
+                                    if (pos == std::string::npos)
+                                    {
+                                        break;
+                                    }
+                                    std::string line = line_buf.substr(0, pos);
+                                    line_buf.erase(0, pos + 1);
+                                    if (line.empty())
+                                    {
+                                        continue;
+                                    }
+                                    // Strip optional CR from CRLF-framed lines.
+                                    if (!line.empty() && line.back() == '\r')
+                                    {
+                                        line.pop_back();
+                                    }
+                                    json j = json::parse(line, nullptr, false);
+                                    if (j.is_discarded())
+                                    {
+                                        continue;
+                                    }
+                                    const bool done = j.value("done", false);
+                                    std::string tokens;
+                                    if (j.contains("tokens"))
+                                    {
+                                        if (j["tokens"].is_string())
+                                        {
+                                            tokens = j["tokens"].get<std::string>();
+                                        }
+                                        else if (j["tokens"].is_array())
+                                        {
+                                            for (const auto &t : j["tokens"])
+                                            {
+                                                if (t.is_string())
+                                                {
+                                                    tokens += t.get<std::string>();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (!tokens.empty())
+                                    {
+                                        accumulated += tokens;
+                                        if (cb && !cb(tokens))
+                                        {
+                                            client_cancel = true;
+                                            return false; // intentional cancel from callback
+                                        }
+                                    }
+                                    if (done)
+                                    {
+                                        saw_done = true;
+                                        // Keep returning true so httplib finishes the chunked response cleanly.
+                                        return true;
+                                    }
+                                }
+                                return true;
+                            });
 
         if (!res)
         {
@@ -190,13 +229,14 @@ class RestClient
                 return accumulated;
             }
             const auto err = res.error();
-            throw Error(0, "",
+            throw ClientError(0, "",
                         "token stream failed: no response for job " + key + " (httplib error " +
                             std::to_string(static_cast<int>(err)) + ")");
         }
         if (res->status != 200)
         {
-            throw Error(res->status, res->body, "GET /v1/sessions/" + session_id + "/jobs/" + key + "/tokens failed");
+            throw ClientError(res->status, res->body,
+                        "GET /v1/sessions/" + std::to_string(session_id) + "/jobs/" + key + "/tokens failed");
         }
         return accumulated;
     }
@@ -224,31 +264,21 @@ class RestClient
         }
         else
         {
-            throw Error(0, "", std::string("unsupported method ") + method);
+            throw ClientError(0, "", std::string("unsupported method ") + method);
         }
 
         if (!res)
         {
-            throw Error(0, "", std::string(method) + " " + path + " failed: no response from " + base_url());
+            throw ClientError(0, "", std::string(method) + " " + path + " failed: no response from " + base_url());
         }
         if (res->status != expect_status)
         {
             std::string msg = std::string(method) + " " + path + " → HTTP " + std::to_string(res->status);
             try
             {
-                auto ej = json::parse(res->body);
-                if (ej.contains("error") && ej["error"].is_object())
-                {
-                    msg += ": " + ej["error"].value("message", ej["error"].dump());
-                }
-                else if (ej.contains("message"))
-                {
-                    msg += ": " + ej.value("message", res->body);
-                }
-                else if (!res->body.empty())
-                {
-                    msg += ": " + res->body;
-                }
+                const auto error_resp = ErrorResponse::from_json(json::parse(res->body));
+                msg += ": error_code(" + std::to_string(error_resp.error_code) + ") ";
+                msg += error_resp.message;
             }
             catch (...)
             {
@@ -257,7 +287,7 @@ class RestClient
                     msg += ": " + res->body;
                 }
             }
-            throw Error(res->status, res->body, msg);
+            throw ClientError(res->status, res->body, msg);
         }
         if (res->body.empty())
         {

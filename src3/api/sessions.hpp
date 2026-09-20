@@ -3,7 +3,12 @@
 #include "../common/std.hpp"
 #include "errors.hpp"
 
-struct SessionWaitState
+using SessionID = uint64_t;
+
+/**
+ * Session state
+ */
+struct SessionState
 {
     enum Value : int32_t
     {
@@ -19,8 +24,8 @@ struct SessionWaitState
         AwaitingQuestion,
     } value{Unknown};
 
-    SessionWaitState() = default;
-    SessionWaitState(Value value) : value{value}
+    SessionState() = default;
+    SessionState(Value value) : value{value}
     {
     }
 
@@ -44,7 +49,7 @@ struct SessionWaitState
         return !is_running();
     }
 
-    const char *to_string() const
+    [[nodiscard]] const char *to_string() const
     {
         switch (value)
         {
@@ -61,7 +66,7 @@ struct SessionWaitState
         }
     }
 
-    static SessionWaitState to_enum(const string &s)
+    static SessionState to_enum(const string &s)
     {
         if (s == "idle")
         {
@@ -122,7 +127,7 @@ struct SessionMessageRequest
 
 struct SessionMessageResponse
 {
-    string session_id;
+    SessionID session_id = 0;
     string key; // job key for GET /v1/sessions/:id/jobs/:key/tokens
 
     /**
@@ -130,7 +135,7 @@ struct SessionMessageResponse
      */
     void validate() const
     {
-        if (session_id.empty())
+        if (session_id == 0)
             throw BadRequest{"property 'session_id' is required"};
         if (key.empty())
             throw BadRequest{"property 'key' is required"};
@@ -139,7 +144,7 @@ struct SessionMessageResponse
     static SessionMessageResponse from_json(const json &j)
     {
         SessionMessageResponse resp;
-        resp.session_id = j.value("session_id", "");
+        resp.session_id = j.value("session_id", SessionID());
         resp.key = j.value("key", "");
         return resp;
     }

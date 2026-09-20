@@ -1,6 +1,7 @@
-#include "client/rest_client.hpp"
 #include "client/config.hpp"
+#include "client/rest_client.hpp"
 #include "common/defer.hpp"
+#include "common/log.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -18,7 +19,7 @@ namespace
 {
 
 /** Poll until session is not generating (job callback may lag stream EOF slightly). */
-SessionResponse wait_session_ready(RestClient &client, const std::string &session_id, int max_ms = 5000)
+SessionResponse wait_session_ready(RestClient &client, const SessionID &session_id, int max_ms = 5000)
 {
     const int step = 50;
     int waited = 0;
@@ -36,7 +37,7 @@ SessionResponse wait_session_ready(RestClient &client, const std::string &sessio
     return last;
 }
 
-std::string stream_job(RestClient &client, const std::string &session_id, const std::string &job_key, bool quiet)
+std::string stream_job(RestClient &client, const SessionID &session_id, const std::string &job_key, bool quiet)
 {
     ThinkingStreamFilter filter([quiet](std::string_view piece, bool is_thinking) {
         if (quiet)
@@ -203,7 +204,7 @@ std::optional<std::string> prompt_question_answer(const SessionResponse &session
  * Drive one user turn: post message (or continue from existing job), stream, resolve
  * tools/questions until idle or rounds exhausted.
  */
-bool drive_session_turn(RestClient &client, const std::string &session_id, std::span<const Tool> tools, CliConfig &cfg,
+bool drive_session_turn(RestClient &client, const SessionID &session_id, std::span<const Tool> tools, CliConfig &cfg,
                         const std::string *initial_job_key = nullptr)
 {
     std::string job_key = initial_job_key ? *initial_job_key : "";
@@ -212,11 +213,11 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
         if (job_key.empty())
         {
             auto session = wait_session_ready(client, session_id);
-            if (session.state.value == SessionWaitState::Idle)
+            if (session.state.value == SessionState::Idle)
             {
                 return true;
             }
-            if (session.state.value == SessionWaitState::AwaitingTools)
+            if (session.state.value == SessionState::AwaitingTools)
             {
                 auto results = run_pending_tools(session, tools, cfg);
                 if (results.empty())
@@ -228,15 +229,16 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
                 job_key = resp.value("key", "");
                 continue;
             }
-            if (session.state.value == SessionWaitState::AwaitingQuestion)
+            if (session.state.value == SessionState::AwaitingQuestion)
             {
                 auto ans = prompt_question_answer(session);
                 if (!ans)
                 {
                     return false;
                 }
-                auto resp = client.post_message(session_id, *ans);
-                job_key = resp.value("key", "");
+                auto resp = client.post_message(session_id,
+                                                SessionMessageRequest{.content = *ans, .role = ChatMessage::ROLE_USER});
+                job_key = resp.key;
                 continue;
             }
             return false;
@@ -255,7 +257,7 @@ bool drive_session_turn(RestClient &client, const std::string &session_id, std::
         }
 
         auto session = wait_session_ready(client, session_id);
-        if (session.state.value == SessionWaitState::Idle)
+        if (session.state.value == SessionState::Idle)
         {
             return true;
         }
@@ -274,19 +276,19 @@ int run_oneshot(RestClient &client, CliConfig &cfg)
 
     try
     {
-        auto resp = client.post_message(session_id, cfg.single_command);
-        const std::string key = resp.value("key", "");
-        if (key.empty())
-        {
-            fprintf(stderr, "no job key returned\n");
-            return 1;
-        }
-        std::string text = stream_job(client, session_id, key, cfg.quiet);
+        auto resp = client.post_message(
+            session_id, SessionMessageRequest{.content = cfg.single_command, .role = ChatMessage::ROLE_USER});
+        const auto text = stream_job(client, session_id, resp.key, cfg.quiet);
         if (cfg.quiet)
         {
             printf("%s\n", strip_think_tags(text).c_str());
         }
         return 0;
+    }
+    catch (const BadRequest &e)
+    {
+        log_error(e.what());
+        return 1;
     }
     catch (...)
     {
@@ -302,8 +304,8 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
 
     if (!cfg.quiet)
     {
-        printf("%s[client] session %s at %s (questions=%s)%s\n", Color::CYAN, session_id.c_str(),
-               client.base_url().c_str(), cfg.questions ? "true" : "false", Color::RESET);
+        printf("%s[client] session %lud at %s (questions=%s)%s\n", Color::CYAN, session_id, client.base_url().c_str(),
+               cfg.questions ? "true" : "false", Color::RESET);
     }
 
     defer(client.delete_session(session_id));
@@ -315,9 +317,9 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         }
         try
         {
-            auto resp = client.post_message(session_id, text);
-            std::string key = resp.value("key", "");
-            return drive_session_turn(client, session_id, tools, cfg, &key);
+            const auto resp =
+                client.post_message(session_id, SessionMessageRequest{.content = text, .role = ChatMessage::ROLE_USER});
+            return drive_session_turn(client, session_id, tools, cfg, &resp.key);
         }
         catch (const std::exception &e)
         {
@@ -439,7 +441,6 @@ int main(int argc, char **argv)
 {
     std::setlocale(LC_NUMERIC, "C");
 
-
     CliConfig cfg;
     try
     {
@@ -497,7 +498,7 @@ int main(int argc, char **argv)
             rc = run_session_mode(client, cfg, tools);
         }
     }
-    catch (const RestClient::Error &e)
+    catch (const RestClient::ClientError &e)
     {
         fprintf(stderr, "%s[http %d] %s%s\n", Color::RED, e.status, e.what(), Color::RESET);
         rc = 1;

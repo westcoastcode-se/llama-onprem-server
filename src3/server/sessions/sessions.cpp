@@ -8,11 +8,6 @@ Sessions::Sessions(Jobs &jobs) : jobs_(jobs)
 {
 }
 
-SessionID Sessions::next_id()
-{
-    return std::to_string(id_counter_.fetch_add(1, std::memory_order_relaxed));
-}
-
 void Sessions::unsafe_gc()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -20,7 +15,7 @@ void Sessions::unsafe_gc()
     {
         auto &s = it->second;
         std::lock_guard slock(s->mutex);
-        const bool idle = !s->active_job_key.has_value() && s->wait_state == SessionWaitState::Idle;
+        const bool idle = !s->active_job_key.has_value() && s->state == SessionState::Idle;
         if (idle && now - s->last_active > kIdleTtl)
         {
             it = sessions_.erase(it);
@@ -40,20 +35,19 @@ std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
     }
 
     auto session = std::make_shared<Session>();
-    session->id = next_id();
     session->questions_enabled = req.questions;
     if (req.system.empty())
     {
-        session->system = default_agent_system_prompt("", req.questions);
+        session->system_prompt = default_agent_system_prompt("", req.questions);
     }
     else if (req.system.find("<tool_call>") == std::string::npos)
     {
         // Keep user system text, append tool/question protocol if not already present
-        session->system = default_agent_system_prompt(req.system, req.questions);
+        session->system_prompt = default_agent_system_prompt(req.system, req.questions);
     }
     else
     {
-        session->system = std::move(req.system);
+        session->system_prompt = std::move(req.system);
     }
     session->messages = std::move(req.messages);
 
@@ -114,7 +108,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
 
     if (task.get_state() != TaskState::Done)
     {
-        session->wait_state = SessionWaitState::Idle;
+        session->state = SessionState::Idle;
         session->clear_pending();
         return;
     }
@@ -146,16 +140,16 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
         // Tool calls take precedence; client must resolve before question
         session->pending_tool_calls = std::move(actions.tool_calls);
         session->pending_question = std::move(actions.question);
-        session->wait_state = SessionWaitState::AwaitingTools;
+        session->state = SessionState::AwaitingTools;
     }
     else if (actions.question)
     {
         session->pending_question = std::move(actions.question);
-        session->wait_state = SessionWaitState::AwaitingQuestion;
+        session->state = SessionState::AwaitingQuestion;
     }
     else
     {
-        session->wait_state = SessionWaitState::Idle;
+        session->state = SessionState::Idle;
     }
 }
 
@@ -164,14 +158,14 @@ optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &sess
     MessagesRequest req;
     {
         std::lock_guard slock(session->mutex);
-        req.system = session->system;
+        req.system = session->system_prompt;
         req.messages = session->messages;
-        session->wait_state = SessionWaitState::Generating;
+        session->state = SessionState::Generating;
         session->clear_pending();
         session->touch();
     }
 
-    std::weak_ptr<Session> weak = session;
+    std::weak_ptr weak = session;
     auto key = jobs_.submit(std::move(req), [this, weak](const Task &task) {
         if (auto s = weak.lock())
         {
@@ -179,18 +173,12 @@ optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &sess
         }
     });
 
-    if (!key)
+    // TODO: Refactor these inner scopes with a method on the actual session object instead
     {
         std::lock_guard slock(session->mutex);
-        session->wait_state = SessionWaitState::Idle;
-        session->active_job_key.reset();
-        return std::nullopt;
+        session->active_job_key = key;
     }
 
-    {
-        std::lock_guard slock(session->mutex);
-        session->active_job_key = *key;
-    }
     return key;
 }
 
@@ -208,13 +196,13 @@ optional<Task::Key> Sessions::post_message(const SessionID &id, const SessionMes
 
     {
         std::lock_guard slock(session->mutex);
-        if (session->active_job_key.has_value() || session->wait_state == SessionWaitState::Generating)
+        if (session->active_job_key.has_value() || session->state == SessionState::Generating)
         {
             throw Busy("session already has an active generation");
         }
         // New user message supersedes pending tool/question waits
         session->clear_pending();
-        session->wait_state = SessionWaitState::Idle;
+        session->state = SessionState::Idle;
         session->messages.push_back(ChatMessage{.role = msg.role, .content = msg.content});
         session->touch();
     }
@@ -247,11 +235,11 @@ optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const Sessi
 
     {
         std::lock_guard slock(session->mutex);
-        if (session->active_job_key.has_value() || session->wait_state == SessionWaitState::Generating)
+        if (session->active_job_key.has_value() || session->state == SessionState::Generating)
         {
             throw Busy("session already has an active generation");
         }
-        if (session->wait_state != SessionWaitState::AwaitingTools && session->pending_tool_calls.empty())
+        if (session->state != SessionState::AwaitingTools && session->pending_tool_calls.empty())
         {
             throw BadRequest("session is not awaiting tool results");
         }
@@ -285,7 +273,7 @@ optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const Sessi
 
         session->messages.push_back(ChatMessage{.role = ChatMessage::ROLE_USER, .content = combined.str()});
         session->clear_pending();
-        session->wait_state = SessionWaitState::Idle;
+        session->state = SessionState::Idle;
         session->touch();
     }
 
@@ -298,7 +286,7 @@ optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const Sessi
         {
             session->messages.pop_back();
         }
-        session->wait_state = SessionWaitState::AwaitingTools;
+        session->state = SessionState::AwaitingTools;
         return std::nullopt;
     }
     return key;
