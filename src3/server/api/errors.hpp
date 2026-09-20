@@ -8,11 +8,6 @@ struct NotFound : std::runtime_error
     using std::runtime_error::runtime_error;
 };
 
-struct BadRequest : std::runtime_error
-{
-    using std::runtime_error::runtime_error;
-};
-
 struct Busy : std::runtime_error
 {
     using std::runtime_error::runtime_error;

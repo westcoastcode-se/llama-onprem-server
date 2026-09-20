@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../common/std.hpp"
+#include "sessions.hpp"
 
 using SessionID = string;
 using MessageID = string;
@@ -9,6 +10,17 @@ struct ChatMessage
 {
     string role;
     string content;
+
+    /**
+     * Validate required properties
+     */
+    void validate() const
+    {
+        if (role.empty())
+            throw BadRequest{"property 'role' is required"};
+        if (content.empty())
+            throw BadRequest{"property 'content' is required"};
+    }
 
     static ChatMessage from_json(const nlohmann::json &j)
     {
@@ -23,6 +35,8 @@ struct ChatMessage
 
     [[nodiscard]] nlohmann::json to_json() const
     {
+        validate();
+
         // clang-format off
         return json
         {
@@ -168,8 +182,21 @@ struct SessionResponse
     // TODO: This should be part of the client and not the server
     bool questions = true;
 
+    /**
+     * Validate required properties
+     */
+    void validate() const
+    {
+        if (id.empty())
+            throw BadRequest{"property 'id' is required"};
+        if (state.empty())
+            throw BadRequest{"property 'state' is required"};
+    }
+
     [[nodiscard]] json to_json() const
     {
+        validate();
+
         json arr = json::array();
         for (const auto &m : messages)
             arr.push_back(m.to_json());

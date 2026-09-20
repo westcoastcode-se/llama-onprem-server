@@ -5,35 +5,6 @@
 #include "errors.hpp"
 #include "../../api/models.hpp"
 
-struct SessionMessageRequest
-{
-    string content;
-    string role = "user";
-
-    static SessionMessageRequest from_json(const json &j)
-    {
-        SessionMessageRequest req;
-        req.content = j.value("content", "");
-        req.role = j.value("role", "user");
-        if (req.content.empty())
-            throw BadRequest{"property 'content' is required"};
-        if (req.role.empty())
-            throw BadRequest{"property 'role' is required"};
-        return req;
-    }
-};
-
-struct SessionMessageResponse
-{
-    string session_id;
-    string key; // job key for /v1/messages/:key/tokens
-
-    [[nodiscard]] json to_json() const
-    {
-        return {{"session_id", session_id}, {"key", key}};
-    }
-};
-
 struct ToolResultItem
 {
     string id;
