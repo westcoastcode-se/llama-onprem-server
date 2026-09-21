@@ -27,11 +27,10 @@ void Jobs::unsafe_gc()
     const auto now = std::chrono::steady_clock::now();
     for (auto it = tasks_.begin(); it != tasks_.end();)
     {
-        auto st = it->second->get_state();
-        const bool finished = st == TaskState::Done || st == TaskState::Error || st == TaskState::Cancelled;
-        if (finished)
+        const auto st = it->second->get_state();
+        if (st.is_finished())
         {
-            auto finished_at = it->second->finished_at;
+            const auto finished_at = it->second->finished_at;
             if (finished_at.time_since_epoch().count() != 0 && now - finished_at > kFinishedTtl)
             {
                 it = tasks_.erase(it);
@@ -42,12 +41,7 @@ void Jobs::unsafe_gc()
     }
 }
 
-Task::Key Jobs::next_key()
-{
-    return std::to_string(key_counter_.fetch_add(1, std::memory_order_relaxed));
-}
-
-Task::Key Jobs::submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished)
+JobKey Jobs::submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished)
 {
     std::lock_guard lock(mutex_);
 
@@ -55,10 +49,9 @@ Task::Key Jobs::submit(MessagesRequest&& request, std::function<void(const Task 
     unsafe_gc();
 
     const auto task = std::make_shared<Task>();
-    task->key = next_key();
     task->request = std::move(request);
     task->on_finished = std::move(on_finished);
-    task->state = TaskState::Queued;
+    task->state = JobState::Queued;
 
     tasks_[task->key] = task;
     queue_.push_back(task->key);
@@ -86,7 +79,7 @@ void notify_finished(const std::shared_ptr<Task> &task)
 }
 } // namespace
 
-std::shared_ptr<Task> Jobs::get_task(const std::string &key)
+std::shared_ptr<Task> Jobs::get_task(const JobKey key)
 {
     std::lock_guard lock(mutex_);
     auto it = tasks_.find(key);
@@ -97,7 +90,7 @@ std::shared_ptr<Task> Jobs::get_task(const std::string &key)
     return it->second;
 }
 
-bool Jobs::cancel(const Task::Key &key)
+bool Jobs::cancel(const JobKey key)
 {
     std::shared_ptr<Task> task;
     {
@@ -124,7 +117,7 @@ bool Jobs::cancel(const Task::Key &key)
     task->request_cancel();
 
     /// If the task was immediately cancelled then mark it as done
-    if (task->get_state() == TaskState::Cancelled)
+    if (task->get_state() == JobState::Cancelled)
     {
         task->buffer->set_done();
         notify_finished(task);
@@ -162,7 +155,7 @@ std::shared_ptr<Task> Jobs::pop_next_queued()
 
         // Ignore any cancelled jobs and look for the next job
         auto task = it->second;
-        if (task->is_cancel_requested() || task->get_state() == TaskState::Cancelled)
+        if (task->is_cancel_requested() || task->get_state() == JobState::Cancelled)
         {
             continue;
         }
@@ -189,13 +182,13 @@ void Jobs::worker_loop()
         // Is the task cancelled?
         if (task->is_cancel_requested())
         {
-            task->set_state(TaskState::Cancelled);
+            task->set_state(JobState::Cancelled);
             task->buffer->set_done();
             notify_finished(task);
             continue;
         }
 
-        task->set_state(TaskState::Running);
+        task->set_state(JobState::Running);
 
         // Build message list: optional system + messages
         std::vector<ChatMessage> msgs;
@@ -229,7 +222,7 @@ void Jobs::worker_loop()
 
         if (task->is_cancel_requested() || buffer->is_cancelled())
         {
-            task->set_state(TaskState::Cancelled);
+            task->set_state(JobState::Cancelled);
             task->set_result(std::move(response));
             buffer->set_done();
             notify_finished(task);
@@ -246,7 +239,7 @@ void Jobs::worker_loop()
             auto actions = parse_assistant_actions(task->get_result());
             task->set_actions(std::move(actions));
         }
-        task->set_state(TaskState::Done);
+        task->set_state(JobState::Done);
         buffer->set_done();
         notify_finished(task);
     }

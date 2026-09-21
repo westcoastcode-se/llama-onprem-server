@@ -6,25 +6,6 @@
 
 namespace
 {
-/**
- * Resolve a job that belongs to a session.
- * Accepts the session's active job or any known job key while the session still exists
- * (finished jobs clear active_job_key but remain queryable briefly for status/stream tail).
- */
-std::shared_ptr<Task> require_session_job(AppState &state, const SessionID &session_id,
-                                          const std::string &job_key)
-{
-    auto session = state.sessions.get(session_id);
-    if (!session)
-        throw NotFound("session not found");
-
-    auto task = state.jobs.get_task(job_key);
-    if (!task)
-        throw NotFound("job not found");
-
-    return task;
-}
-
 void send_job_token_stream(const httplib::Request &req, httplib::Response &res,
                            const std::shared_ptr<Task> &task)
 {
@@ -114,8 +95,8 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     // Job status for a generation started via this session
     s.Get("/v1/sessions/:id/jobs/:job", [&state](const httplib::Request &req, httplib::Response &res) {
         const SessionID id = std::stoll(req.path_params.at("id"));
-        auto job_key = req.path_params.at("job");
-        auto task = require_session_job(state, id, job_key);
+        const JobKey job_key = std::stoll(req.path_params.at("job"));
+        const auto task = state.require_session_job(id, job_key);
 
         auto status = task->to_status();
         if (!status.done)
@@ -127,11 +108,9 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Cancel a job for this session
     s.Delete("/v1/sessions/:id/jobs/:job", [&state](const httplib::Request &req, httplib::Response &res) {
-        const SessionID id = std::stoll(req.path_params.at("id"));
-        auto job_key = req.path_params.at("job");
-        // Ensure session exists (and job is known)
-        require_session_job(state, id, job_key);
-        if (!state.jobs.cancel(job_key))
+        const SessionID session_id = std::stoll(req.path_params.at("id"));
+        const JobKey job_key = std::stoll(req.path_params.at("job"));
+        if (!state.try_cancel_job(session_id, job_key))
             throw NotFound("job not found");
         res.status = 200;
         res.set_content(R"({"cancelled":true})", "application/json");
@@ -141,8 +120,8 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     s.Get("/v1/sessions/:id/jobs/:job/tokens",
           [&state](const httplib::Request &req, httplib::Response &res) {
               const SessionID id = std::stoll(req.path_params.at("id"));
-              auto job_key = req.path_params.at("job");
-              auto task = require_session_job(state, id, job_key);
+              const JobKey job_key = std::stoll(req.path_params.at("job"));
+              auto task = state.require_session_job(id, job_key);
               send_job_token_stream(req, res, task);
           });
 }

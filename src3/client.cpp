@@ -37,7 +37,7 @@ SessionResponse wait_session_ready(RestClient &client, const SessionID &session_
     return last;
 }
 
-std::string stream_job(RestClient &client, const SessionID &session_id, const std::string &job_key, bool quiet)
+std::string stream_job(RestClient &client, const SessionID &session_id, const JobKey job_key, bool quiet)
 {
     ThinkingStreamFilter filter([quiet](std::string_view piece, bool is_thinking) {
         if (quiet)
@@ -205,63 +205,63 @@ std::optional<std::string> prompt_question_answer(const SessionResponse &session
  * tools/questions until idle or rounds exhausted.
  */
 bool drive_session_turn(RestClient &client, const SessionID &session_id, std::span<const Tool> tools, CliConfig &cfg,
-                        const std::string *initial_job_key = nullptr)
+                        const JobKey initial_job_key)
 {
-    std::string job_key = initial_job_key ? *initial_job_key : "";
+    JobKey job_key = initial_job_key;
     for (int round = 0; round < cfg.max_tool_rounds; ++round)
     {
-        if (job_key.empty())
+        auto session = wait_session_ready(client, session_id);
+        if (session.state.is_running())
         {
-            auto session = wait_session_ready(client, session_id);
+            // Stream job output (thinking)
+            stream_job(client, session_id, job_key, cfg.quiet);
+
+            // Wait for the session to be ready for more input - if
+            // idle then no more session specific input is required.
+            // TODO: Move the question and answering out from this method
+            session = wait_session_ready(client, session_id);
             if (session.state.value == SessionState::Idle)
             {
                 return true;
             }
-            if (session.state.value == SessionState::AwaitingTools)
-            {
-                auto results = run_pending_tools(session, tools, cfg);
-                if (results.empty())
-                {
-                    fprintf(stderr, "%s[client] awaiting_tools but no tool_calls%s\n", Color::RED, Color::RESET);
-                    return false;
-                }
-                auto resp = client.post_tool_results(session_id, results);
-                job_key = resp.value("key", "");
-                continue;
-            }
-            if (session.state.value == SessionState::AwaitingQuestion)
-            {
-                auto ans = prompt_question_answer(session);
-                if (!ans)
-                {
-                    return false;
-                }
-                auto resp = client.post_message(session_id,
-                                                SessionMessageRequest{.content = *ans, .role = ChatMessage::ROLE_USER});
-                job_key = resp.key;
-                continue;
-            }
-            return false;
         }
 
-        stream_job(client, session_id, job_key, cfg.quiet);
-        job_key.clear();
-
-        // Optional: surface job error
-        try
-        {
-            // job may still exist briefly
-        }
-        catch (...)
-        {
-        }
-
-        auto session = wait_session_ready(client, session_id);
         if (session.state.value == SessionState::Idle)
         {
             return true;
         }
-        // loop continues to handle awaiting_* without a job key
+
+        if (session.state.value == SessionState::AwaitingTools)
+        {
+            auto results = run_pending_tools(session, tools, cfg);
+            if (results.empty())
+            {
+                fprintf(stderr, "%s[client] awaiting_tools but no tool_calls%s\n", Color::RED, Color::RESET);
+                return false;
+            }
+            auto resp = client.post_tool_results(session_id, results);
+            job_key = resp.value("key", JobKey());
+            if (job_key == 0)
+            {
+                throw BadRequest{"required property 'key' is missing"};
+            }
+            continue;
+        }
+
+        if (session.state.value == SessionState::AwaitingQuestion)
+        {
+            auto ans = prompt_question_answer(session);
+            if (!ans)
+            {
+                return false;
+            }
+            const auto resp = client.post_message(session_id,
+                                            SessionMessageRequest{.content = *ans, .role = ChatMessage::ROLE_USER});
+            job_key = resp.key;
+            continue;
+        }
+
+        return false;
     }
     fprintf(stderr, "%s[client] max tool/question rounds reached%s\n", Color::RED, Color::RESET);
     return false;
@@ -319,7 +319,7 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         {
             const auto resp =
                 client.post_message(session_id, SessionMessageRequest{.content = text, .role = ChatMessage::ROLE_USER});
-            return drive_session_turn(client, session_id, tools, cfg, &resp.key);
+            return drive_session_turn(client, session_id, tools, cfg, resp.key);
         }
         catch (const std::exception &e)
         {

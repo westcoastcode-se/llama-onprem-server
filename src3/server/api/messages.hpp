@@ -28,24 +28,41 @@ struct MessageTokensResponse
 /** GET /v1/sessions/:id/jobs/:key */
 struct MessageStatusResponse
 {
-    string key;
-    string state; // queued|running|done|error|cancelled
+    JobKey key = 0;
+    JobState state = JobState::Unknown;
     bool done = false;
     string content;
     string error;
     vector<ParsedToolCall> tool_calls;
     optional<ParsedQuestion> question;
 
-    [[nodiscard]] nlohmann::json to_json() const
+    /**
+     * Validate required properties
+     */
+    void validate() const
     {
-        nlohmann::json j{{"key", key}, {"state", state}, {"done", done}, {"content", content}};
+        if (key == 0)
+            throw BadRequest{"property 'key' is required"};
+        if (state.value == JobState::Unknown)
+            throw BadRequest{"property 'state' is required"};
+    }
+
+    [[nodiscard]] json to_json() const
+    {
+        json j
+        {
+            {"key", key},
+            {"state", state.to_string()},
+            {"done", done},
+            {"content", content}
+        };
         if (!error.empty())
         {
             j["error"] = error;
         }
         if (!tool_calls.empty())
         {
-            nlohmann::json arr = nlohmann::json::array();
+            auto arr = nlohmann::json::array();
             for (const auto &tc : tool_calls)
             {
                 arr.push_back(tc.to_json());

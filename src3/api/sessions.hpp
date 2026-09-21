@@ -4,6 +4,7 @@
 #include "errors.hpp"
 
 using SessionID = uint64_t;
+using JobKey = uint64_t;
 
 /**
  * Session state
@@ -128,7 +129,7 @@ struct SessionMessageRequest
 struct SessionMessageResponse
 {
     SessionID session_id = 0;
-    string key; // job key for GET /v1/sessions/:id/jobs/:key/tokens
+    JobKey key = 0;
 
     /**
      * Validate required properties
@@ -137,7 +138,7 @@ struct SessionMessageResponse
     {
         if (session_id == 0)
             throw BadRequest{"property 'session_id' is required"};
-        if (key.empty())
+        if (key == 0)
             throw BadRequest{"property 'key' is required"};
     }
 
@@ -145,7 +146,7 @@ struct SessionMessageResponse
     {
         SessionMessageResponse resp;
         resp.session_id = j.value("session_id", SessionID());
-        resp.key = j.value("key", "");
+        resp.key = j.value("key", JobKey());
         return resp;
     }
 

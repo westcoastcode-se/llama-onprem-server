@@ -117,9 +117,10 @@ class RestClient
                             json{{"tool_results", tool_results}}, 200);
     }
 
-    json get_job(const SessionID &session_id, const JobKey &key)
+    json get_job(const SessionID session_id, const JobKey key)
     {
-        return request_json("GET", "/v1/sessions/" + std::to_string(session_id) + "/jobs/" + key, std::nullopt, 200);
+        return request_json("GET", "/v1/sessions/" + std::to_string(session_id) + "/jobs/" +
+            std::to_string(key), std::nullopt, 200);
     }
 
     /**
@@ -129,9 +130,9 @@ class RestClient
      * @param key The job key
      * @return true if the job was cancelled successfully
      */
-    bool cancel_job(const SessionID &session_id, const JobKey &key)
+    bool cancel_job(const SessionID session_id, const JobKey key)
     {
-        auto res = cli_.Delete("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + key);
+        auto res = cli_.Delete("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + std::to_string(key));
         return res && res->status == 200;
     }
 
@@ -143,14 +144,14 @@ class RestClient
      * chunked body. Returning false makes cpp-httplib treat the call as
      * Error::Canceled with a null Result (looks like "no response").
      */
-    std::string stream_tokens(const SessionID &session_id, const JobKey &key, const TokenCallback &cb = nullptr)
+    std::string stream_tokens(const SessionID session_id, const JobKey key, const TokenCallback &cb = nullptr)
     {
         std::string accumulated;
         std::string line_buf;
         bool saw_done = false;
         bool client_cancel = false;
 
-        auto res = cli_.Get("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + key + "/tokens",
+        auto res = cli_.Get("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + std::to_string(key) + "/tokens",
                             [&](const char *data, size_t len) {
                                 if (saw_done)
                                 {
@@ -230,13 +231,13 @@ class RestClient
             }
             const auto err = res.error();
             throw ClientError(0, "",
-                        "token stream failed: no response for job " + key + " (httplib error " +
+                        "token stream failed: no response for job " + std::to_string(key) + " (httplib error " +
                             std::to_string(static_cast<int>(err)) + ")");
         }
         if (res->status != 200)
         {
             throw ClientError(res->status, res->body,
-                        "GET /v1/sessions/" + std::to_string(session_id) + "/jobs/" + key + "/tokens failed");
+                        "GET /v1/sessions/" + std::to_string(session_id) + "/jobs/" + std::to_string(key) + "/tokens failed");
         }
         return accumulated;
     }

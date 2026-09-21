@@ -18,38 +18,10 @@
 #include <thread>
 #include <unordered_map>
 
-enum class TaskState
-{
-    Queued,
-    Running,
-    Done,
-    Error,
-    Cancelled
-};
-
-inline const char *to_string(const TaskState s)
-{
-    switch (s)
-    {
-    case TaskState::Queued:
-        return "queued";
-    case TaskState::Running:
-        return "running";
-    case TaskState::Done:
-        return "done";
-    case TaskState::Error:
-        return "error";
-    case TaskState::Cancelled:
-        return "cancelled";
-    }
-    return "unknown";
-}
-
 struct Task
 {
-    using Key = std::string;
-
-    Key key;
+    // Unique ID for the task
+    JobKey key = std::chrono::high_resolution_clock::now().time_since_epoch().count();;
     MessagesRequest request;
     std::shared_ptr<TokenBuffer> buffer = std::make_shared<TokenBuffer>();
 
@@ -60,7 +32,7 @@ struct Task
     std::function<void(const Task &)> on_finished;
 
     mutable std::mutex mutex;
-    TaskState state = TaskState::Queued;
+    JobState state = JobState::Queued;
     std::string error;
     std::string result;
     std::atomic<bool> cancel_requested{false};
@@ -69,17 +41,17 @@ struct Task
     std::vector<ParsedToolCall> tool_calls;
     std::optional<ParsedQuestion> question;
 
-    void set_state(TaskState s)
+    void set_state(JobState s)
     {
         std::lock_guard lock(mutex);
         state = s;
-        if (s == TaskState::Done || s == TaskState::Error || s == TaskState::Cancelled)
+        if (s.is_finished())
         {
             finished_at = std::chrono::steady_clock::now();
         }
     }
 
-    [[nodiscard]] TaskState get_state() const
+    [[nodiscard]] JobState get_state() const
     {
         std::lock_guard lock(mutex);
         return state;
@@ -89,7 +61,7 @@ struct Task
     {
         std::lock_guard lock(mutex);
         error = std::move(msg);
-        state = TaskState::Error;
+        state = JobState::Error;
         finished_at = std::chrono::steady_clock::now();
     }
 
@@ -137,8 +109,8 @@ struct Task
         std::lock_guard lock(mutex);
         MessageStatusResponse r;
         r.key = key;
-        r.state = to_string(state);
-        r.done = state == TaskState::Done || state == TaskState::Error || state == TaskState::Cancelled;
+        r.state = state;
+        r.done = state.is_finished();
         r.content = result;
         r.error = error;
         r.tool_calls = tool_calls;
@@ -173,16 +145,16 @@ class Jobs
      * @param on_finished optional callback invoked once when task finishes (any terminal state).
      * @return A unique key that represents the job
      */
-    Task::Key submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished = nullptr);
+    JobKey submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished = nullptr);
 
-    std::shared_ptr<Task> get_task(const Task::Key &key);
+    std::shared_ptr<Task> get_task(JobKey key);
 
     /**
      *
      * @param key The task key
      * @return
      */
-    bool cancel(const Task::Key &key);
+    bool cancel(JobKey key);
 
     void gc();
 
@@ -190,13 +162,11 @@ class Jobs
     LlamaEngine &engine_;
     std::mutex mutex_;
     std::condition_variable cv_;
-    std::unordered_map<Task::Key, std::shared_ptr<Task>> tasks_;
-    std::deque<Task::Key> queue_;
-    std::atomic<uint64_t> key_counter_{1};
+    std::unordered_map<JobKey, std::shared_ptr<Task>> tasks_;
+    std::deque<JobKey> queue_;
     std::atomic<bool> stop_{false};
     std::thread worker_;
 
-    Task::Key next_key();
     void worker_loop();
     void unsafe_gc();
     std::shared_ptr<Task> pop_next_queued();

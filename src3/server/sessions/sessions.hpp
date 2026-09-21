@@ -29,7 +29,7 @@ struct Session
     string system_prompt;
     // All chat messages associated with this session
     vector<ChatMessage> messages;
-    optional<Task::Key> active_job_key;
+    optional<JobKey> active_job_key;
     // What state the session is in
     SessionState state = SessionState::Idle;
     vector<ParsedToolCall> pending_tool_calls;
@@ -122,14 +122,14 @@ class Sessions
      *
      * @return job key, or nullopt if queue full.
      */
-    optional<Task::Key> post_message(const SessionID &id, const SessionMessageRequest& msg);
+    optional<JobKey> post_message(const SessionID &id, const SessionMessageRequest& msg);
 
     /**
      * Client finished running pending tool_calls; append tool results and continue.
      *
      * @return new job key, or empty if queue full.
      */
-    optional<Task::Key> post_tool_results(const SessionID &id, const SessionToolResultsRequest& body);
+    optional<JobKey> post_tool_results(const SessionID &id, const SessionToolResultsRequest& body);
 
     void gc();
 
@@ -140,7 +140,7 @@ class Sessions
 
     void unsafe_gc();
 
-    optional<Task::Key> enqueue_generation(const shared_ptr<Session> &session);
+    optional<JobKey> enqueue_generation(const shared_ptr<Session> &session);
 
     /**
      * Method called when a job is finished

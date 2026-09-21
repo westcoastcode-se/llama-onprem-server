@@ -80,7 +80,7 @@ shared_ptr<Session> Sessions::destroy(const SessionID &id)
         sessions_.erase(it);
     }
 
-    optional<Task::Key> job_key;
+    optional<JobKey> job_key;
     {
         std::lock_guard slock(session->mutex);
         job_key = session->active_job_key;
@@ -106,7 +106,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
     session->active_job_key.reset();
     session->touch();
 
-    if (task.get_state() != TaskState::Done)
+    if (task.get_state() != JobState::Done)
     {
         session->state = SessionState::Idle;
         session->clear_pending();
@@ -153,7 +153,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
     }
 }
 
-optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &session)
+optional<JobKey> Sessions::enqueue_generation(const shared_ptr<Session> &session)
 {
     MessagesRequest req;
     {
@@ -182,7 +182,7 @@ optional<Task::Key> Sessions::enqueue_generation(const shared_ptr<Session> &sess
     return key;
 }
 
-optional<Task::Key> Sessions::post_message(const SessionID &id, const SessionMessageRequest& msg)
+optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessageRequest& msg)
 {
     auto session = get(id);
     if (!session)
@@ -221,7 +221,7 @@ optional<Task::Key> Sessions::post_message(const SessionID &id, const SessionMes
     return key;
 }
 
-optional<Task::Key> Sessions::post_tool_results(const SessionID &id, const SessionToolResultsRequest& body)
+optional<JobKey> Sessions::post_tool_results(const SessionID &id, const SessionToolResultsRequest& body)
 {
     auto session = get(id);
     if (!session)

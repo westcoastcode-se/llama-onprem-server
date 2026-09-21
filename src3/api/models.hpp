@@ -3,7 +3,87 @@
 #include "../common/std.hpp"
 #include "sessions.hpp"
 
-using JobKey = string;
+/**
+ * Session state
+ */
+struct JobState
+{
+    enum Value : int32_t
+    {
+        // Unknown
+        Unknown = -1,
+        Queued,
+        Running,
+        Done,
+        Error,
+        Cancelled
+    } value{Unknown};
+
+    JobState() = default;
+    JobState(const Value value) : value{value}
+    {
+    }
+
+    bool operator==(const Value &v) const
+    {
+        return value == v;
+    }
+
+    bool operator != (const Value &v) const
+    {
+        return value != v;
+    }
+
+    [[nodiscard]] bool is_finished() const
+    {
+        return value == Done || value == Error || value == Cancelled;
+    }
+
+    [[nodiscard]] const char *to_string() const
+    {
+        switch (value)
+        {
+        case Queued:
+            return "queued";
+        case Running:
+            return "running";
+        case Done:
+            return "done";
+        case Error:
+            return "error";
+        case Cancelled:
+            return "cancelled";
+        default:
+            throw std::runtime_error{"unknown JobState: " + std::to_string(value)};
+        }
+    }
+
+    static JobState to_enum(const string &s)
+    {
+        if (s == "queued")
+        {
+            return Queued;
+        }
+        if (s == "running")
+        {
+            return  Running;
+        }
+        if (s == "done")
+        {
+            return Done;
+        }
+        if (s == "error")
+        {
+            return Error;
+        }
+        if (s == "cancelled")
+        {
+            return Cancelled;
+        }
+        throw std::runtime_error{"unknown JobState: " + s};
+    }
+};
+
 
 struct ChatMessage
 {
@@ -179,7 +259,7 @@ struct SessionResponse
     // The system prompt
     string system_prompt;
     vector<ChatMessage> messages;
-    optional<string> active_job_key;
+    optional<JobKey> active_job_key;
     SessionState state;
 
     // Pending tool calls
@@ -262,7 +342,7 @@ struct SessionResponse
 
         if (j.contains("active_job_key"))
         {
-            req.active_job_key = j.value("active_job_key", string());
+            req.active_job_key = j.value("active_job_key", JobKey());
         }
 
         req.state = SessionState::to_enum(j.value("state", string()));
