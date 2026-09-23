@@ -161,3 +161,23 @@ struct SessionMessageResponse
         // clang-format on
     }
 };
+
+/** NDJSON line for GET /v1/sessions/:id/jobs/:key/tokens */
+struct MessageTokensResponse
+{
+    string tokens;
+    bool done = false;
+
+    [[nodiscard]] json to_json() const
+    {
+        return {{"tokens", tokens}, {"done", done}};
+    }
+
+    static MessageTokensResponse from_json(json &j)
+    {
+        return MessageTokensResponse{
+            .tokens = j.value("tokens", string()),
+            .done = j.value("done", false),
+        };
+    }
+};

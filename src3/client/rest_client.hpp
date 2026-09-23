@@ -2,6 +2,7 @@
 
 #include "../api/models.hpp"
 #include "../common/std.hpp"
+#include "common/log.hpp"
 
 #include <functional>
 #include <httplib.h>
@@ -14,7 +15,7 @@
 class RestClient
 {
   public:
-    using TokenCallback = std::function<bool(string_view piece)>;
+    using TokenCallback = std::function<bool(const string& piece)>;
 
     struct ClientError : std::runtime_error
     {
@@ -144,77 +145,68 @@ class RestClient
      * chunked body. Returning false makes cpp-httplib treat the call as
      * Error::Canceled with a null Result (looks like "no response").
      */
-    std::string stream_tokens(const SessionID session_id, const JobKey key, const TokenCallback &cb = nullptr)
+    string stream_tokens(const SessionID session_id, const JobKey key, const TokenCallback &cb = nullptr)
     {
         std::string accumulated;
         std::string line_buf;
-        bool saw_done = false;
+        bool is_done = false;
         bool client_cancel = false;
 
-        auto res = cli_.Get("/v1/sessions/" + std::to_string(session_id) + "/jobs/" + std::to_string(key) + "/tokens",
-                            [&](const char *data, size_t len) {
-                                if (saw_done)
+        // ContentReceiver returns true as long as it download it's content from the server. The
+        // server itself will send a json blob with the property "done" = "true" when
+        // the thinking process is finished.
+        //
+        // The CLI is configured with "has_payload_max_length_ = false" so we don't have to
+        // care about receiving partial json from the server
+        auto res = cli_.Get("/v1/sessions/" + std::to_string(session_id) + "/jobs/" +
+            std::to_string(key) + "/tokens",
+                            [&](const char * const data, const size_t len) {
+                                if (client_cancel)
                                 {
-                                    // Drain any trailing bytes after the terminal NDJSON line.
+                                    // Forcefully stop the draining and close the connection when cancelled
+                                    return false;
+                                }
+
+                                // Drain any trailing bytes after the terminal NDJSON line if we've
+                                // received the done flag
+                                if (is_done)
+                                {
                                     return true;
                                 }
+
+                                // Each line sent in the stream is it's own JSON message
                                 line_buf.append(data, len);
                                 for (;;)
                                 {
-                                    auto pos = line_buf.find('\n');
+                                    const auto pos = line_buf.find('\n');
                                     if (pos == std::string::npos)
                                     {
                                         break;
                                     }
-                                    std::string line = line_buf.substr(0, pos);
-                                    line_buf.erase(0, pos + 1);
-                                    if (line.empty())
-                                    {
-                                        continue;
-                                    }
-                                    // Strip optional CR from CRLF-framed lines.
-                                    if (!line.empty() && line.back() == '\r')
-                                    {
-                                        line.pop_back();
-                                    }
+
+                                    // Filter out the line
+                                    auto line = string_view(line_buf).substr(0, pos);
+                                    line_buf.clear();
+
+                                    // Parse the json - ignore it if it's invalid
                                     json j = json::parse(line, nullptr, false);
                                     if (j.is_discarded())
                                     {
-                                        continue;
+                                        throw BadRequest{"token stream returned an invalid json: '" + line + "'"};
                                     }
-                                    const bool done = j.value("done", false);
-                                    std::string tokens;
-                                    if (j.contains("tokens"))
+
+                                    // Collect all tokens received from the server
+                                    const auto t = MessageTokensResponse::from_json(j);
+                                    accumulated += t.tokens;
+                                    if (cb && !cb(t.tokens))
                                     {
-                                        if (j["tokens"].is_string())
-                                        {
-                                            tokens = j["tokens"].get<std::string>();
-                                        }
-                                        else if (j["tokens"].is_array())
-                                        {
-                                            for (const auto &t : j["tokens"])
-                                            {
-                                                if (t.is_string())
-                                                {
-                                                    tokens += t.get<std::string>();
-                                                }
-                                            }
-                                        }
+                                        client_cancel = true;
+                                        return false; // intentional cancel from callback
                                     }
-                                    if (!tokens.empty())
+                                    if (t.done)
                                     {
-                                        accumulated += tokens;
-                                        if (cb && !cb(tokens))
-                                        {
-                                            client_cancel = true;
-                                            return false; // intentional cancel from callback
-                                        }
-                                    }
-                                    if (done)
-                                    {
-                                        saw_done = true;
-                                        // Keep returning true so httplib finishes the chunked response cleanly.
-                                        return true;
+                                        is_done = true;
+                                        break;
                                     }
                                 }
                                 return true;
@@ -225,7 +217,7 @@ class RestClient
             // Successful end-of-stream via ContentReceiver cancel is not used; real
             // connection failures still surface here. If we already saw done=true,
             // treat as success (defensive for older httplib edge cases).
-            if (saw_done && !client_cancel)
+            if (is_done && !client_cancel)
             {
                 return accumulated;
             }

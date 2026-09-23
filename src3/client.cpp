@@ -55,7 +55,7 @@ std::string stream_job(RestClient &client, const SessionID &session_id, const Jo
         fflush(stdout);
     });
 
-    std::string text = client.stream_tokens(session_id, job_key, [&](std::string_view piece) {
+    std::string text = client.stream_tokens(session_id, job_key, [&](const string& piece) {
         filter.process(piece);
         return true;
     });

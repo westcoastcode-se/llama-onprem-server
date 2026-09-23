@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../agent/response_parse.hpp"
 #include "../../api/models.hpp"
+#include "../agent/response_parse.hpp"
 
 /**
  * Internal generation payload submitted to Jobs (built from a Session).
@@ -11,18 +11,6 @@ struct MessagesRequest
 {
     string system;
     vector<ChatMessage> messages;
-};
-
-/** NDJSON line for GET /v1/sessions/:id/jobs/:key/tokens */
-struct MessageTokensResponse
-{
-    string tokens;
-    bool done = false;
-
-    [[nodiscard]] nlohmann::json to_json() const
-    {
-        return {{"tokens", tokens}, {"done", done}};
-    }
 };
 
 /** GET /v1/sessions/:id/jobs/:key */
@@ -49,13 +37,7 @@ struct MessageStatusResponse
 
     [[nodiscard]] json to_json() const
     {
-        json j
-        {
-            {"key", key},
-            {"state", state.to_string()},
-            {"done", done},
-            {"content", content}
-        };
+        json j{{"key", key}, {"state", state.to_string()}, {"done", done}, {"content", content}};
         if (!error.empty())
         {
             j["error"] = error;
