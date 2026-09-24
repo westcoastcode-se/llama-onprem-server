@@ -5,6 +5,7 @@
 #include "../api/messages.hpp"
 #include "../jobs/token_buffer.hpp"
 #include "../llm/llm_engine.hpp"
+#include "common/log.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -21,35 +22,28 @@
 struct Task
 {
     // Unique ID for the task
-    JobKey key = std::chrono::high_resolution_clock::now().time_since_epoch().count();;
+    JobKey key = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
     MessagesRequest request;
-    std::shared_ptr<TokenBuffer> buffer = std::make_shared<TokenBuffer>();
+
+    // Buffer used to send data between the job runner and the eventual task stream
+    shared_ptr<TokenBuffer> buffer = std::make_shared<TokenBuffer>();
 
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point finished_at{};
 
-    // Optional hook when task reaches a terminal state (done/error/cancelled).
-    std::function<void(const Task &)> on_finished;
+    // Lambda called when reaching an exit state
+    std::function<void(const shared_ptr<Task>&)> on_finished;
 
     mutable std::mutex mutex;
     JobState state = JobState::Queued;
-    std::string error;
-    std::string result;
+    string error;
+    string result;
     std::atomic<bool> cancel_requested{false};
 
     // Parsed after successful generation (client-side tools / questions).
     std::vector<ParsedToolCall> tool_calls;
     std::optional<ParsedQuestion> question;
-
-    void set_state(JobState s)
-    {
-        std::lock_guard lock(mutex);
-        state = s;
-        if (s.is_finished())
-        {
-            finished_at = std::chrono::steady_clock::now();
-        }
-    }
 
     [[nodiscard]] JobState get_state() const
     {
@@ -57,27 +51,57 @@ struct Task
         return state;
     }
 
-    void set_error(std::string msg)
+    /**
+     * Set the error message
+     *
+     * @param msg The error message
+     */
+    void set_error_state(string msg)
     {
         std::lock_guard lock(mutex);
         error = std::move(msg);
         state = JobState::Error;
         finished_at = std::chrono::steady_clock::now();
+        buffer->set_done();
     }
 
-    void set_result(std::string text)
+    /**
+     * Set the result from the LLM
+     *
+     * @param text The resulting text
+     * @param new_state The state of the job
+     */
+    void set_result(string text, const JobState new_state, ParsedAssistantActions actions)
     {
         std::lock_guard lock(mutex);
         result = std::move(text);
+        state = new_state;
+        tool_calls = std::move(actions.tool_calls);
+        question = std::move(actions.question);
+
+        // Job is finished
+        if (new_state.is_finished())
+        {
+            finished_at = std::chrono::steady_clock::now();
+        }
+
+        if (new_state == JobState::Cancelled)
+        {
+            buffer->cancel();
+        }
+        else if (new_state == JobState::Done)
+        {
+            buffer->set_done();
+        }
     }
 
-    [[nodiscard]] std::string get_result() const
+    [[nodiscard]] string get_result() const
     {
         std::lock_guard lock(mutex);
         return result;
     }
 
-    [[nodiscard]] std::string get_error() const
+    [[nodiscard]] string get_error() const
     {
         std::lock_guard lock(mutex);
         return error;
@@ -97,11 +121,17 @@ struct Task
         return cancel_requested.load(std::memory_order_relaxed);
     }
 
-    void set_actions(ParsedAssistantActions actions)
+    [[nodiscard]] MessageStatusResponse to_status_unsafe() const
     {
-        std::lock_guard lock(mutex);
-        tool_calls = std::move(actions.tool_calls);
-        question = std::move(actions.question);
+        MessageStatusResponse r;
+        r.key = key;
+        r.state = state;
+        r.done = state.is_finished();
+        r.content = result;
+        r.error = error;
+        r.tool_calls = tool_calls;
+        r.question = question;
+        return r;
     }
 
     [[nodiscard]] MessageStatusResponse to_status() const
@@ -117,6 +147,27 @@ struct Task
         r.question = question;
         return r;
     }
+
+    /**
+     * Set this task as cancelled
+     */
+    void set_cancelled()
+    {
+        std::lock_guard lock(mutex);
+        state = JobState::Cancelled;
+        buffer->cancel();
+    }
+
+    void set_running()
+    {
+        std::lock_guard lock(mutex);
+        state = JobState::Running;
+    }
+
+    friend std::ostream &operator<<(std::ostream &o, const Task &ptr)
+    {
+        return o << "Task(" << ptr.key << ")";
+    }
 };
 
 /**
@@ -128,6 +179,7 @@ class Jobs
 {
   public:
     // TODO: Consider adding support for forcefully stopping long-running LLM requests
+    // TODO: Wait to GC until first stream request is called?
     static constexpr std::chrono::seconds kFinishedTtl{300};
 
     explicit Jobs(LlamaEngine &engine);
@@ -145,22 +197,28 @@ class Jobs
      * @param on_finished optional callback invoked once when task finishes (any terminal state).
      * @return A unique key that represents the job
      */
-    JobKey submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished = nullptr);
-
-    std::shared_ptr<Task> get_task(JobKey key);
+    JobKey submit(MessagesRequest &&request, std::function<void(const shared_ptr<Task>&)> on_finished = nullptr);
 
     /**
-     *
-     * @param key The task key
-     * @return
+     * @param key The task id
+     * @return The task if found
      */
-    bool cancel(JobKey key);
+    shared_ptr<Task> get_task(JobKey key) const;
+
+    /**
+     * Try to cancel the supplied task
+     *
+     * @param id The task
+     * @return The cancelled task. Please note that the task might not be cancelled yet, but only requested
+     *         to be cancelled
+     */
+    shared_ptr<Task> cancel(JobKey id);
 
     void gc();
 
   private:
     LlamaEngine &engine_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::unordered_map<JobKey, std::shared_ptr<Task>> tasks_;
     std::deque<JobKey> queue_;
@@ -169,5 +227,9 @@ class Jobs
 
     void worker_loop();
     void unsafe_gc();
-    std::shared_ptr<Task> pop_next_queued();
+
+    /**
+     * @return The next queued task. The task might be cancelled
+     */
+    shared_ptr<Task> pop_next_queued();
 };

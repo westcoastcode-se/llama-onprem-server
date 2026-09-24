@@ -62,7 +62,7 @@ std::string stream_job(RestClient &client, const SessionID &session_id, const Jo
             string_view str(piece);
             if (thinking)
             {
-                const auto idx = str.find_first_of("</think>");
+                const auto idx = str.find("</think>");
                 if (idx != std::string_view::npos)
                 {
                     thinking = false;
@@ -71,7 +71,7 @@ std::string stream_job(RestClient &client, const SessionID &session_id, const Jo
             }
             else
             {
-                const auto idx = str.find_first_of("<think>");
+                const auto idx = str.find("<think>");
                 if (idx != std::string_view::npos)
                 {
                     thinking = true;
@@ -231,6 +231,7 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
                         const JobKey initial_job_key)
 {
     JobKey job_key = initial_job_key;
+    stream_job(client, session_id, job_key, cfg.quiet);
     for (int round = 0; round < cfg.max_tool_rounds; ++round)
     {
         auto session = wait_session_ready(client, session_id);

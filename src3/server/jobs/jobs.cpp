@@ -1,6 +1,6 @@
 #include "../jobs/jobs.hpp"
 #include "../agent/response_parse.hpp"
-#include <cstdio>
+#include "common/log.hpp"
 
 Jobs::Jobs(LlamaEngine &engine) : engine_(engine)
 {
@@ -41,7 +41,7 @@ void Jobs::unsafe_gc()
     }
 }
 
-JobKey Jobs::submit(MessagesRequest&& request, std::function<void(const Task &)> on_finished)
+JobKey Jobs::submit(MessagesRequest &&request, std::function<void(const shared_ptr<Task> &)> on_finished)
 {
     std::lock_guard lock(mutex_);
 
@@ -59,30 +59,10 @@ JobKey Jobs::submit(MessagesRequest&& request, std::function<void(const Task &)>
     return task->key;
 }
 
-namespace
-{
-void notify_finished(const std::shared_ptr<Task> &task)
-{
-    if (!task || !task->on_finished)
-    {
-        return;
-    }
-    try
-    {
-        task->on_finished(*task);
-    }
-    catch (const std::exception &e)
-    {
-        fprintf(stderr, "[jobs] on_finished error: %s\n", e.what());
-    }
-    task->on_finished = nullptr;
-}
-} // namespace
-
-std::shared_ptr<Task> Jobs::get_task(const JobKey key)
+std::shared_ptr<Task> Jobs::get_task(const JobKey key) const
 {
     std::lock_guard lock(mutex_);
-    auto it = tasks_.find(key);
+    const auto it = tasks_.find(key);
     if (it == tasks_.end())
     {
         return {};
@@ -90,40 +70,69 @@ std::shared_ptr<Task> Jobs::get_task(const JobKey key)
     return it->second;
 }
 
-bool Jobs::cancel(const JobKey key)
+namespace
 {
-    std::shared_ptr<Task> task;
+
+void notify_finished(const shared_ptr<Task>& task)
+{
+    std::lock_guard lock(task->mutex);
+
+    // If on_finished is empty then it's finished notification is already done once
+    if (!task->on_finished)
+        return;
+
+    // Notify listener
+    try
+    {
+        task->on_finished(task);
+    }
+    catch (const std::exception &e)
+    {
+        log_error("on_finished resulted in an unhandled error: ", e.what());
+    }
+    task->on_finished = nullptr;
+}
+
+} // namespace
+
+shared_ptr<Task> Jobs::cancel(JobKey const id)
+{
+    log_info("Task(", id, ") | cancelling task");
+    shared_ptr<Task> task;
+    bool notify_immediately = false;
     {
         std::lock_guard lock(mutex_);
-        auto it = tasks_.find(key);
+        const auto it = tasks_.find(id);
         if (it == tasks_.end())
         {
-            return false;
+            return {};
         }
         task = it->second;
 
         // Drop from queue if still waiting
         for (auto qit = queue_.begin(); qit != queue_.end(); ++qit)
         {
-            if (*qit == key)
+            if (*qit == task->key)
             {
                 queue_.erase(qit);
+                notify_immediately = true;
                 break;
             }
         }
     }
 
-    // Try to cancel the task
-    task->request_cancel();
-
-    /// If the task was immediately cancelled then mark it as done
-    if (task->get_state() == JobState::Cancelled)
+    // If notify_immediately is true then the task has not been fetched by the job runner yet
+    if (notify_immediately)
     {
-        task->buffer->set_done();
+        task->request_cancel();
         notify_finished(task);
     }
+    else
+    {
+        task->request_cancel();
+    }
 
-    return true;
+    return task;
 }
 
 void Jobs::gc()
@@ -145,21 +154,14 @@ std::shared_ptr<Task> Jobs::pop_next_queued()
     // Get the top-most job to run
     while (!queue_.empty())
     {
-        auto key = queue_.front();
+        const auto key = queue_.front();
         queue_.pop_front();
-        auto it = tasks_.find(key);
+        const auto it = tasks_.find(key);
         if (it == tasks_.end())
         {
             continue;
         }
-
-        // Ignore any cancelled jobs and look for the next job
-        auto task = it->second;
-        if (task->is_cancel_requested() || task->get_state() == JobState::Cancelled)
-        {
-            continue;
-        }
-        return task;
+        return it->second;
     }
 
     return {};
@@ -174,6 +176,8 @@ void Jobs::worker_loop()
         {
             break;
         }
+
+        // No tasks in the queue
         if (!task)
         {
             continue;
@@ -182,13 +186,13 @@ void Jobs::worker_loop()
         // Is the task cancelled?
         if (task->is_cancel_requested())
         {
-            task->set_state(JobState::Cancelled);
-            task->buffer->set_done();
+            task->set_cancelled();
             notify_finished(task);
             continue;
         }
 
-        task->set_state(JobState::Running);
+        // Task is now running!
+        task->set_running();
 
         // Build message list: optional system + messages
         std::vector<ChatMessage> msgs;
@@ -198,49 +202,36 @@ void Jobs::worker_loop()
         }
         msgs.insert(msgs.end(), task->request.messages.begin(), task->request.messages.end());
 
-        auto buffer = task->buffer;
-        std::string response;
+        // Start stream the LLM response
+        const auto buffer = task->buffer;
         try
         {
-            response = engine_.chat(msgs, [task, buffer](string &&piece) {
-                if (task->is_cancel_requested() || buffer->is_cancelled())
+            string response = engine_.chat(msgs, [task, buffer](string &&piece) {
+                if (task->is_cancel_requested())
                 {
                     return false;
                 }
                 buffer->push(piece);
-                buffer->append_result(piece);
                 return true;
             });
+            buffer->set_full_result(std::move(response));
         }
         catch (const std::exception &e)
         {
-            task->set_error(e.what());
-            buffer->set_done();
+            task->set_error_state(e.what());
             notify_finished(task);
             continue;
         }
 
-        if (task->is_cancel_requested() || buffer->is_cancelled())
+        if (task->is_cancel_requested())
         {
-            task->set_state(JobState::Cancelled);
-            task->set_result(std::move(response));
-            buffer->set_done();
+            task->set_result(buffer->full_result(), JobState::Cancelled, {});
             notify_finished(task);
             continue;
         }
 
-        if (response.empty() && task->get_result().empty())
-        {
-            // May be empty on error paths inside engine; keep done with empty content
-        }
-
-        task->set_result(response.empty() ? buffer->full_result() : response);
-        {
-            auto actions = parse_assistant_actions(task->get_result());
-            task->set_actions(std::move(actions));
-        }
-        task->set_state(JobState::Done);
-        buffer->set_done();
+        auto actions = parse_assistant_actions(task->get_result());
+        task->set_result(buffer->full_result(), JobState::Done, std::move(actions));
         notify_finished(task);
     }
 }

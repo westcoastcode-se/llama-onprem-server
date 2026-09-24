@@ -16,12 +16,12 @@ struct ParsedAssistantActions
         return !tool_calls.empty() || question.has_value();
     }
 
-    [[nodiscard]] nlohmann::json to_json() const
+    [[nodiscard]] json to_json() const
     {
-        nlohmann::json j = nlohmann::json::object();
+        auto j = nlohmann::json::object();
         if (!tool_calls.empty())
         {
-            nlohmann::json arr = nlohmann::json::array();
+            auto arr = nlohmann::json::array();
             for (const auto &tc : tool_calls)
             {
                 arr.push_back(tc.to_json());
@@ -44,7 +44,8 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text);
 
 /**
  * Default system prompt: tools, and optionally question/answer protocol.
+ *
  * @param extra optional user system text appended at the end
  * @param allow_questions when false, omit <question>/<answer> instructions
  */
-std::string default_agent_system_prompt(std::string_view extra = "", bool allow_questions = true);
+string default_agent_system_prompt(std::string_view extra = "", bool allow_questions = true);

@@ -3,6 +3,8 @@
 #include "../../common/std.hpp"
 #include <httplib.h>
 
+#include "common/log.hpp"
+
 /**
  * Return json from the server
  *
@@ -15,4 +17,5 @@ template <typename T> static void send_json(httplib::Response &res, int status, 
 {
     res.status = status;
     res.set_content(value.to_json().dump(), "application/json");
+    log_debug(value.to_json());
 }

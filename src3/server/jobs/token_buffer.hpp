@@ -89,10 +89,10 @@ class TokenBuffer
         return out;
     }
 
-    void append_result(string_view text)
+    void set_full_result(string text)
     {
         std::lock_guard lock(mutex_);
-        full_result_.append(text);
+        full_result_ = std::move(text);
     }
 
     [[nodiscard]] string full_result() const

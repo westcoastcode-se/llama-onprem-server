@@ -136,7 +136,7 @@ std::string LlamaEngine::apply_template(std::span<const ChatMessage> messages, b
     return std::string(buf.data(), static_cast<size_t>(len));
 }
 
-std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, float temp_override)
+string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, float temp_override)
 {
     if (!ctx_ || !vocab_ || !smpl_)
         return "";
@@ -151,7 +151,6 @@ std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_c
         config_.temperature = temp_override;
     }
 
-    std::string response;
     const int max_ctx = static_cast<int>(llama_n_ctx(ctx_));
 
     auto context_would_overflow = [&](int n_new) -> bool {
@@ -196,6 +195,7 @@ std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_c
         }
     }
 
+    string response;
     Utf8Util::StreamBuffer utf8_buf;
     while (true)
     {
@@ -266,7 +266,7 @@ std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_c
     return response;
 }
 
-std::string LlamaEngine::chat(std::span<const ChatMessage> messages, TokenCallback token_cb, float temp_override)
+string LlamaEngine::chat(span<const ChatMessage> messages, TokenCallback token_cb, const float temp_override)
 {
     if (!ctx_ || !vocab_ || !smpl_ || !chat_template_)
         return "";
@@ -313,7 +313,7 @@ std::string LlamaEngine::chat(std::span<const ChatMessage> messages, TokenCallba
     std::string_view prompt(formatted_buf_.data() + prev_formatted_len_,
                             static_cast<size_t>(new_len - prev_formatted_len_));
 
-    std::string response = generate(prompt, token_cb);
+    string response = generate(prompt, token_cb);
 
     cached_messages_.assign(messages.begin(), messages.end());
     cached_messages_.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT,.content = response});

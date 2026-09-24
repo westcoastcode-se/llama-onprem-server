@@ -56,7 +56,7 @@
      */
     template <typename S, typename... Str> static void log(const int level, const S& arg, Str&&... args) {
         if (Logger::is_level(level)) {
-            std::array<char, 1024> buffer; // NOLINT(*-pro-type-member-init)
+            std::array<char, 8096> buffer; // NOLINT(*-pro-type-member-init)
             std::ospanstream ss(buffer);
             Logger::log_trait(ss, arg, args...);
             Logger::write(level, ss.span());
@@ -71,7 +71,7 @@
      */
     template <typename S, typename... Str> static void log_info(const S& arg, Str&&... args) {
         if (Logger::is_level(Logger::LEVEL_INFO)) {
-            std::array<char, 1024> buffer; // NOLINT(*-pro-type-member-init)
+            std::array<char, 8096> buffer; // NOLINT(*-pro-type-member-init)
             std::ospanstream ss(buffer);
             Logger::log_trait(ss, arg, args...);
             Logger::write(Logger::LEVEL_INFO, ss.span());
@@ -86,7 +86,7 @@
      */
     template <typename S, typename... Str> static void log_debug(const S& arg, Str&&... args) {
         if (Logger::is_level(Logger::LEVEL_DEBUG)) {
-            std::array<char, 1024> buffer; // NOLINT(*-pro-type-member-init)
+            std::array<char, 8096> buffer; // NOLINT(*-pro-type-member-init)
             std::ospanstream ss(buffer);
             Logger::log_trait(ss, arg, args...);
             Logger::write(Logger::LEVEL_DEBUG, ss.span());
@@ -101,7 +101,7 @@
      */
     template <typename S, typename... Str> static void log_error(const S& arg, Str&&... args) {
         if (Logger::is_level(Logger::LEVEL_ERROR)) {
-            std::array<char, 1024> buffer; // NOLINT(*-pro-type-member-init)
+            std::array<char, 8096> buffer; // NOLINT(*-pro-type-member-init)
             std::ospanstream ss(buffer);
             Logger::log_trait(ss, arg, args...);
             Logger::write(Logger::LEVEL_ERROR, ss.span());

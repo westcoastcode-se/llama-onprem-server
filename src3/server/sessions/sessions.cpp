@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <sstream>
 
+#include "common/log.hpp"
+
 Sessions::Sessions(Jobs &jobs) : jobs_(jobs)
 {
 }
@@ -15,7 +17,7 @@ void Sessions::unsafe_gc()
     {
         auto &s = it->second;
         std::lock_guard slock(s->mutex);
-        const bool idle = !s->active_job_key.has_value() && s->state == SessionState::Idle;
+        const bool idle = !s->active_task.has_value() && s->state == SessionState::Idle;
         if (idle && now - s->last_active > kIdleTtl)
         {
             it = sessions_.erase(it);
@@ -25,14 +27,9 @@ void Sessions::unsafe_gc()
     }
 }
 
-std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
+shared_ptr<Session> Sessions::create(CreateSessionRequest req)
 {
-    std::lock_guard lock(mutex_);
-    unsafe_gc();
-    if (sessions_.size() >= kMaxSessions)
-    {
-        throw Busy("too many sessions");
-    }
+    log_info("starting a new session");
 
     auto session = std::make_shared<Session>();
     session->questions_enabled = req.questions;
@@ -40,22 +37,26 @@ std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
     {
         session->system_prompt = default_agent_system_prompt("", req.questions);
     }
-    else if (req.system.find("<tool_call>") == std::string::npos)
-    {
-        // Keep user system text, append tool/question protocol if not already present
-        session->system_prompt = default_agent_system_prompt(req.system, req.questions);
-    }
     else
     {
         session->system_prompt = std::move(req.system);
     }
     session->messages = std::move(req.messages);
 
-    sessions_[session->id] = session;
+    // Add the created session in a thread-safe manner
+    {
+        std::lock_guard lock(mutex_);
+        unsafe_gc();
+        if (sessions_.size() >= kMaxSessions)
+            throw Busy("too many sessions");
+        sessions_[session->id] = session;
+    }
+
+    log_info("session ", session->id, " is created");
     return session;
 }
 
-std::shared_ptr<Session> Sessions::get(const SessionID &id)
+shared_ptr<Session> Sessions::get(const SessionID &id)
 {
     std::lock_guard lock(mutex_);
     const auto it = sessions_.find(id);
@@ -68,6 +69,9 @@ std::shared_ptr<Session> Sessions::get(const SessionID &id)
 
 shared_ptr<Session> Sessions::destroy(const SessionID &id)
 {
+    log_info("destroying session ", id);
+
+    // Remove the session from the active sessions cache
     shared_ptr<Session> session;
     {
         std::lock_guard lock(mutex_);
@@ -80,47 +84,45 @@ shared_ptr<Session> Sessions::destroy(const SessionID &id)
         sessions_.erase(it);
     }
 
-    optional<JobKey> job_key;
+    // And if this session has a job running then cancel it
+    if (const auto task = session->get_active_task(); task)
     {
-        std::lock_guard slock(session->mutex);
-        job_key = session->active_job_key;
-    }
-
-    // If this session has a job running then cancel it
-    if (job_key.has_value())
-    {
-        jobs_.cancel(job_key.value());
+        jobs_.cancel(task.value());
     }
 
     return session;
 }
 
-void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Task &task)
+void Sessions::on_job_finished(const shared_ptr<Session> &session, shared_ptr<Task> task)
 {
     std::lock_guard slock(session->mutex);
-    if (session->active_job_key != task.key)
+    log_info(task, " | is finished");
+    if (session->active_task != task->key)
     {
-        // Stale callback (e.g. cancelled previous job)
+        // TODO: Is this actually possible???
+        log_error(session, " | was notified by stale ", task);
         return;
     }
-    session->active_job_key.reset();
-    session->touch();
 
-    if (task.get_state() != JobState::Done)
+    // Session task is now done
+    session->active_task.reset();
+    session->touch();
+    session->latest_finished_task = task;
+    if (task->state != JobState::Done)
     {
         session->state = SessionState::Idle;
         session->clear_pending();
         return;
     }
 
-    const std::string content = task.get_result();
+    const string& content = task->result;
     session->messages.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = content});
 
     // Prefer actions already parsed on the task (by Jobs worker)
     ParsedAssistantActions actions;
     {
         // copy under task lock via to_status
-        auto status = task.to_status();
+        const auto status = task->to_status_unsafe();
         actions.tool_calls = status.tool_calls;
         actions.question = status.question;
         if (actions.tool_calls.empty() && !actions.question)
@@ -155,6 +157,7 @@ void Sessions::on_job_finished(const std::shared_ptr<Session> &session, const Ta
 
 optional<JobKey> Sessions::enqueue_generation(const shared_ptr<Session> &session)
 {
+    log_info(session, " | queuing up a new generation request for session");
     MessagesRequest req;
     {
         std::lock_guard slock(session->mutex);
@@ -166,7 +169,7 @@ optional<JobKey> Sessions::enqueue_generation(const shared_ptr<Session> &session
     }
 
     std::weak_ptr weak = session;
-    auto key = jobs_.submit(std::move(req), [this, weak](const Task &task) {
+    auto key = jobs_.submit(std::move(req), [this, weak](const shared_ptr<Task> &task) {
         if (auto s = weak.lock())
         {
             on_job_finished(s, task);
@@ -176,13 +179,13 @@ optional<JobKey> Sessions::enqueue_generation(const shared_ptr<Session> &session
     // TODO: Refactor these inner scopes with a method on the actual session object instead
     {
         std::lock_guard slock(session->mutex);
-        session->active_job_key = key;
+        session->active_task = key;
     }
 
     return key;
 }
 
-optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessageRequest& msg)
+optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessageRequest &msg)
 {
     auto session = get(id);
     if (!session)
@@ -196,7 +199,7 @@ optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessag
 
     {
         std::lock_guard slock(session->mutex);
-        if (session->active_job_key.has_value() || session->state == SessionState::Generating)
+        if (session->active_task.has_value() || session->state == SessionState::Generating)
         {
             throw Busy("session already has an active generation");
         }
@@ -221,7 +224,7 @@ optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessag
     return key;
 }
 
-optional<JobKey> Sessions::post_tool_results(const SessionID &id, const SessionToolResultsRequest& body)
+optional<JobKey> Sessions::post_tool_results(const SessionID &id, const SessionToolResultsRequest &body)
 {
     auto session = get(id);
     if (!session)
@@ -235,7 +238,7 @@ optional<JobKey> Sessions::post_tool_results(const SessionID &id, const SessionT
 
     {
         std::lock_guard slock(session->mutex);
-        if (session->active_job_key.has_value() || session->state == SessionState::Generating)
+        if (session->active_task.has_value() || session->state == SessionState::Generating)
         {
             throw Busy("session already has an active generation");
         }

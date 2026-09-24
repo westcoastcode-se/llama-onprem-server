@@ -52,6 +52,8 @@ void print_usage(const char *argv0)
 
 int main(int argc, char **argv)
 {
+    Logger::set_level(Logger::LEVEL_DEBUG);
+
     LlamaConfig config;
     string host = "127.0.0.1";
     int port = 8080;
@@ -140,8 +142,14 @@ int main(int argc, char **argv)
     svr.set_write_timeout(300, 0);
     svr.set_keep_alive_timeout(300);
 
+    // Add simple request logging
+    svr.set_pre_routing_handler([](const auto& req, auto& resp) {
+        log_info(req.method, " ", req.path);
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
+
     // Custom exception handler
-    svr.set_exception_handler([](const auto &, auto &res, std::exception_ptr ep) {
+    svr.set_exception_handler([](const auto &, auto &res, const std::exception_ptr& ep) {
         try
         {
             if (ep)
@@ -149,25 +157,27 @@ int main(int argc, char **argv)
                 std::rethrow_exception(ep);
             }
         }
-        catch (const NotFound &_)
+        catch (const NotFound &e)
         {
             send_json(res, 404, ErrorResponse{404, "not found"});
         }
-        catch (const Busy &_)
+        catch (const Busy &e)
         {
             send_json(res, 503, ErrorResponse{503, "busy"});
         }
-        catch (const BadRequest &_)
+        catch (const BadRequest &e)
         {
-            send_json(res, 400, ErrorResponse{400, "bad request"});
+            send_json(res, 400, ErrorResponse{400, "Bad Request"});
         }
-        catch (const json::exception &_)
+        catch (const json::exception &e)
         {
-            send_json(res, 400, ErrorResponse{400, "bad request"});
+            log_error("unhandled JSON exception: ", e.what());
+            send_json(res, 400, ErrorResponse{400, "Bad Request"});
         }
-        catch (const std::exception &_)
+        catch (const std::exception &e)
         {
-            send_json(res, 400, ErrorResponse{400, "bad request"});
+            log_error("unhandled exception: ", e.what());
+            send_json(res, 500, ErrorResponse{500, "Internal Server Error"});
         }
     });
 

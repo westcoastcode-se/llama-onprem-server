@@ -2,12 +2,12 @@
 #include "../api/errors.hpp"
 #include "../api/messages.hpp"
 #include "../api/sessions.hpp"
+#include "common/log.hpp"
 #include "json.hpp"
 
 namespace
 {
-void send_job_token_stream(const httplib::Request &req, httplib::Response &res,
-                           const std::shared_ptr<Task> &task)
+void send_job_token_stream(const httplib::Request &req, httplib::Response &res, const std::shared_ptr<Task> &task)
 {
     auto buffer = task->buffer;
     res.set_header("Cache-Control", "no-cache");
@@ -23,7 +23,7 @@ void send_job_token_stream(const httplib::Request &req, httplib::Response &res,
                                          if (!piece)
                                          {
                                              MessageTokensResponse mm{.tokens = {}, .done = true};
-                                             auto line = mm.to_json().dump() + "\n";
+                                             auto line = mm.to_json().dump();
                                              if (!sink.write(line.data(), line.size()))
                                              {
                                                  return false;
@@ -33,7 +33,7 @@ void send_job_token_stream(const httplib::Request &req, httplib::Response &res,
                                          }
 
                                          MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false};
-                                         auto line = mm.to_json().dump() + "\n";
+                                         auto line = mm.to_json().dump();
                                          return sink.write(line.data(), line.size());
                                      });
 }
@@ -46,10 +46,9 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 {
     // Create a new session
     s.Post("/v1/sessions", [&state](const httplib::Request &req, httplib::Response &res) {
-        json body = json::object();
-        if (!req.body.empty())
-            body = json::parse(req.body);
+        const auto body = json::parse(req.body.empty() ? "{}" : req.body);
         const auto created = state.sessions.create(CreateSessionRequest::from_json(body));
+        log_info(req.remote_addr, ":", req.remote_port, " created ", created);
         send_json(res, 201, created->to_response());
     });
 
@@ -65,8 +64,10 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     // Delete a session
     s.Delete("/v1/sessions/:id", [&state](const httplib::Request &req, httplib::Response &res) {
         const SessionID id = std::stoll(req.path_params.at("id"));
-        if (!state.sessions.destroy(id))
+        const auto session = state.sessions.destroy(id);
+        if (!session)
             throw NotFound("session not found");
+        log_info(session, " | is destroyed");
         res.status = 200;
         res.set_content(R"({"deleted":true})", "application/json");
     });
@@ -74,6 +75,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     // Post a message to a session
     s.Post("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
         const SessionID id = std::stoll(req.path_params.at("id"));
+        log_info("Getting messages from session: ", id);
         auto body = json::parse(req.body);
         auto msg = SessionMessageRequest::from_json(body);
         auto key = state.sessions.post_message(id, std::move(msg));
@@ -97,7 +99,6 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         const SessionID id = std::stoll(req.path_params.at("id"));
         const JobKey job_key = std::stoll(req.path_params.at("job"));
         const auto task = state.require_session_job(id, job_key);
-
         auto status = task->to_status();
         if (!status.done)
         {
@@ -117,13 +118,13 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     });
 
     // NDJSON stream of token chunks until done
-    s.Get("/v1/sessions/:id/jobs/:job/tokens",
-          [&state](const httplib::Request &req, httplib::Response &res) {
-              const SessionID id = std::stoll(req.path_params.at("id"));
-              const JobKey job_key = std::stoll(req.path_params.at("job"));
-              auto task = state.require_session_job(id, job_key);
-              send_job_token_stream(req, res, task);
-          });
+    s.Get("/v1/sessions/:id/jobs/:job/tokens", [&state](const httplib::Request &req, httplib::Response &res) {
+        const SessionID id = std::stoll(req.path_params.at("id"));
+        const JobKey job_key = std::stoll(req.path_params.at("job"));
+        log_info("Streaming tokens from session: ", id, " jobkey: ", job_key);
+        auto task = state.require_session_job(id, job_key);
+        send_job_token_stream(req, res, task);
+    });
 }
 
 void register_endpoints(httplib::Server &s, AppState &state)

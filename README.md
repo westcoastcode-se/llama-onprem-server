@@ -57,7 +57,7 @@ cmake --build build --config Release -j$(nproc)
 # Setup Python tools
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install .
 
 # Download Qwen3.8-27B-UD-Q4_K_XL
 python <<EOF

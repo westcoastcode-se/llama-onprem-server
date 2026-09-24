@@ -29,7 +29,10 @@ struct Session
     string system_prompt;
     // All chat messages associated with this session
     vector<ChatMessage> messages;
-    optional<JobKey> active_job_key;
+    // The active task
+    optional<JobKey> active_task;
+    // The finished task. Ownership is taken from the job runner when the task is finished
+    shared_ptr<Task> latest_finished_task;
     // What state the session is in
     SessionState state = SessionState::Idle;
     vector<ParsedToolCall> pending_tool_calls;
@@ -56,6 +59,31 @@ struct Session
     }
 
     /**
+     * @return The current active task
+     */
+    optional<JobKey> get_active_task()
+    {
+        std::lock_guard slock(mutex);
+        return active_task;
+    }
+
+    /**
+     *
+     * @param task The active task
+     */
+    void set_active_task(JobKey task)
+    {
+        std::lock_guard slock(mutex);
+        active_task = task;
+    }
+
+    shared_ptr<Task> get_latest_finished_task()
+    {
+        std::lock_guard slock(mutex);
+        return latest_finished_task;
+    }
+
+    /**
      * @return Response object based on the session
      */
     [[nodiscard]] SessionResponse to_response() const
@@ -67,10 +95,10 @@ struct Session
         r.id = id;
         r.system_prompt = system_prompt;
         r.messages = messages;
-        r.active_job_key = active_job_key;
+        r.active_job_key = active_task;
         r.state = state;
         // If generating, prefer that over stale wait flags
-        if (active_job_key)
+        if (active_task)
         {
             r.state = SessionState::Generating;
         }
@@ -78,6 +106,11 @@ struct Session
         r.pending_question = pending_question;
         r.questions = questions_enabled;
         return r;
+    }
+
+    friend std::ostream &operator<<(std::ostream &o, const Session &ptr)
+    {
+        return o << "Session(" << ptr.id << ")";
     }
 };
 
@@ -88,8 +121,8 @@ struct Session
 class Sessions
 {
   public:
-    static constexpr size_t kMaxSessions = 32;
-    static constexpr std::chrono::seconds kIdleTtl{3600};
+    static constexpr size_t kMaxSessions = 256;
+    static constexpr std::chrono::seconds kIdleTtl{600};
 
     explicit Sessions(Jobs &jobs);
 
@@ -122,14 +155,14 @@ class Sessions
      *
      * @return job key, or nullopt if queue full.
      */
-    optional<JobKey> post_message(const SessionID &id, const SessionMessageRequest& msg);
+    optional<JobKey> post_message(const SessionID &id, const SessionMessageRequest &msg);
 
     /**
      * Client finished running pending tool_calls; append tool results and continue.
      *
      * @return new job key, or empty if queue full.
      */
-    optional<JobKey> post_tool_results(const SessionID &id, const SessionToolResultsRequest& body);
+    optional<JobKey> post_tool_results(const SessionID &id, const SessionToolResultsRequest &body);
 
     void gc();
 
@@ -140,13 +173,19 @@ class Sessions
 
     void unsafe_gc();
 
+    /**
+     * Enqueue a new LLM text generation request to be processed as soon as a slot is available
+     *
+     * @param session The session
+     * @return A job based on the currently running task for this session
+     */
     optional<JobKey> enqueue_generation(const shared_ptr<Session> &session);
 
     /**
-     * Method called when a job is finished
+     * Method called when a job is finished. The job itself might've been cancelled
      *
      * @param session The session
      * @param task The task
      */
-    void on_job_finished(const std::shared_ptr<Session> &session, const Task &task);
+    void on_job_finished(const shared_ptr<Session> &session, shared_ptr<Task> task);
 };

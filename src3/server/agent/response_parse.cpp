@@ -402,7 +402,7 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
     return actions;
 }
 
-std::string default_agent_system_prompt(std::string_view extra, bool allow_questions)
+string default_agent_system_prompt(std::string_view extra, bool allow_questions)
 {
     std::ostringstream ss;
     ss << "You are a coding agent. Solve the user's task carefully.\n\n";
@@ -419,6 +419,7 @@ std::string default_agent_system_prompt(std::string_view extra, bool allow_quest
     ss << "- list_directory: {\"path\": \"<path>\"}\n";
     ss << "- file_search: {\"query\": \"...\"}\n";
     ss << "- search_text: {\"query\": \"...\", \"path\": \"<optional>\"}\n\n";
+
     if (allow_questions)
     {
         ss << "When several approaches are reasonable and you need the user to choose, ask with:\n";
@@ -436,11 +437,13 @@ std::string default_agent_system_prompt(std::string_view extra, bool allow_quest
               "state assumptions instead of asking the user to choose.\n";
         ss << "When finished, reply with a clear final answer and no tool_call tags.\n";
     }
+
     if (!extra.empty())
     {
         ss << "\n";
         ss << extra;
         ss << "\n";
     }
-    return ss.str();
+
+    return std::move(ss).str();
 }

@@ -52,9 +52,16 @@ class LlamaEngine
 
     void reset();
 
-    std::string generate(std::string_view prompt, TokenCallback token_cb = nullptr, float temp_override = -1.0f);
+    string generate(std::string_view prompt, TokenCallback token_cb = nullptr, float temp_override = -1.0f);
 
-    std::string chat(std::span<const ChatMessage> messages, TokenCallback token_cb = nullptr,
+    /**
+     *
+     * @param messages Messages to be sent to the LLM
+     * @param token_cb Callback
+     * @param temp_override
+     * @return The complete chat after the LLM is done
+     */
+    string chat(span<const ChatMessage> messages, TokenCallback token_cb = nullptr,
                      float temp_override = -1.0f);
 
     [[nodiscard]] std::string apply_template(std::span<const ChatMessage> messages, bool add_assistant = true) const;

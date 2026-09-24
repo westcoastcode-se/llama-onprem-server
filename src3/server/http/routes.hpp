@@ -27,7 +27,8 @@ struct AppState
         auto session = sessions.get(session_id);
         if (!session)
             return false;
-        return jobs.cancel(job_key);
+        const auto task = jobs.cancel(job_key);
+        return task.get();
     }
 
     /**
@@ -35,7 +36,7 @@ struct AppState
      * Accepts the session's active job or any known job key while the session still exists
      * (finished jobs clear active_job_key but remain queryable briefly for status/stream tail).
      */
-    std::shared_ptr<Task> require_session_job(const SessionID session_id, const JobKey job_key) const
+    [[nodiscard]] shared_ptr<Task> require_session_job(const SessionID session_id, const JobKey job_key) const
     {
         auto session = sessions.get(session_id);
         if (!session)
@@ -43,7 +44,17 @@ struct AppState
 
         auto task = jobs.get_task(job_key);
         if (!task)
+        {
+            // The task might be the latest finished task
+            task = session->get_latest_finished_task();
+            if (task->key != job_key)
+                task.reset();
+        }
+
+        if (!task)
+        {
             throw NotFound("job not found");
+        }
 
         return task;
     }

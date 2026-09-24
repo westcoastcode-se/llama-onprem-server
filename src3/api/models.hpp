@@ -34,6 +34,9 @@ struct JobState
         return value != v;
     }
 
+    /**
+     * @return Check to see if the job is in a finished state
+     */
     [[nodiscard]] bool is_finished() const
     {
         return value == Done || value == Error || value == Cancelled;

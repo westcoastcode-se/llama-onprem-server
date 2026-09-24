@@ -176,13 +176,7 @@ class RestClient
                                     return true;
                                 }
 
-                                string_view line(data, len);
-                                const auto pos = line_buf.find('\n');
-                                if (pos == std::string::npos)
-                                {
-                                    throw BadRequest{"Unknown request body"};
-                                }
-
+                                const string_view line(data, len);
                                 // Parse the json - ignore it if it's invalid
                                 json j = json::parse(line, nullptr, false);
                                 if (j.is_discarded())
