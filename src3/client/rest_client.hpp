@@ -163,6 +163,7 @@ class RestClient
                             [&](const char * const data, const size_t len) {
                                 if (client_cancel)
                                 {
+                                    log_info("Client cancelled request");
                                     // Forcefully stop the draining and close the connection when cancelled
                                     return false;
                                 }
@@ -171,43 +172,36 @@ class RestClient
                                 // received the done flag
                                 if (is_done)
                                 {
+                                    log_info("Done");
                                     return true;
                                 }
 
-                                // Each line sent in the stream is it's own JSON message
-                                line_buf.append(data, len);
-                                for (;;)
+                                string_view line(data, len);
+                                const auto pos = line_buf.find('\n');
+                                if (pos == std::string::npos)
                                 {
-                                    const auto pos = line_buf.find('\n');
-                                    if (pos == std::string::npos)
-                                    {
-                                        break;
-                                    }
+                                    throw BadRequest{"Unknown request body"};
+                                }
 
-                                    // Filter out the line
-                                    auto line = string_view(line_buf).substr(0, pos);
-                                    line_buf.clear();
+                                // Parse the json - ignore it if it's invalid
+                                json j = json::parse(line, nullptr, false);
+                                if (j.is_discarded())
+                                {
+                                    throw BadRequest{"token stream returned an invalid json: '" + line + "'"};
+                                }
 
-                                    // Parse the json - ignore it if it's invalid
-                                    json j = json::parse(line, nullptr, false);
-                                    if (j.is_discarded())
-                                    {
-                                        throw BadRequest{"token stream returned an invalid json: '" + line + "'"};
-                                    }
-
-                                    // Collect all tokens received from the server
-                                    const auto t = MessageTokensResponse::from_json(j);
-                                    accumulated += t.tokens;
-                                    if (cb && !cb(t.tokens))
-                                    {
-                                        client_cancel = true;
-                                        return false; // intentional cancel from callback
-                                    }
-                                    if (t.done)
-                                    {
-                                        is_done = true;
-                                        break;
-                                    }
+                                // Collect all tokens received from the server
+                                const auto t = MessageTokensResponse::from_json(j);
+                                accumulated += t.tokens;
+                                if (cb && !cb(t.tokens))
+                                {
+                                    client_cancel = true;
+                                    return false; // intentional cancel from callback
+                                }
+                                if (t.done)
+                                {
+                                    is_done = true;
+                                    return false;
                                 }
                                 return true;
                             });

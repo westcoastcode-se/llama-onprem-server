@@ -55,11 +55,34 @@ std::string stream_job(RestClient &client, const SessionID &session_id, const Jo
         fflush(stdout);
     });
 
+    bool thinking = false;
+    printf("💭%s", Color::GRAY);
     std::string text = client.stream_tokens(session_id, job_key, [&](const string& piece) {
-        filter.process(piece);
+        //filter.process(piece);
+            string_view str(piece);
+            if (thinking)
+            {
+                const auto idx = str.find_first_of("</think>");
+                if (idx != std::string_view::npos)
+                {
+                    thinking = false;
+                    str = str.substr(0, idx);
+                }
+            }
+            else
+            {
+                const auto idx = str.find_first_of("<think>");
+                if (idx != std::string_view::npos)
+                {
+                    thinking = true;
+                    str = str.substr(idx + 7);
+                }
+            }
+        printf("%.*s", static_cast<int>(str.size()), str.data());
+        fflush(stdout);
         return true;
     });
-    filter.flush();
+    //filter.flush();
     if (!quiet)
     {
         printf("%s\n", Color::RESET);
