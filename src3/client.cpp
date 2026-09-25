@@ -39,50 +39,32 @@ SessionResponse wait_session_ready(RestClient &client, const SessionID &session_
 
 std::string stream_job(RestClient &client, const SessionID &session_id, const JobKey job_key, bool quiet)
 {
-    ThinkingStreamFilter filter([quiet](std::string_view piece, bool is_thinking) {
-        if (quiet)
+    bool thinking = false;
+    printf("💭%s", Color::GRAY);
+    string text = client.stream_tokens(session_id, job_key, [&](const string &piece) {
+        string_view str(piece);
+        if (thinking)
         {
-            return;
-        }
-        if (is_thinking)
-        {
-            printf("%s%.*s%s", Color::DIM, static_cast<int>(piece.size()), piece.data(), Color::RESET);
+            const auto idx = str.find("</think>");
+            if (idx != std::string_view::npos)
+            {
+                thinking = false;
+                str = str.substr(0, idx);
+            }
         }
         else
         {
-            printf("%s%.*s", Color::RESET, static_cast<int>(piece.size()), piece.data());
+            const auto idx = str.find("<think>");
+            if (idx != std::string_view::npos)
+            {
+                thinking = true;
+                str = str.substr(idx + 7);
+            }
         }
-        fflush(stdout);
-    });
-
-    bool thinking = false;
-    printf("💭%s", Color::GRAY);
-    std::string text = client.stream_tokens(session_id, job_key, [&](const string& piece) {
-        //filter.process(piece);
-            string_view str(piece);
-            if (thinking)
-            {
-                const auto idx = str.find("</think>");
-                if (idx != std::string_view::npos)
-                {
-                    thinking = false;
-                    str = str.substr(0, idx);
-                }
-            }
-            else
-            {
-                const auto idx = str.find("<think>");
-                if (idx != std::string_view::npos)
-                {
-                    thinking = true;
-                    str = str.substr(idx + 7);
-                }
-            }
         printf("%.*s", static_cast<int>(str.size()), str.data());
         fflush(stdout);
         return true;
     });
-    //filter.flush();
     if (!quiet)
     {
         printf("%s\n", Color::RESET);
@@ -279,8 +261,8 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
             {
                 return false;
             }
-            const auto resp = client.post_message(session_id,
-                                            SessionMessageRequest{.content = *ans, .role = ChatMessage::ROLE_USER});
+            const auto resp =
+                client.post_message(session_id, SessionMessageRequest{.content = *ans, .role = ChatMessage::ROLE_USER});
             job_key = resp.key;
             continue;
         }

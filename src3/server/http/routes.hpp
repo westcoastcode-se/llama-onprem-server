@@ -38,7 +38,7 @@ struct AppState
      */
     [[nodiscard]] shared_ptr<Task> require_session_job(const SessionID session_id, const JobKey job_key) const
     {
-        auto session = sessions.get(session_id);
+        const auto session = sessions.get(session_id);
         if (!session)
             throw NotFound("session not found");
 

@@ -63,8 +63,8 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Delete a session
     s.Delete("/v1/sessions/:id", [&state](const httplib::Request &req, httplib::Response &res) {
-        const SessionID id = std::stoll(req.path_params.at("id"));
-        const auto session = state.sessions.destroy(id);
+        const auto session_id = static_cast<SessionID>(std::stoll(req.path_params.at("id")));
+        const auto session = state.sessions.destroy(session_id);
         if (!session)
             throw NotFound("session not found");
         log_info(session, " | is destroyed");
@@ -74,14 +74,14 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // Post a message to a session
     s.Post("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
-        const SessionID id = std::stoll(req.path_params.at("id"));
-        log_info("Getting messages from session: ", id);
-        auto body = json::parse(req.body);
-        auto msg = SessionMessageRequest::from_json(body);
-        auto key = state.sessions.post_message(id, std::move(msg));
+        const auto session_id = static_cast<SessionID>(std::stoll(req.path_params.at("id")));
+        log_info("Getting messages from session: ", session_id);
+        const auto body = json::parse(req.body);
+        const auto msg = SessionMessageRequest::from_json(body);
+        const auto key = state.sessions.post_message(session_id, msg);
         if (!key)
             throw Busy("job queue is full");
-        send_json(res, 200, SessionMessageResponse{.session_id = id, .key = *key});
+        send_json(res, 200, SessionMessageResponse{.session_id = session_id, .key = *key});
     });
 
     // Post tool responses to the active session
@@ -122,7 +122,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         const SessionID id = std::stoll(req.path_params.at("id"));
         const JobKey job_key = std::stoll(req.path_params.at("job"));
         log_info("Streaming tokens from session: ", id, " jobkey: ", job_key);
-        auto task = state.require_session_job(id, job_key);
+        const auto task = state.require_session_job(id, job_key);
         send_job_token_stream(req, res, task);
     });
 }
