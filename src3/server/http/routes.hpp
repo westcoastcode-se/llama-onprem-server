@@ -14,27 +14,23 @@ struct AppState
     Sessions &sessions;
 
     /**
-     * Cancel a job.
+     * Cancel a job that belongs to the given session.
      *
-     * TODO: The job should be part of the session?
-     *
-     * @param session_id session id
-     * @param job_key The job key
-     * @return true if the job exists and it's cancellable
+     * @return true if the session owned the job and cancel was requested
      */
     [[nodiscard]] bool try_cancel_job(const SessionID session_id, const JobKey job_key) const
     {
-        auto session = sessions.get(session_id);
-        if (!session)
+        const auto session = sessions.get(session_id);
+        if (!session || !session->owns_job(job_key))
             return false;
-        const auto task = jobs.cancel(job_key);
-        return task.get();
+        // Only the active job is cancellable; finished jobs are already terminal.
+        if (session->get_active_task() != job_key)
+            return false;
+        return static_cast<bool>(jobs.cancel(job_key));
     }
 
     /**
-     * Resolve a job that belongs to a session.
-     * Accepts the session's active job or any known job key while the session still exists
-     * (finished jobs clear active_job_key but remain queryable briefly for status/stream tail).
+     * Resolve a job that belongs to a session (active or last finished).
      */
     [[nodiscard]] shared_ptr<Task> require_session_job(const SessionID session_id, const JobKey job_key) const
     {
@@ -42,20 +38,9 @@ struct AppState
         if (!session)
             throw NotFound("session not found");
 
-        auto task = jobs.get_task(job_key);
+        auto task = session->resolve_job(job_key, jobs);
         if (!task)
-        {
-            // The task might be the latest finished task
-            task = session->get_latest_finished_task();
-            if (task->key != job_key)
-                task.reset();
-        }
-
-        if (!task)
-        {
             throw NotFound("job not found");
-        }
-
         return task;
     }
 };

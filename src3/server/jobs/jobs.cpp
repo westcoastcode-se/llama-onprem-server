@@ -41,22 +41,32 @@ void Jobs::unsafe_gc()
     }
 }
 
-JobKey Jobs::submit(MessagesRequest &&request, std::function<void(const shared_ptr<Task> &)> on_finished)
+shared_ptr<Task> Jobs::submit(MessagesRequest &&request,
+                              std::function<void(const shared_ptr<Task> &)> on_finished)
 {
+    const auto task = std::make_shared<Task>();
+    task->request = std::move(request);
+    task->on_finished = std::move(on_finished);
+    return enqueue(task);
+}
+
+shared_ptr<Task> Jobs::enqueue(shared_ptr<Task> task)
+{
+    if (!task)
+    {
+        return {};
+    }
+
     std::lock_guard lock(mutex_);
 
     // Opportunistic GC
     unsafe_gc();
 
-    const auto task = std::make_shared<Task>();
-    task->request = std::move(request);
-    task->on_finished = std::move(on_finished);
     task->state = JobState::Queued;
-
     tasks_[task->key] = task;
     queue_.push_back(task->key);
     cv_.notify_one();
-    return task->key;
+    return task;
 }
 
 std::shared_ptr<Task> Jobs::get_task(const JobKey key) const
@@ -73,24 +83,29 @@ std::shared_ptr<Task> Jobs::get_task(const JobKey key) const
 namespace
 {
 
-void notify_finished(const shared_ptr<Task>& task)
+void notify_finished(const shared_ptr<Task> &task)
 {
-    std::lock_guard lock(task->mutex);
-
-    // If on_finished is empty then it's finished notification is already done once
-    if (!task->on_finished)
+    // Take callback under lock, invoke without holding task->mutex so session callbacks
+    // can safely call Task getters without deadlocking.
+    std::function<void(const shared_ptr<Task> &)> cb;
+    {
+        std::lock_guard lock(task->mutex);
+        cb = std::move(task->on_finished);
+        task->on_finished = nullptr;
+    }
+    if (!cb)
+    {
         return;
+    }
 
-    // Notify listener
     try
     {
-        task->on_finished(task);
+        cb(task);
     }
     catch (const std::exception &e)
     {
         log_error("on_finished resulted in an unhandled error: ", e.what());
     }
-    task->on_finished = nullptr;
 }
 
 } // namespace
@@ -125,6 +140,7 @@ shared_ptr<Task> Jobs::cancel(JobKey const id)
     if (notify_immediately)
     {
         task->request_cancel();
+        task->set_cancelled();
         notify_finished(task);
     }
     else
@@ -223,15 +239,16 @@ void Jobs::worker_loop()
             continue;
         }
 
+        const string full = buffer->full_result();
         if (task->is_cancel_requested())
         {
-            task->set_result(buffer->full_result(), JobState::Cancelled, {});
+            task->set_result(full, JobState::Cancelled, {});
             notify_finished(task);
             continue;
         }
 
-        auto actions = parse_assistant_actions(task->get_result());
-        task->set_result(buffer->full_result(), JobState::Done, std::move(actions));
+        auto actions = parse_assistant_actions(full);
+        task->set_result(full, JobState::Done, std::move(actions));
         notify_finished(task);
     }
 }

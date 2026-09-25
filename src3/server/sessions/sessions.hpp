@@ -29,9 +29,9 @@ struct Session
     string system_prompt;
     // All chat messages associated with this session
     vector<ChatMessage> messages;
-    // The active task
+    // Job currently owned by this session (queued or running)
     optional<JobKey> active_task;
-    // The finished task. Ownership is taken from the job runner when the task is finished
+    // Last completed job for this session (status/token tail after active_task is cleared)
     shared_ptr<Task> latest_finished_task;
     // What state the session is in
     SessionState state = SessionState::Idle;
@@ -59,28 +59,56 @@ struct Session
     }
 
     /**
-     * @return The current active task
+     * @return The current active job key, if any
      */
-    optional<JobKey> get_active_task()
+    optional<JobKey> get_active_task() const
     {
         std::lock_guard slock(mutex);
         return active_task;
     }
 
-    /**
-     *
-     * @param task The active task
-     */
-    void set_active_task(JobKey task)
-    {
-        std::lock_guard slock(mutex);
-        active_task = task;
-    }
-
-    shared_ptr<Task> get_latest_finished_task()
+    shared_ptr<Task> get_latest_finished_task() const
     {
         std::lock_guard slock(mutex);
         return latest_finished_task;
+    }
+
+    /**
+     * True if this session currently tracks the job (active or last finished).
+     */
+    [[nodiscard]] bool owns_job(JobKey job_key) const
+    {
+        std::lock_guard slock(mutex);
+        if (active_task && *active_task == job_key)
+        {
+            return true;
+        }
+        return latest_finished_task && latest_finished_task->key == job_key;
+    }
+
+    /**
+     * Resolve a job that belongs to this session.
+     * Prefers the live Jobs registry, then falls back to latest_finished_task.
+     */
+    [[nodiscard]] shared_ptr<Task> resolve_job(JobKey job_key, const Jobs &jobs) const
+    {
+        std::lock_guard slock(mutex);
+        const bool is_active = active_task && *active_task == job_key;
+        const bool is_latest = latest_finished_task && latest_finished_task->key == job_key;
+        if (!is_active && !is_latest)
+        {
+            return {};
+        }
+
+        if (auto live = jobs.get_task(job_key))
+        {
+            return live;
+        }
+        if (is_latest)
+        {
+            return latest_finished_task;
+        }
+        return {};
     }
 
     /**

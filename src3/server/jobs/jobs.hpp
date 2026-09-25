@@ -71,7 +71,7 @@ struct Task
      * @param text The resulting text
      * @param new_state The state of the job
      */
-    void set_result(string text, const JobState new_state, ParsedAssistantActions actions)
+    void set_result(string text, const JobState new_state, ParsedAssistantActions actions = {})
     {
         std::lock_guard lock(mutex);
         result = std::move(text);
@@ -89,7 +89,7 @@ struct Task
         {
             buffer->cancel();
         }
-        else if (new_state == JobState::Done)
+        else if (new_state.is_finished())
         {
             buffer->set_done();
         }
@@ -195,9 +195,19 @@ class Jobs
      *
      * @param request The message to be processed by the LLM. This method takes over ownership of it
      * @param on_finished optional callback invoked once when task finishes (any terminal state).
-     * @return A unique key that represents the job
+     * @return The created task (also retained by the job runner until GC).
      */
-    JobKey submit(MessagesRequest &&request, std::function<void(const shared_ptr<Task>&)> on_finished = nullptr);
+    shared_ptr<Task> submit(MessagesRequest &&request,
+                            std::function<void(const shared_ptr<Task> &)> on_finished = nullptr);
+
+    /**
+     * Enqueue an already constructed task. Prefer this when the caller must register the job key
+     * on a session *before* the worker can finish (avoids lost on_finished updates).
+     *
+     * @param task Task with request/on_finished already set. Ownership is shared with Jobs.
+     * @return The same task pointer.
+     */
+    shared_ptr<Task> enqueue(shared_ptr<Task> task);
 
     /**
      * @param key The task id

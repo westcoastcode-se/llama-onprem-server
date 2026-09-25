@@ -97,38 +97,38 @@ void Sessions::on_job_finished(const shared_ptr<Session> &session, shared_ptr<Ta
 {
     std::lock_guard slock(session->mutex);
     log_info(task, " | is finished");
-    if (session->active_task != task->key)
+
+    // Only accept completion for the job this session is currently waiting on.
+    // active_task is set before enqueue, so a matching key is required.
+    if (!session->active_task || *session->active_task != task->key)
     {
-        // TODO: Is this actually possible???
         log_error(session, " | was notified by stale ", task);
         return;
     }
 
-    // Session task is now done
+    // Snapshot terminal task state under the task lock (session lock already held).
+    const auto status = task->to_status();
+
     session->active_task.reset();
     session->touch();
-    session->latest_finished_task = task;
-    if (task->state != JobState::Done)
+    session->latest_finished_task = std::move(task);
+
+    if (status.state != JobState::Done)
     {
         session->state = SessionState::Idle;
         session->clear_pending();
         return;
     }
 
-    const string& content = task->result;
-    session->messages.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = content});
+    session->messages.push_back(
+        ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = status.content});
 
-    // Prefer actions already parsed on the task (by Jobs worker)
     ParsedAssistantActions actions;
+    actions.tool_calls = status.tool_calls;
+    actions.question = status.question;
+    if (actions.tool_calls.empty() && !actions.question && !status.content.empty())
     {
-        // copy under task lock via to_status
-        const auto status = task->to_status_unsafe();
-        actions.tool_calls = status.tool_calls;
-        actions.question = status.question;
-        if (actions.tool_calls.empty() && !actions.question)
-        {
-            actions = parse_assistant_actions(content);
-        }
+        actions = parse_assistant_actions(status.content);
     }
 
     session->clear_pending();
@@ -158,31 +158,34 @@ void Sessions::on_job_finished(const shared_ptr<Session> &session, shared_ptr<Ta
 optional<JobKey> Sessions::enqueue_generation(const shared_ptr<Session> &session)
 {
     log_info(session, " | queuing up a new generation request for session");
-    MessagesRequest req;
+
+    // Build the task first so the session can own the job key *before* the worker runs.
+    auto task = std::make_shared<Task>();
     {
         std::lock_guard slock(session->mutex);
-        req.system = session->system_prompt;
-        req.messages = session->messages;
+        if (session->active_task.has_value())
+        {
+            throw Busy("session already has an active generation");
+        }
+        task->request.system = session->system_prompt;
+        task->request.messages = session->messages;
         session->state = SessionState::Generating;
         session->clear_pending();
         session->touch();
+        session->active_task = task->key;
+        session->latest_finished_task.reset();
     }
 
     std::weak_ptr weak = session;
-    auto key = jobs_.submit(std::move(req), [this, weak](const shared_ptr<Task> &task) {
+    task->on_finished = [this, weak](const shared_ptr<Task> &finished) {
         if (auto s = weak.lock())
         {
-            on_job_finished(s, task);
+            on_job_finished(s, finished);
         }
-    });
+    };
 
-    // TODO: Refactor these inner scopes with a method on the actual session object instead
-    {
-        std::lock_guard slock(session->mutex);
-        session->active_task = key;
-    }
-
-    return key;
+    jobs_.enqueue(task);
+    return task->key;
 }
 
 optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessageRequest &msg)
@@ -210,18 +213,7 @@ optional<JobKey> Sessions::post_message(const SessionID &id, const SessionMessag
         session->touch();
     }
 
-    auto key = enqueue_generation(session);
-    if (!key)
-    {
-        std::lock_guard slock(session->mutex);
-        if (!session->messages.empty() && session->messages.back().role == msg.role &&
-            session->messages.back().content == msg.content)
-        {
-            session->messages.pop_back();
-        }
-        return std::nullopt;
-    }
-    return key;
+    return enqueue_generation(session);
 }
 
 optional<JobKey> Sessions::post_tool_results(const SessionID &id, const SessionToolResultsRequest &body)
@@ -280,19 +272,7 @@ optional<JobKey> Sessions::post_tool_results(const SessionID &id, const SessionT
         session->touch();
     }
 
-    auto key = enqueue_generation(session);
-    if (!key)
-    {
-        std::lock_guard slock(session->mutex);
-        if (!session->messages.empty() && session->messages.back().role == ChatMessage::ROLE_USER &&
-            session->messages.back().content.starts_with("<tool_response>"))
-        {
-            session->messages.pop_back();
-        }
-        session->state = SessionState::AwaitingTools;
-        return std::nullopt;
-    }
-    return key;
+    return enqueue_generation(session);
 }
 
 void Sessions::gc()
