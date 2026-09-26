@@ -1,12 +1,10 @@
 **DISCLAIMER: Use this project and any code it runs at your own risk.**
 
-Most of the code is vibe-coded. The server only loads a GGUF model and generates text. The client runs tools on the machine where it is started, including shell commands and file writes. Run the client in a virtual machine or container if you want that kept away from the rest of the system.
-
 # Callisto
 
 Callisto is a local coding agent. Two programs share the work:
 
-1. **`callisto_server`** keeps chat sessions and generates text. It does not run tools.
+1. **`callisto_server`** keeps chat sessions, generates text and exposes it over HTTP REST. It does not run tools.
 2. **`callisto_cli`** is the agent. It talks to the server over HTTP and runs tools locally.
 
 llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.

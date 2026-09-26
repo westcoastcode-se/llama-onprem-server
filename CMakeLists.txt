@@ -98,7 +98,7 @@ FetchContent_Declare(ftxui
 FetchContent_MakeAvailable(ftxui)
 
 add_executable(callisto_cli
-        src/cli/main.cpp
+        src/cli.cpp
         src/cli/agent.cpp
         src/cli/agent_session.cpp
         src/cli/reply_stream.cpp
