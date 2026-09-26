@@ -115,21 +115,36 @@ target_include_directories(callisto_cli BEFORE PRIVATE
 target_link_libraries(callisto_cli PRIVATE ftxui::component CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# Tool tests. No model required.
+# Unit tests. No model required. callisto_tests also links llama for the chat template.
+# Both binaries use tests/tests.hpp (RUN_TEST, assertEquals, assertTrue).
 #
 add_executable(tests
     tests/tests.cpp
     tests/common/test_tools.cpp
+    tests/common/test_tool_policy.cpp
+    tests/common/test_web_utils.cpp
+    tests/common/test_defer.cpp
     tests/common/tools/test_tool_execute_command.cpp
+    tests/common/tools/test_tool_read_file.cpp
+    tests/common/tools/test_tool_write_file.cpp
+    tests/common/tools/test_tool_list_directory.cpp
+    tests/common/tools/test_tool_file_search.cpp
+    tests/common/tools/test_tool_search_text.cpp
+    tests/common/tools/test_tool_subagent.cpp
+    tests/cli/test_tool_schema.cpp
+    tests/cli/test_session_store.cpp
+    tests/server/test_utf8_stream.cpp
+    tests/server/test_token_buffer.cpp
+    tests/api/test_models.cpp
+    src/cli/tool_schema.cpp
+    src/cli/session_store.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
 target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
-#
-# Engine tests: template, tool parse, token prefix. No model required.
-#
 add_executable(callisto_tests
         tests/test_llama_engine.cpp
+        tests/server/test_context_params.cpp
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp)
@@ -137,3 +152,7 @@ configure_localai_target(callisto_tests)
 target_compile_definitions(callisto_tests PRIVATE
         LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src/templates/Qwen3.8-27B.jinja")
 target_link_libraries(callisto_tests PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+
+enable_testing()
+add_test(NAME tests COMMAND $<TARGET_FILE:tests>)
+add_test(NAME callisto_tests COMMAND $<TARGET_FILE:callisto_tests>)

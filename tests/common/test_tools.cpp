@@ -120,6 +120,28 @@ int test_strip_response_stream_think_and_multiple_tool_call_multi_line() {
     assertEquals("{b}", block.tool_calls[1].value);
     return EXIT_SUCCESS;
 }
+
+/**
+ * Plain assistant text has no blocks.
+ */
+int test_strip_response_stream_plain_text() {
+    const auto block = ResponseBlocks::from_text("Just an answer.");
+    assertEquals(0, block.flags);
+    assertTrue(block.thinking.empty());
+    assertTrue(block.tool_calls.empty());
+    return EXIT_SUCCESS;
+}
+
+/**
+ * A tool call that has not closed yet stays open.
+ */
+int test_strip_response_stream_open_tool_call() {
+    const auto block = ResponseBlocks::from_text("<tool_call>{\"name\":\"read_file\"");
+    assertEquals(1, block.tool_calls.size());
+    assertTrue(!block.tool_calls[0].is_done);
+    assertEquals("{\"name\":\"read_file\"", block.tool_calls[0].value);
+    return EXIT_SUCCESS;
+}
 /**
  * Run all generic tools functions tests
  */
@@ -134,5 +156,7 @@ int test_tools() {
     RUN_TEST(test_strip_response_stream_think_and_tool_call_multi_line);
     RUN_TEST(test_strip_response_stream_think_and_multiple_tool_call_one_line);
     RUN_TEST(test_strip_response_stream_think_and_multiple_tool_call_multi_line);
+    RUN_TEST(test_strip_response_stream_plain_text);
+    RUN_TEST(test_strip_response_stream_open_tool_call);
     return EXIT_SUCCESS;
 }
