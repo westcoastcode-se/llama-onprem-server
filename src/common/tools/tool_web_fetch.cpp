@@ -42,10 +42,11 @@ std::string web_fetch(const nlohmann::json & args) {
 
 Tool create_web_fetch_tool() {
     return {
-        "web_fetch",
-        "Fetch the readable text or html content of a web page via HTTP(S).",
-        "arguments:\n      url: string (absolute http/https url)\n      type: string (optional, text or html, defaults to text)",
-        web_fetch
+        .name = "web_fetch",
+        .description = "Fetch the readable text or html content of a web page via HTTP(S).",
+        .schema_doc = "arguments:\n      url: string (absolute http/https url)\n      type: string (optional, text "
+                          "or html, defaults to text)",
+        .execute = web_fetch
     };
 }
 

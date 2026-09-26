@@ -38,10 +38,11 @@ std::string file_search(const nlohmann::json & args) {
 
 Tool create_file_search_tool() {
     return {
-        "file_search",
-        "Recursively search for files or directories matching a name pattern.",
-        "arguments:\n      pattern: string (substring to match)\n      path: string (optional starting directory, defaults to '.')",
-        file_search
+        .name = "file_search",
+        .description = "Recursively search for files or directories matching a name pattern.",
+        .schema_doc = "arguments:\n      pattern: string (substring to match)\n      path: string (optional "
+                          "starting directory, defaults to '.')",
+        .execute = file_search
     };
 }
 

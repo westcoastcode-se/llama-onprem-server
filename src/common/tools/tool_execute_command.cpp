@@ -140,10 +140,11 @@ namespace Tools {
 
     Tool create_execute_command_tool() {
         return {
-            "execute_command",
-            "Execute a shell / bash command on the local system and return the output and exit code.",
-            "arguments:\n      command: string (the shell command to run)",
-            execute_command
+            .name = "execute_command",
+            .description =
+                    "Execute a shell / bash command on the local system and return the output and exit code.",
+            .schema_doc = "arguments:\n      command: string (the shell command to run)",
+            .execute = execute_command
         };
     }
 } // namespace Tools

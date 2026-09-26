@@ -85,10 +85,12 @@ std::string read_file(const nlohmann::json & args) {
 
 Tool create_read_file_tool() {
     return {
-        "read_file",
-        "Read file contents with line numbers.",
-        "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, 1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",
-        read_file
+        .name = "read_file",
+        .description = "Read file contents with line numbers.",
+        .schema_doc =
+                "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, "
+                "1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",
+        .execute = read_file
     };
 }
 
