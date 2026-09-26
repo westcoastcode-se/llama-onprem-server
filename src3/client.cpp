@@ -453,8 +453,24 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
 int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
 {
     install_sigint();
-    auto created = client.create_session(
-        CreateSessionRequest{.system = cfg.system_prompt, .messages = {}, .questions = cfg.questions});
+    CreateSessionRequest created_req;
+    created_req.system = cfg.system_prompt;
+    created_req.questions = cfg.questions;
+    created_req.tools.reserve(tools.size());
+    for (const auto &tool : tools)
+    {
+        ChatTool spec;
+        spec.name = tool.name;
+        spec.description = tool.description;
+        if (!tool.schema_doc.empty())
+        {
+            spec.description.push_back('\n');
+            spec.description += tool.schema_doc;
+        }
+        spec.parameters = R"({"type":"object","properties":{}})";
+        created_req.tools.push_back(std::move(spec));
+    }
+    auto created = client.create_session(created_req);
     const SessionID session_id = created.id;
 
     printf("%s[client] session %lud at %s (questions=%s)%s\n", Color::CYAN, session_id, client.base_url().c_str(),

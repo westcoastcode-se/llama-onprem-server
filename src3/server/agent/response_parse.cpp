@@ -157,6 +157,80 @@ bool extract_single_tool(const nlohmann::json &j, ParsedToolCall &tc)
     return !tc.name.empty();
 }
 
+void parse_qwen_function_calls(std::string_view text, std::vector<ParsedToolCall> &out)
+{
+    constexpr std::string_view kFunction = "<function=";
+    constexpr std::string_view kFunctionEnd = "</function>";
+    constexpr std::string_view kParameter = "<parameter=";
+    constexpr std::string_view kParameterEnd = "</parameter>";
+
+    size_t pos = 0;
+    while (pos < text.size())
+    {
+        const size_t start = text.find(kFunction, pos);
+        if (start == std::string_view::npos)
+        {
+            break;
+        }
+        const size_t name_begin = start + kFunction.size();
+        const size_t name_end = text.find('>', name_begin);
+        if (name_end == std::string_view::npos)
+        {
+            break;
+        }
+        const size_t end = text.find(kFunctionEnd, name_end);
+        if (end == std::string_view::npos)
+        {
+            break;
+        }
+
+        ParsedToolCall call;
+        call.name = std::string(trim_sv(text.substr(name_begin, name_end - name_begin)));
+        const std::string_view body = text.substr(name_end + 1, end - (name_end + 1));
+        call.arguments = nlohmann::json::object();
+
+        size_t param = 0;
+        while (param < body.size())
+        {
+            const size_t ps = body.find(kParameter, param);
+            if (ps == std::string_view::npos)
+            {
+                break;
+            }
+            const size_t nb = ps + kParameter.size();
+            const size_t ne = body.find('>', nb);
+            if (ne == std::string_view::npos)
+            {
+                break;
+            }
+            const size_t pe = body.find(kParameterEnd, ne);
+            if (pe == std::string_view::npos)
+            {
+                break;
+            }
+            const auto pname = std::string(trim_sv(body.substr(nb, ne - nb)));
+            const auto value = trim_sv(body.substr(ne + 1, pe - (ne + 1)));
+            if (!pname.empty())
+            {
+                try
+                {
+                    call.arguments[pname] = nlohmann::json::parse(value);
+                }
+                catch (...)
+                {
+                    call.arguments[pname] = std::string(value);
+                }
+            }
+            param = pe + kParameterEnd.size();
+        }
+        if (!call.name.empty())
+        {
+            out.push_back(std::move(call));
+        }
+        pos = end + kFunctionEnd.size();
+    }
+}
+
 void parse_tool_json_segment(std::string_view segment, std::vector<ParsedToolCall> &out)
 {
     auto trimmed = trim_sv(segment);
@@ -325,7 +399,12 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
             std::string_view body;
             size_t after = gt + 1;
             extract_tag_body(text, name, gt, body, after);
+            const size_t before = actions.tool_calls.size();
             parse_tool_json_segment(body, actions.tool_calls);
+            if (actions.tool_calls.size() == before)
+            {
+                parse_qwen_function_calls(body, actions.tool_calls);
+            }
             pos = after;
             continue;
         }
@@ -380,6 +459,10 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
         if (!trimmed.empty() && (trimmed.front() == '{' || trimmed.front() == '['))
         {
             parse_tool_json_segment(trimmed, actions.tool_calls);
+        }
+        if (actions.tool_calls.empty())
+        {
+            parse_qwen_function_calls(text, actions.tool_calls);
         }
     }
 

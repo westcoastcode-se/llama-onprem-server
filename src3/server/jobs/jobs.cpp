@@ -158,17 +158,27 @@ void Jobs::gc()
     unsafe_gc();
 }
 
-std::shared_ptr<Task> Jobs::pop_next_queued()
+void Jobs::release_session(const std::string &session_id)
 {
-    // Wait for new tasks to be available or shutting down
+    if (session_id.empty())
+    {
+        return;
+    }
+    std::lock_guard lock(mutex_);
+    pending_session_releases_.push_back(session_id);
+    cv_.notify_one();
+}
+
+Jobs::NextWork Jobs::wait_next()
+{
     std::unique_lock lock(mutex_);
-    cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
+    cv_.wait(lock, [this] { return stop_ || !queue_.empty() || !pending_session_releases_.empty(); });
+    NextWork work;
     if (stop_)
     {
-        return {};
+        return work;
     }
-
-    // Get the top-most job to run
+    work.releases.swap(pending_session_releases_);
     while (!queue_.empty())
     {
         const auto key = queue_.front();
@@ -178,22 +188,27 @@ std::shared_ptr<Task> Jobs::pop_next_queued()
         {
             continue;
         }
-        return it->second;
+        work.task = it->second;
+        break;
     }
-
-    return {};
+    return work;
 }
 
 void Jobs::worker_loop()
 {
     while (!stop_)
     {
-        std::shared_ptr<Task> task = pop_next_queued();
+        NextWork work = wait_next();
         if (stop_)
         {
             break;
         }
+        for (const auto &session_id : work.releases)
+        {
+            engine_.release_session(session_id);
+        }
 
+        std::shared_ptr<Task> task = std::move(work.task);
         // No tasks in the queue
         if (!task)
         {
@@ -227,14 +242,20 @@ void Jobs::worker_loop()
         const auto buffer = task->buffer;
         try
         {
-            std::string response = engine_.chat(msgs, [task, buffer](std::string &&piece) {
+            LlamaRequest call;
+            call.should_stop = [task] { return task->is_cancel_requested(); };
+            call.max_tokens = task->request.max_tokens;
+            call.session_id = task->request.session_id;
+            call.tools = task->request.tools;
+            call.token_cb = [task, buffer](std::string &&piece) {
                 if (task->is_cancel_requested())
                 {
                     return false;
                 }
                 buffer->push(piece);
                 return true;
-            });
+            };
+            std::string response = engine_.chat(msgs, call);
             buffer->set_full_result(std::move(response));
         }
         catch (const std::exception &e)

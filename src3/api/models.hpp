@@ -88,6 +88,53 @@ struct JobState
 };
 
 
+struct ChatTool
+{
+    string name;
+    string description;
+    // JSON object. Empty means an object with no properties.
+    string parameters;
+
+    [[nodiscard]] json to_json() const
+    {
+        json parameters_json = json::object();
+        if (!parameters.empty())
+        {
+            parameters_json = json::parse(parameters);
+        }
+        return json{{"type", "function"},
+                    {"function", {{"name", name}, {"description", description}, {"parameters", parameters_json}}}};
+    }
+
+    static ChatTool from_json(const json &j)
+    {
+        const json *fn = &j;
+        if (j.contains("function") && j.at("function").is_object())
+        {
+            fn = &j.at("function");
+        }
+        ChatTool tool;
+        tool.name = fn->value("name", "");
+        tool.description = fn->value("description", "");
+        if (tool.name.empty())
+        {
+            throw BadRequest{"tool name is required"};
+        }
+        if (fn->contains("parameters") && !fn->at("parameters").is_null())
+        {
+            const auto &params = fn->at("parameters");
+            tool.parameters = params.is_string() ? params.get<string>() : params.dump();
+            const auto parsed = json::parse(tool.parameters);
+            if (!parsed.is_object())
+            {
+                throw BadRequest{"tool parameters must be a JSON object"};
+            }
+            tool.parameters = parsed.dump();
+        }
+        return tool;
+    }
+};
+
 struct ChatMessage
 {
     static constexpr string ROLE_ASSISTANT = "assistant";
@@ -157,6 +204,12 @@ struct CreateSessionRequest
      */
     bool questions = true;
 
+    // OpenAI-style function tools rendered into the chat template.
+    vector<ChatTool> tools;
+
+    // < 0 means the server default (no cap unless LlamaConfig sets one).
+    int max_tokens = -1;
+
     void validate() const
     {
     }
@@ -167,11 +220,18 @@ struct CreateSessionRequest
         for (const auto &message : messages)
             arr.push_back(message.to_json());
 
+        json tools_json = json::array();
+        for (const auto &tool : tools)
+            tools_json.push_back(tool.to_json());
+
         // clang-format off
         return json
         {
             {"system", system},
             {"messages", arr},
+            {"questions", questions},
+            {"tools", tools_json},
+            {"max_tokens", max_tokens},
         };
         // clang-format on
     }
@@ -181,6 +241,16 @@ struct CreateSessionRequest
         CreateSessionRequest req;
         req.system = j.value("system", "");
         req.questions = j.value("questions", true);
+        req.max_tokens = j.value("max_tokens", -1);
+        const auto tools = j.value("tools", json::array());
+        if (tools.is_array())
+        {
+            req.tools.reserve(tools.size());
+            for (const auto &tool : tools)
+            {
+                req.tools.push_back(ChatTool::from_json(tool));
+            }
+        }
         const auto arr = j.value("messages", json::array());
         if (arr.is_array())
         {

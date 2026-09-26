@@ -7,6 +7,7 @@
 #include "server/sessions/sessions.hpp"
 #include <atomic>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <httplib.h>
@@ -47,7 +48,19 @@ void print_usage(const char *argv0)
             "  --top-k N     top-k sampling (default 20, 0 = off)\n"
             "  --min-p F     min-p sampling (default 0, 0 = off)\n"
             "  --presence-penalty F   (default 0)\n"
+            "  --frequency-penalty F  (default 0)\n"
             "  --repetition-penalty F (default 1.0 = off)\n"
+            "  --penalty-last-n N     penalty window (default 64)\n"
+            "  --seed N      sampler seed (default random)\n"
+            "  --max-tokens N         cap new tokens, -1 = context (default -1)\n"
+            "  --threads N            generation threads, 0 = default\n"
+            "  --threads-batch N      prompt threads, 0 = default\n"
+            "  --flash-attn auto|on|off (default auto)\n"
+            "  --cache-type-k TYPE    KV cache K type (default f16)\n"
+            "  --cache-type-v TYPE    KV cache V type (default f16)\n"
+            "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
+            "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
+            "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
             "  --host HOST   bind host (default 0.0.0.0)\n"
             "  -p/--port N   port (default 8080)\n",
             argv0);
@@ -112,6 +125,58 @@ int main(int argc, char **argv)
         else if (arg == "--repetition-penalty")
         {
             config.repetition_penalty = std::stof(need("--repetition-penalty"));
+        }
+        else if (arg == "--frequency-penalty")
+        {
+            config.frequency_penalty = std::stof(need("--frequency-penalty"));
+        }
+        else if (arg == "--penalty-last-n")
+        {
+            config.penalty_last_n = std::stoi(need("--penalty-last-n"));
+        }
+        else if (arg == "--seed")
+        {
+            config.seed = static_cast<uint32_t>(std::stoul(need("--seed")));
+        }
+        else if (arg == "--max-tokens")
+        {
+            config.max_tokens = std::stoi(need("--max-tokens"));
+        }
+        else if (arg == "--threads")
+        {
+            config.n_threads = std::stoi(need("--threads"));
+        }
+        else if (arg == "--threads-batch")
+        {
+            config.n_threads_batch = std::stoi(need("--threads-batch"));
+        }
+        else if (arg == "--flash-attn")
+        {
+            config.flash_attn = need("--flash-attn");
+        }
+        else if (arg == "--cache-type-k")
+        {
+            config.cache_type_k = need("--cache-type-k");
+        }
+        else if (arg == "--cache-type-v")
+        {
+            config.cache_type_v = need("--cache-type-v");
+        }
+        else if (arg == "--chat-template")
+        {
+            config.template_path = need("--chat-template");
+        }
+        else if (arg == "--reasoning")
+        {
+            config.reasoning = true;
+        }
+        else if (arg == "--no-reasoning")
+        {
+            config.reasoning = false;
+        }
+        else if (arg == "--kv-sessions")
+        {
+            config.kv_sessions = std::stoi(need("--kv-sessions"));
         }
         else if (arg == "--host")
         {

@@ -93,6 +93,8 @@ struct SessionMessageRequest
 {
     string content;
     string role;
+    // < 0 inherits the session cap.
+    int max_tokens = -1;
 
     /**
      * Validate required properties
@@ -110,6 +112,7 @@ struct SessionMessageRequest
         SessionMessageRequest req;
         req.content = j.value("content", "");
         req.role = j.value("role", "user");
+        req.max_tokens = j.value("max_tokens", -1);
         req.validate();
         return req;
     }
@@ -121,6 +124,7 @@ struct SessionMessageRequest
         {
             {"content", content},
             {"role", role},
+            {"max_tokens", max_tokens},
         };
         // clang-format on
     }

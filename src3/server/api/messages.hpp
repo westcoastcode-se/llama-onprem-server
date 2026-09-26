@@ -11,6 +11,9 @@ struct MessagesRequest
 {
     string system;
     vector<ChatMessage> messages;
+    string session_id;
+    int max_tokens = -1;
+    vector<ChatTool> tools;
 };
 
 /** GET /v1/sessions/:id/jobs/:key */

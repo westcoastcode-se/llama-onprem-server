@@ -115,6 +115,9 @@ class Session
             system_prompt_ = std::move(req.system);
         }
         messages_ = std::move(req.messages);
+        tools_ = std::move(req.tools);
+        max_tokens_ = req.max_tokens;
+        turn_max_tokens_ = max_tokens_;
         last_active_ = std::chrono::steady_clock::now();
     }
 
@@ -129,6 +132,7 @@ class Session
         clear_pending_unlocked();
         state_ = SessionState::Idle;
         messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content});
+        turn_max_tokens_ = msg.max_tokens >= 0 ? msg.max_tokens : max_tokens_;
         last_active_ = std::chrono::steady_clock::now();
     }
 
@@ -147,6 +151,7 @@ class Session
 
         messages_.push_back(
             ChatMessage{.role = ChatMessage::ROLE_USER, .content = format_tool_results(body)});
+        turn_max_tokens_ = max_tokens_;
         clear_pending_unlocked();
         state_ = SessionState::Idle;
         last_active_ = std::chrono::steady_clock::now();
@@ -164,6 +169,9 @@ class Session
         ensure_no_active_generation_unlocked();
         task->request.system = system_prompt_;
         task->request.messages = messages_;
+        task->request.session_id = std::to_string(id);
+        task->request.max_tokens = turn_max_tokens_;
+        task->request.tools = tools_;
         state_ = SessionState::Generating;
         clear_pending_unlocked();
         last_active_ = std::chrono::steady_clock::now();
@@ -242,6 +250,9 @@ class Session
     mutable std::mutex mutex_;
     string system_prompt_;
     vector<ChatMessage> messages_;
+    vector<ChatTool> tools_;
+    int max_tokens_ = -1;
+    int turn_max_tokens_ = -1;
     optional<JobKey> active_job_;
     shared_ptr<Task> latest_finished_;
     SessionState state_ = SessionState::Idle;

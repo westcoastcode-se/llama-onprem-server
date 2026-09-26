@@ -18,6 +18,7 @@ void Sessions::unsafe_gc()
         auto &s = it->second;
         if (s->is_gc_idle() && now - s->last_active() > kIdleTtl)
         {
+            jobs_.release_session(std::to_string(it->first));
             it = sessions_.erase(it);
             continue;
         }
@@ -75,6 +76,7 @@ shared_ptr<Session> Sessions::destroy(const SessionID &id)
     {
         jobs_.cancel(*job);
     }
+    jobs_.release_session(std::to_string(id));
 
     return session;
 }

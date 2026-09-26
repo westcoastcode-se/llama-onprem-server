@@ -243,12 +243,18 @@ class Jobs
 
     void gc();
 
+    /**
+     * Forget KV parked for this session. Applied on the worker thread.
+     */
+    void release_session(const std::string &session_id);
+
   private:
     LlamaEngine &engine_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::unordered_map<JobKey, std::shared_ptr<Task>> tasks_;
     std::deque<JobKey> queue_;
+    std::vector<std::string> pending_session_releases_;
     std::atomic<bool> stop_{false};
     std::shared_ptr<Task> current_task_;
     std::thread worker_;
@@ -256,8 +262,15 @@ class Jobs
     void worker_loop();
     void unsafe_gc();
 
+    struct NextWork
+    {
+        std::vector<std::string> releases;
+        shared_ptr<Task> task;
+    };
+
     /**
-     * @return The next queued task. The task might be cancelled
+     * @return The next queued task, plus session KV releases to apply first.
+     *         The task might be cancelled. Empty when shutting down.
      */
-    shared_ptr<Task> pop_next_queued();
+    NextWork wait_next();
 };

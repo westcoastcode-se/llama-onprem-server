@@ -15,8 +15,4 @@ Checklist from the LlamaEngine code review. Check items when the code is changed
 - [x] kFinishedTtl flyttad/bort från engine
 - [x] Known: KV-cache inte per session
 
-## Known limitation: KV-cache is not per session
-
-`LlamaEngine` keeps a single prefix KV-cache (`cached_messages_`) for the whole process.
-Concurrent or interleaved sessions share that cache; a prefix miss resets it. Full
-session-isolated KV is out of scope until a later change.
+Session-KV, Jinja-mallar och tokenprefix beskrivs i [LLAMA_ENGINE.md](LLAMA_ENGINE.md).

@@ -43,6 +43,14 @@ static void print_fat_client_usage(int, char ** argv) {
     printf("    -b  <int>         Batch size (default: 2048)\n");
     printf("    -ngl <int>        Number of GPU layers (default: 99)\n");
     printf("    -t  <float>       Sampling temperature (default: 0.7)\n");
+    printf("    --chat-template <path>  Jinja template, overrides the GGUF template\n");
+    printf("    --no-reasoning    Disable enable_thinking in the chat template\n");
+    printf("    --threads <int>   Generation threads, 0 = default\n");
+    printf("    --threads-batch <int>  Prompt threads, 0 = default\n");
+    printf("    --flash-attn auto|on|off\n");
+    printf("    --cache-type-k <type>  --cache-type-v <type>\n");
+    printf("    --seed <int>      Sampler seed\n");
+    printf("    --max-tokens <int>\n");
     printf("    -it <int>         Max agent tool iterations per turn (default: 25)\n");
     printf("    --command <cmd>   Execute a single command/prompt, print result to stdout, and exit\n");
     printf("    -e, --exec <cmd>  Alias for --command\n");

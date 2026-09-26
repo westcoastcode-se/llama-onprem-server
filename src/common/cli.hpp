@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -113,6 +114,54 @@ inline bool parse_llama_cli_arg(int & i, int argc, char ** argv, TConfig & confi
     }
     if (arg == "-t" && i + 1 < argc) {
         config.temperature = std::stof(argv[++i]);
+        return true;
+    }
+    if (arg == "--chat-template" && i + 1 < argc) {
+        config.template_path = argv[++i];
+        return true;
+    }
+    if (arg == "--reasoning") {
+        config.reasoning = true;
+        return true;
+    }
+    if (arg == "--no-reasoning") {
+        config.reasoning = false;
+        return true;
+    }
+    if (arg == "--threads" && i + 1 < argc) {
+        config.n_threads = std::stoi(argv[++i]);
+        return true;
+    }
+    if (arg == "--threads-batch" && i + 1 < argc) {
+        config.n_threads_batch = std::stoi(argv[++i]);
+        return true;
+    }
+    if (arg == "--flash-attn" && i + 1 < argc) {
+        config.flash_attn = argv[++i];
+        return true;
+    }
+    if (arg == "--cache-type-k" && i + 1 < argc) {
+        config.cache_type_k = argv[++i];
+        return true;
+    }
+    if (arg == "--cache-type-v" && i + 1 < argc) {
+        config.cache_type_v = argv[++i];
+        return true;
+    }
+    if (arg == "--seed" && i + 1 < argc) {
+        config.seed = static_cast<uint32_t>(std::stoul(argv[++i]));
+        return true;
+    }
+    if (arg == "--penalty-last-n" && i + 1 < argc) {
+        config.penalty_last_n = std::stoi(argv[++i]);
+        return true;
+    }
+    if (arg == "--frequency-penalty" && i + 1 < argc) {
+        config.frequency_penalty = std::stof(argv[++i]);
+        return true;
+    }
+    if (arg == "--max-tokens" && i + 1 < argc) {
+        config.max_tokens = std::stoi(argv[++i]);
         return true;
     }
     return false;

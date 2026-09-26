@@ -30,6 +30,16 @@ static void print_server_usage(int, char ** argv) {
     printf("    -b  <int>        Batch size (default: 2048)\n");
     printf("    -ngl <int>       Number of GPU layers (default: 99)\n");
     printf("    -t  <float>      Sampling temperature (default: 0.7)\n");
+    printf("    --chat-template <path>  Jinja template, overrides the GGUF template\n");
+    printf("    --reasoning / --no-reasoning   enable_thinking (default on)\n");
+    printf("    --threads <int>  Generation threads, 0 = default\n");
+    printf("    --threads-batch <int>  Prompt threads, 0 = default\n");
+    printf("    --flash-attn auto|on|off\n");
+    printf("    --cache-type-k <type>  --cache-type-v <type>  (default f16)\n");
+    printf("    --seed <int>     Sampler seed\n");
+    printf("    --penalty-last-n <int>\n");
+    printf("    --frequency-penalty <float>\n");
+    printf("    --max-tokens <int>  Cap new tokens, -1 = context\n");
     printf("    --host <ip/host> Host address to bind (default: 0.0.0.0)\n");
     printf("    -p, --port <int> Port to listen on (default: 8080)\n");
     printf("    -h, --help       Show this help message\n\n");

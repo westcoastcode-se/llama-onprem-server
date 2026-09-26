@@ -82,7 +82,7 @@ configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
         ${CMAKE_SOURCE_DIR}/src3
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
-target_link_libraries(callisto_server PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # 2b. Callisto REST Client (HTTP agent CLI)
@@ -104,7 +104,7 @@ add_executable(server
     src/server.cpp
     src/llm/llm_engine.cpp)
 configure_localai_target(server)
-target_link_libraries(server PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # 2. Client (TCP Client)
@@ -125,7 +125,7 @@ add_executable(fat_client
     ${COMMON_TOOL_SOURCES}
     src/common/agent.cpp)
 configure_localai_target(fat_client)
-target_link_libraries(fat_client PRIVATE llama CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(fat_client PRIVATE llama-common llama CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # 4. Tests
@@ -139,3 +139,17 @@ add_executable(tests
     src/common/agent.cpp)
 configure_localai_target(tests)
 target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+
+#
+# Callisto engine tests (template, tool parse, token prefix). No model required.
+#
+add_executable(callisto_tests
+        tests/test_llama_engine.cpp
+        src3/server/agent/response_parse.cpp
+        src3/common/log.cpp)
+configure_localai_target(callisto_tests)
+target_include_directories(callisto_tests BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/src3)
+target_compile_definitions(callisto_tests PRIVATE
+        LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src3/templates/Qwen3.8-27B.jinja")
+target_link_libraries(callisto_tests PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
