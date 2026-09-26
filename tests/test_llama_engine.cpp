@@ -1,3 +1,4 @@
+#include "cli/visible_text.hpp"
 #include "common/span_prefix.hpp"
 #include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
@@ -25,6 +26,37 @@ void check(bool cond, const char *expr, int line)
 }
 
 #define CHECK(cond) check(static_cast<bool>(cond), #cond, __LINE__)
+
+std::string visible(std::string_view text)
+{
+    VisibleText filter;
+    std::string out = filter.feed(text);
+    out += filter.finish();
+    return out;
+}
+
+void test_visible_text()
+{
+    CHECK(visible("Just the answer.") == "Just the answer.");
+    CHECK(visible("I'll read it.\n<tool_call>\n<function=read_file>\n<parameter=path>\n/tmp/a\n</parameter>\n</function>\n"
+                  "</tool_call>\nDone.") == "I'll read it.\nDone.");
+    CHECK(visible("Before\n<tool_calls>\n{\"name\":\"read_file\"}\n</tool_calls>\nAfter") == "Before\nAfter");
+    CHECK(visible("<question>\nWhich one?\n</question>\n<answer>\nThe first\n</answer>\nThanks.") == "Thanks.");
+    CHECK(visible("<function=read_file>\n<parameter=path>\nx\n</parameter>\n</function>\nOk.") == "Ok.");
+    CHECK(visible("<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{}\n```\n"
+                  "<｜tool▁call▁end｜><｜tool▁calls▁end｜>\nSeen.") == "Seen.");
+    CHECK(visible("a < b and c > d") == "a < b and c > d");
+
+    VisibleText chunked;
+    std::string out = chunked.feed("I'll read it.\n<tool_ca");
+    out += chunked.feed("ll>\n<function=read_file>\n</function>\n</tool_call>\nDone.");
+    out += chunked.finish();
+    CHECK(out == "I'll read it.\nDone.");
+
+    VisibleText open;
+    CHECK(open.feed("Partial <tool_call>\n<function=read_file>") == "Partial ");
+    CHECK(open.finish().empty());
+}
 
 void test_prefix()
 {
@@ -305,6 +337,7 @@ void test_qwen_template()
 
 int main()
 {
+    test_visible_text();
     test_prefix();
     test_tool_parse();
     test_system_prompt_uses_client_tools();

@@ -18,6 +18,7 @@ struct AgentConfig
     int port = 8080;
     ApprovalMode approval = ApprovalMode::ReadOnly;
     bool show_think = true;
+    bool debug = false;
     bool questions = true;
     bool exec = false;
     bool resume = false;

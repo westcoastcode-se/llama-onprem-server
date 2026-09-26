@@ -242,6 +242,7 @@ int main(int argc, char **argv)
     std::string approval = "read-only";
     bool resume = false;
     bool show_think = true;
+    bool debug = false;
     bool questions = true;
     std::string resume_id;
     std::vector<std::string> initial_prompt;
@@ -249,6 +250,7 @@ int main(int argc, char **argv)
     app.add_flag("--resume", resume, "Continue the saved session for this directory and server");
     app.add_option("--session", resume_id, "Continue this session id");
     app.add_flag("--show-think,!--hide-think", show_think, "Print the thinking block");
+    app.add_flag("--debug", debug, "Show tool-call XML and similar protocol blocks");
     app.add_flag("--questions,!--no-questions", questions, "Let the model pause and ask a question");
     app.add_option("prompt", initial_prompt, "Task to start with")->expected(0, -1);
 
@@ -262,6 +264,7 @@ int main(int argc, char **argv)
         config.host = options.host;
         config.port = options.port;
         config.show_think = show_think;
+        config.debug = debug;
         config.questions = questions;
         config.exec = exec_mode;
         config.resume = resume;

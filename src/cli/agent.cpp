@@ -1,6 +1,7 @@
 #include "cli/agent.hpp"
 #include "cli/tui.hpp"
 #include "cli/ui.hpp"
+#include "cli/visible_text.hpp"
 
 #include "api/errors.hpp"
 #include "api/models.hpp"
@@ -46,6 +47,7 @@ struct AgentState
     SessionID session = 0;
     ApprovalMode approval = ApprovalMode::ReadOnly;
     bool show_think = true;
+    bool debug = false;
     bool exec = false;
     int max_rounds = 40;
     std::vector<std::string> always_tools;
@@ -337,7 +339,7 @@ std::string edit_preview(const std::filesystem::path &cwd, const json &args)
     return preview;
 }
 
-void print_tool_header(AgentState &state, std::string_view name, const json &args)
+std::string tool_summary(std::string_view name, const json &args)
 {
     std::string brief;
     if (name == "execute_command")
@@ -370,23 +372,127 @@ void print_tool_header(AgentState &state, std::string_view name, const json &arg
         brief.resize(117);
         brief += "...";
     }
-    state.ui->note("• " + std::string(name) + (brief.empty() ? "" : " " + brief));
+    std::string summary(name);
+    if (!brief.empty())
+    {
+        summary += ' ';
+        summary += brief;
+    }
+    return summary;
 }
 
-Ask ask_approval(std::string_view name, const json &args, AgentState &state)
+std::string approval_detail(std::string_view name, const json &args, const std::filesystem::path &cwd)
+{
+    if (name == "write_file")
+    {
+        return edit_preview(cwd, args);
+    }
+    if (name == "execute_command")
+    {
+        return arg_text(args, "command");
+    }
+    return {};
+}
+
+// One tool call in the transcript. The fullscreen session keeps it as a single
+// line; exec still prints the same notes as before.
+class ToolBlock
+{
+  public:
+    ToolBlock(AgentState &state, std::string summary) : state(state), summary(std::move(summary))
+    {
+        if (state.exec)
+        {
+            state.ui->note("• " + this->summary);
+            return;
+        }
+        live = true;
+        state.ui->begin("tool");
+        state.ui->caption(this->summary);
+    }
+
+    ToolBlock(const ToolBlock &) = delete;
+    ToolBlock &operator=(const ToolBlock &) = delete;
+
+    ~ToolBlock()
+    {
+        if (!live)
+        {
+            return;
+        }
+        if (shown)
+        {
+            state.ui->collapse("tool");
+        }
+        state.ui->end();
+    }
+
+    void add(std::string text)
+    {
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
+        {
+            text.pop_back();
+        }
+        if (text.empty())
+        {
+            return;
+        }
+        if (!live)
+        {
+            state.ui->note(std::move(text));
+            return;
+        }
+        if (body)
+        {
+            state.ui->append("\n");
+        }
+        state.ui->append(std::move(text));
+        body = true;
+    }
+
+    void show()
+    {
+        if (!live)
+        {
+            return;
+        }
+        shown = true;
+        state.ui->expand("tool");
+    }
+
+    void hide()
+    {
+        if (!live)
+        {
+            return;
+        }
+        shown = false;
+        state.ui->collapse("tool");
+    }
+
+    void retitle(std::string text)
+    {
+        summary = std::move(text);
+        if (live)
+        {
+            state.ui->caption(summary);
+        }
+    }
+
+  private:
+    AgentState &state;
+    std::string summary;
+    bool live = false;
+    bool shown = false;
+    bool body = false;
+};
+
+Ask ask_approval(std::string_view name, AgentState &state)
 {
     if (state.exec && !isatty(STDIN_FILENO))
     {
         state.ui->note("denied " + std::string(name) + " (exec has no terminal to approve it)");
         return Ask::Deny;
-    }
-    if (name == "write_file")
-    {
-        state.ui->note(edit_preview(state.cwd, args));
-    }
-    else if (name == "execute_command")
-    {
-        state.ui->note(arg_text(args, "command"));
     }
     return state.ui->ask("Allow " + std::string(name) + "?", "y yes, n no, a always this tool, f full access");
 }
@@ -397,44 +503,79 @@ std::optional<json> run_tools(AgentState &state, const SessionResponse &session,
     for (const ParsedToolCall &call : session.pending_tool_calls)
     {
         json args = call.arguments.is_object() ? call.arguments : json::object();
-        print_tool_header(state, call.name, args);
+        const std::string summary = tool_summary(call.name, args);
         json item{{"id", call.id}, {"name", call.name}, {"denied", false}, {"content", ""}};
-        if (needs_approval(state, call.name, args))
+        bool run = true;
+        bool became_full = false;
         {
-            switch (ask_approval(call.name, args, state))
+            ToolBlock block(state, summary);
+            if (needs_approval(state, call.name, args))
             {
-            case Ask::Once:
-                break;
-            case Ask::AlwaysTool:
-                state.always_tools.emplace_back(call.name);
-                break;
-            case Ask::Full:
-                state.approval = ApprovalMode::Full;
-                state.ui->note("approval is now full");
-                break;
-            case Ask::Deny:
-                item["denied"] = true;
-                item["content"] = "denied by user";
-                results.push_back(std::move(item));
-                continue;
-            case Ask::Closed:
-                return std::nullopt;
+                if (!(state.exec && !isatty(STDIN_FILENO)))
+                {
+                    block.add(approval_detail(call.name, args, state.cwd));
+                }
+                block.show();
+                switch (ask_approval(call.name, state))
+                {
+                case Ask::Once:
+                    break;
+                case Ask::AlwaysTool:
+                    state.always_tools.emplace_back(call.name);
+                    break;
+                case Ask::Full:
+                    state.approval = ApprovalMode::Full;
+                    became_full = true;
+                    break;
+                case Ask::Deny:
+                    item["denied"] = true;
+                    item["content"] = "denied by user";
+                    if (!state.exec)
+                    {
+                        block.retitle(summary + "  denied");
+                        block.add("denied");
+                    }
+                    run = false;
+                    break;
+                case Ask::Closed:
+                    return std::nullopt;
+                }
+                block.hide();
+            }
+            else if (tool_kind(call.name) == ToolKind::Write)
+            {
+                block.add(edit_preview(state.cwd, args));
+            }
+            if (run)
+            {
+                const std::string output = run_tool(tools, call.name, args);
+                item["content"] = output;
+                std::string preview = output;
+                if (preview.size() > 160)
+                {
+                    preview.resize(157);
+                    preview += "...";
+                }
+                std::ranges::replace(preview, '\n', ' ');
+                if (state.exec)
+                {
+                    block.add("  " + preview);
+                }
+                else if (!preview.empty())
+                {
+                    block.add(preview);
+                }
             }
         }
-        else if (tool_kind(call.name) == ToolKind::Write)
+        if (became_full)
         {
-            state.ui->note(edit_preview(state.cwd, args));
+            state.ui->note("approval is now full");
         }
-        const std::string output = run_tool(tools, call.name, args);
-        item["content"] = output;
-        std::string preview = output;
-        if (preview.size() > 160)
+        if (!run)
         {
-            preview.resize(157);
-            preview += "...";
+            results.push_back(std::move(item));
+            continue;
         }
-        std::ranges::replace(preview, '\n', ' ');
-        state.ui->note("  " + preview);
         results.push_back(std::move(item));
     }
     return results;
@@ -559,14 +700,15 @@ void stream_reply(AgentState &state, JobKey key)
     bool thinking = false;
     bool think_open = false;
     bool answer_open = false;
-    auto close_think = [&] {
-        if (think_open)
+    VisibleText hidden;
+    auto show_assistant = [&](std::string_view text) {
+        if (!answer_open)
         {
-            state.ui->end();
-            think_open = false;
+            while (!text.empty() && (text.front() == '\n' || text.front() == '\r'))
+            {
+                text.remove_prefix(1);
+            }
         }
-    };
-    auto emit = [&](std::string_view text) {
         if (text.empty())
         {
             return;
@@ -577,6 +719,25 @@ void stream_reply(AgentState &state, JobKey key)
             answer_open = true;
         }
         state.ui->append(std::string(text));
+    };
+    auto emit = [&](std::string_view text) {
+        if (text.empty())
+        {
+            return;
+        }
+        if (state.debug)
+        {
+            show_assistant(text);
+            return;
+        }
+        show_assistant(hidden.feed(text));
+    };
+    auto close_think = [&] {
+        if (think_open)
+        {
+            state.ui->end();
+            think_open = false;
+        }
     };
     auto take_think = [&](std::string_view text) {
         if (!state.show_think)
@@ -684,6 +845,10 @@ void stream_reply(AgentState &state, JobKey key)
         watcher.request_stop();
         watcher.join();
         close_think();
+        if (!state.debug)
+        {
+            show_assistant(hidden.finish());
+        }
         if (answer_open)
         {
             state.ui->end();
@@ -701,6 +866,10 @@ void stream_reply(AgentState &state, JobKey key)
         take_think(pending);
     }
     close_think();
+    if (!state.debug)
+    {
+        show_assistant(hidden.finish());
+    }
     if (answer_open)
     {
         state.ui->end();
@@ -906,7 +1075,8 @@ void print_help(AgentUi &ui)
             "/compact              summarize the chat into a new session\n"
             "/clear                start a new session\n"
             "/exit                 leave\n"
-            "Ctrl-C cancels the current generation.");
+            "Ctrl-C cancels the current generation.\n"
+            "Click a thinking or tool line, or press Ctrl-O, to open or close it.");
 }
 
 void print_diff(AgentUi &ui)
@@ -1190,6 +1360,7 @@ int run_agent(const AgentConfig &config)
     state.client = &client;
     state.approval = config.approval;
     state.show_think = config.show_think;
+    state.debug = config.debug;
     state.exec = config.exec;
 
     std::vector<Tool> tools = base_tools;

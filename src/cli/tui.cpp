@@ -3,12 +3,15 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/string.hpp>
+#include <ftxui/screen/terminal.hpp>
 
 #include <algorithm>
 #include <condition_variable>
 #include <format>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -20,7 +23,200 @@ struct Block
 {
     std::string kind;
     std::string text;
+    std::string caption = {};
+    bool expanded = false;
 };
+
+struct ThinkPreview
+{
+    std::string line;
+    bool more = false;
+};
+
+ThinkPreview think_preview(std::string_view text)
+{
+    std::size_t start = 0;
+    while (start < text.size() &&
+           (text[start] == '\n' || text[start] == '\r' || text[start] == ' ' || text[start] == '\t'))
+    {
+        ++start;
+    }
+    std::size_t end = start;
+    while (end < text.size() && text[end] != '\n' && text[end] != '\r')
+    {
+        ++end;
+    }
+    std::string line(text.substr(start, end - start));
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
+    {
+        line.pop_back();
+    }
+    std::size_t rest = end;
+    while (rest < text.size() &&
+           (text[rest] == '\n' || text[rest] == '\r' || text[rest] == ' ' || text[rest] == '\t'))
+    {
+        ++rest;
+    }
+    return {std::move(line), rest < text.size()};
+}
+
+std::string fit_columns(const std::string &line, int columns)
+{
+    if (columns <= 0)
+    {
+        return {};
+    }
+    if (ftxui::string_width(line) <= columns)
+    {
+        return line;
+    }
+    if (columns == 1)
+    {
+        return "…";
+    }
+    std::string out;
+    int used = 0;
+    const int limit = columns - 1;
+    for (const std::string &glyph : ftxui::Utf8ToGlyphs(line))
+    {
+        if (glyph.empty())
+        {
+            continue;
+        }
+        const int width = std::max(1, ftxui::string_width(glyph));
+        if (used + width > limit)
+        {
+            break;
+        }
+        out += glyph;
+        used += width;
+    }
+    out += "…";
+    return out;
+}
+
+std::string fit_label(std::string label, int columns, bool more)
+{
+    const bool too_wide = ftxui::string_width(label) > columns;
+    if (!too_wide && !more)
+    {
+        return label;
+    }
+    if (!too_wide && ftxui::string_width(label) + 1 <= columns)
+    {
+        label += "…";
+        return label;
+    }
+    return fit_columns(label, columns);
+}
+
+std::string collapsed_thinking_label(const std::string &text, int columns)
+{
+    const ThinkPreview preview = think_preview(text);
+    const std::string label = preview.line.empty() ? "thinking" : "thinking  " + preview.line;
+    return fit_label(label, columns, preview.more);
+}
+
+std::string without_cr(std::string text)
+{
+    std::erase(text, '\r');
+    return text;
+}
+
+ftxui::Element thinking_block(const Block &block, bool reveal, ftxui::Box &hit)
+{
+    using namespace ftxui;
+    const Color ink = Color::GrayDark;
+    Element body;
+    if (!block.expanded)
+    {
+        const int columns = std::max(16, Terminal::Size().dimx - 8);
+        const std::string label = collapsed_thinking_label(block.text, columns);
+        body = hbox({text(" ▶ " + label), filler()}) | color(Color::GrayLight) | bgcolor(ink);
+    }
+    else
+    {
+        Element header = hbox({text("▼ thinking") | bold, filler()});
+        if (reveal)
+        {
+            header = header | focus;
+        }
+        Elements lines;
+        lines.push_back(header);
+        const std::string clean = without_cr(block.text);
+        if (!clean.empty())
+        {
+            lines.push_back(paragraph(clean));
+        }
+        body = vbox(std::move(lines)) | color(ink) | borderStyled(ROUNDED, ink);
+    }
+    return body | reflect(hit);
+}
+
+bool foldable(const Block &block)
+{
+    return block.kind == "thinking" || block.kind == "tool";
+}
+
+ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit)
+{
+    using namespace ftxui;
+    const Color ink = Color::Yellow;
+    const int columns = std::max(16, Terminal::Size().dimx - 8);
+    const ThinkPreview preview = think_preview(block.text);
+    std::string title = block.caption.empty() ? preview.line : block.caption;
+    if (title.empty())
+    {
+        title = "tool";
+    }
+    const bool more = !preview.line.empty() || preview.more;
+    Element body;
+    if (!block.expanded)
+    {
+        body = hbox({text(" ▶ " + fit_label(title, columns, more)), filler()}) | color(ink) | bgcolor(Color::GrayDark);
+    }
+    else
+    {
+        Element header = hbox({text("▼ " + fit_columns(title, columns)) | bold | color(ink), filler()});
+        if (reveal)
+        {
+            header = header | focus;
+        }
+        Elements lines;
+        lines.push_back(std::move(header));
+        const std::string clean = without_cr(block.text);
+        if (!clean.empty())
+        {
+            lines.push_back(paragraph(clean) | color(Color::GrayLight));
+        }
+        body = vbox(std::move(lines)) | borderStyled(ROUNDED, ink);
+    }
+    return body | reflect(hit);
+}
+
+std::string trimmed_edges(const std::string &text)
+{
+    std::string clean = without_cr(text);
+    std::size_t begin = 0;
+    while (begin < clean.size() && clean[begin] == '\n')
+    {
+        ++begin;
+    }
+    std::size_t end = clean.size();
+    while (end > begin && clean[end - 1] == '\n')
+    {
+        --end;
+    }
+    return clean.substr(begin, end - begin);
+}
+
+ftxui::Element assistant_block(const Block &block)
+{
+    using namespace ftxui;
+    const std::string clean = trimmed_edges(block.text);
+    Element body = paragraph(clean);
+    return window(text(" assistant ") | dim, body);
+}
 
 std::size_t utf8_prev(std::string_view text, std::size_t index)
 {
@@ -112,6 +308,38 @@ class TuiUi final : public AgentUi
     std::string ask_text;
     ftxui::ScreenInteractive *screen = nullptr;
     bool ready = false;
+    // Hit boxes from the last frame. Empty until a folding row is drawn.
+    std::vector<ftxui::Box> think_boxes;
+    std::size_t revealed = static_cast<std::size_t>(-1);
+
+    std::size_t latest(std::string_view kind) const
+    {
+        for (std::size_t index = blocks.size(); index > 0; --index)
+        {
+            if (blocks[index - 1].kind == kind)
+            {
+                return index - 1;
+            }
+        }
+        return static_cast<std::size_t>(-1);
+    }
+
+    void toggle_fold(std::size_t index)
+    {
+        if (index >= blocks.size() || !foldable(blocks[index]))
+        {
+            return;
+        }
+        blocks[index].expanded = !blocks[index].expanded;
+        if (blocks[index].expanded)
+        {
+            revealed = index;
+        }
+        else if (revealed == index)
+        {
+            revealed = static_cast<std::size_t>(-1);
+        }
+    }
 
     void wake()
     {
@@ -192,6 +420,49 @@ class TuiUi final : public AgentUi
         wake();
     }
 
+    void expand(std::string_view kind) override
+    {
+        {
+            std::lock_guard lock(mutex);
+            const std::size_t index = latest(kind);
+            if (index != static_cast<std::size_t>(-1))
+            {
+                blocks[index].expanded = true;
+            }
+        }
+        wake();
+    }
+
+    void collapse(std::string_view kind) override
+    {
+        {
+            std::lock_guard lock(mutex);
+            const std::size_t index = latest(kind);
+            if (index == static_cast<std::size_t>(-1))
+            {
+                return;
+            }
+            blocks[index].expanded = false;
+            if (revealed == index)
+            {
+                revealed = static_cast<std::size_t>(-1);
+            }
+        }
+        wake();
+    }
+
+    void caption(std::string text) override
+    {
+        {
+            std::lock_guard lock(mutex);
+            if (open && !blocks.empty())
+            {
+                blocks.back().caption = std::move(text);
+            }
+        }
+        wake();
+    }
+
     Ask ask(std::string title, std::string) override
     {
         {
@@ -254,20 +525,42 @@ class TuiUi final : public AgentUi
         using namespace ftxui;
         std::lock_guard lock(mutex);
         Elements rows;
-        for (const Block &block : blocks)
+        think_boxes.assign(blocks.size(), Box{0, -1, 0, -1});
+        bool follow_tail = true;
+        for (std::size_t i = 0; i < blocks.size(); ++i)
         {
+            const Block &block = blocks[i];
+            if (foldable(block))
+            {
+                const bool reveal = block.expanded && revealed == i;
+                if (reveal)
+                {
+                    follow_tail = false;
+                }
+                if (block.kind == "thinking")
+                {
+                    rows.push_back(thinking_block(block, reveal, think_boxes[i]));
+                }
+                else
+                {
+                    rows.push_back(tool_block(block, reveal, think_boxes[i]));
+                }
+                rows.push_back(separatorEmpty());
+                continue;
+            }
+            if (block.kind == "assistant")
+            {
+                if (!trimmed_edges(block.text).empty())
+                {
+                    rows.push_back(assistant_block(block));
+                    rows.push_back(separatorEmpty());
+                }
+                continue;
+            }
             Color ink = Color::White;
             if (block.kind == "you")
             {
                 ink = Color::Cyan;
-            }
-            else if (block.kind == "thinking")
-            {
-                ink = Color::GrayDark;
-            }
-            else if (block.kind == "tool")
-            {
-                ink = Color::Yellow;
             }
             else if (block.kind == "note")
             {
@@ -292,7 +585,12 @@ class TuiUi final : public AgentUi
         {
             rows.push_back(text("Ask for a change, or /help") | dim);
         }
-        return vbox(std::move(rows)) | focusPositionRelative(0, 1) | yframe | flex;
+        Element body = vbox(std::move(rows));
+        if (follow_tail)
+        {
+            body = body | focusPositionRelative(0, 1);
+        }
+        return body | yframe | flex;
     }
 
     bool on_event(ftxui::Event event)
@@ -314,6 +612,36 @@ class TuiUi final : public AgentUi
                 line_ready = true;
             }
             cv.notify_all();
+            return true;
+        }
+        if (event.is_mouse())
+        {
+            const Mouse &mouse = event.mouse();
+            if (mouse.button == Mouse::Left && mouse.motion == Mouse::Pressed)
+            {
+                std::lock_guard lock(mutex);
+                for (std::size_t i = 0; i < think_boxes.size() && i < blocks.size(); ++i)
+                {
+                    if (think_boxes[i].Contain(mouse.x, mouse.y))
+                    {
+                        toggle_fold(i);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        if (event == Event::CtrlO)
+        {
+            std::lock_guard lock(mutex);
+            for (std::size_t i = blocks.size(); i > 0; --i)
+            {
+                if (foldable(blocks[i - 1]))
+                {
+                    toggle_fold(i - 1);
+                    return true;
+                }
+            }
             return true;
         }
         if (event == Event::ArrowUp || event == Event::ArrowDown)

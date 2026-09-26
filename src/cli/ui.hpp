@@ -28,6 +28,10 @@ struct AgentUi
     virtual void begin(std::string kind) = 0;
     virtual void append(std::string text) = 0;
     virtual void end() = 0;
+    // The newest block of this kind. The console session ignores these.
+    virtual void expand(std::string_view) {}
+    virtual void collapse(std::string_view) {}
+    virtual void caption(std::string) {}
     virtual Ask ask(std::string title, std::string body) = 0;
     virtual std::optional<std::string> question(std::string prompt, std::vector<std::string> answers) = 0;
     // Empty when the user leaves the session.
