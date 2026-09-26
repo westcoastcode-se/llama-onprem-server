@@ -28,6 +28,7 @@ shared_ptr<Session> Sessions::create(CreateSessionRequest req)
 
     auto session = std::make_shared<Session>(adapter_);
     session->configure(std::move(req));
+    session->set_context_usage(0, jobs_.context_size());
 
     {
         std::lock_guard lock(mutex_);
@@ -57,6 +58,8 @@ shared_ptr<Session> Sessions::snapshot(const SessionID &id)
     auto clone = parent->capture(omit);
     auto child = std::make_shared<Session>(adapter_);
     child->load_clone(std::move(clone));
+    const auto [used, size] = parent->context_usage();
+    child->set_context_usage(used, size > 0 ? size : jobs_.context_size());
 
     {
         std::lock_guard lock(mutex_);

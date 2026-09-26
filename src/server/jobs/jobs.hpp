@@ -7,6 +7,7 @@
 #include "../llm/llm_engine.hpp"
 #include "common/log.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -59,6 +60,8 @@ struct Task
     string result;
     string reasoning;
     std::atomic<bool> cancel_requested{false};
+    std::atomic<int> context_used_{0};
+    std::atomic<int> context_size_{0};
 
     // Parsed after successful generation (client-side tools / questions).
     std::vector<ParsedToolCall> tool_calls;
@@ -82,7 +85,6 @@ struct Task
         error_code = std::move(code);
         state = JobState::Error;
         finished_at = std::chrono::steady_clock::now();
-        buffer->set_done();
     }
 
     /**
@@ -100,17 +102,25 @@ struct Task
         tool_calls = std::move(actions.tool_calls);
         question = std::move(actions.question);
 
-        // Job is finished
+        // Job is finished. The token stream stays open until release_stream(), so a
+        // session can record context usage before the client observes done.
         if (new_state.is_finished())
         {
             finished_at = std::chrono::steady_clock::now();
         }
+    }
 
-        if (new_state == JobState::Cancelled)
+    void release_stream()
+    {
+        if (!buffer)
+        {
+            return;
+        }
+        if (is_cancel_requested() || get_state() == JobState::Cancelled)
         {
             buffer->cancel();
         }
-        else if (new_state.is_finished())
+        else
         {
             buffer->set_done();
         }
@@ -140,6 +150,23 @@ struct Task
     [[nodiscard]] bool is_cancel_requested() const
     {
         return cancel_requested.load(std::memory_order_relaxed);
+    }
+
+    // Latest KV size for this job's session. Written on the worker, read by the token stream.
+    void note_context(int used, int size)
+    {
+        context_used_.store(std::max(0, used), std::memory_order_relaxed);
+        context_size_.store(std::max(0, size), std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] int context_used() const
+    {
+        return context_used_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] int context_size() const
+    {
+        return context_size_.load(std::memory_order_relaxed);
     }
 
     [[nodiscard]] MessageStatusResponse to_status_unsafe() const
@@ -259,6 +286,9 @@ class Jobs
      * Forget KV parked for this session. Applied on the worker thread.
      */
     void release_session(const std::string &session_id);
+
+    // Configured context length. Immutable after the engine is loaded.
+    [[nodiscard]] int context_size() const;
 
     /**
      * Copy KV from one session id onto another. Applied on the worker thread.

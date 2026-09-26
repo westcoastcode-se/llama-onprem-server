@@ -8,6 +8,7 @@
 #include "../jobs/jobs.hpp"
 #include <algorithm>
 #include <chrono>
+#include <utility>
 #include <format>
 #include <memory>
 #include <mutex>
@@ -102,7 +103,25 @@ class Session
         r.questions = questions_enabled_;
         r.error = last_error_;
         r.error_code = error_code_;
+        r.context_used = context_used_;
+        r.context_size = context_size_;
         return r;
+    }
+
+    void set_context_usage(int used, int size)
+    {
+        std::lock_guard lock(mutex_);
+        context_used_ = std::max(0, used);
+        if (size > 0)
+        {
+            context_size_ = size;
+        }
+    }
+
+    [[nodiscard]] std::pair<int, int> context_usage() const
+    {
+        std::lock_guard lock(mutex_);
+        return {context_used_, context_size_};
     }
 
     /** No generation in flight. Awaiting a tool result still expires after kIdleTtl. */
@@ -240,6 +259,11 @@ class Session
         }
 
         const auto status = task->to_status();
+        context_used_ = std::max(0, task->context_used());
+        if (const int size = task->context_size(); size > 0)
+        {
+            context_size_ = size;
+        }
         active_job_.reset();
         last_active_ = std::chrono::steady_clock::now();
         latest_finished_ = std::move(task);
@@ -327,6 +351,8 @@ class Session
     vector<ChatTool> tools_;
     int max_tokens_ = -1;
     int turn_max_tokens_ = -1;
+    int context_used_ = 0;
+    int context_size_ = 0;
     optional<JobKey> active_job_;
     shared_ptr<Task> latest_finished_;
     SessionState state_ = SessionState::Idle;

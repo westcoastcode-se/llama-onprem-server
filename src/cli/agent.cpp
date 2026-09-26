@@ -1,4 +1,6 @@
 #include "cli/agent.hpp"
+#include "cli/tui.hpp"
+#include "cli/ui.hpp"
 
 #include "api/errors.hpp"
 #include "api/models.hpp"
@@ -26,11 +28,9 @@
 namespace
 {
 
-std::atomic<bool> g_interrupt{false};
-
 void on_interrupt(int)
 {
-    g_interrupt.store(true, std::memory_order_relaxed);
+    g_agent_interrupt.store(true, std::memory_order_relaxed);
 }
 
 enum class TurnStatus
@@ -50,6 +50,123 @@ struct AgentState
     int max_rounds = 40;
     std::vector<std::string> always_tools;
     std::filesystem::path cwd = std::filesystem::current_path();
+    AgentUi *ui = nullptr;
+};
+
+class ConsoleUi final : public AgentUi
+{
+    bool thinking = false;
+
+  public:
+    void set_status(std::string status) override
+    {
+        std::println(stderr, "{}", status);
+    }
+
+    void set_context(int, int) override
+    {
+    }
+
+    void note(std::string text) override
+    {
+        std::println(stderr, "{}", text);
+    }
+
+    void begin(std::string kind) override
+    {
+        thinking = kind == "thinking";
+        if (thinking)
+        {
+            std::print("{}", Color::GRAY);
+        }
+    }
+
+    void append(std::string text) override
+    {
+        std::print("{}", text);
+    }
+
+    void end() override
+    {
+        if (thinking)
+        {
+            std::println("{}", Color::RESET);
+        }
+        else
+        {
+            std::println("");
+        }
+        thinking = false;
+    }
+
+    Ask ask(std::string title, std::string body) override
+    {
+        std::println(stderr, "{}", title);
+        if (!body.empty())
+        {
+            std::println(stderr, "{}", body);
+        }
+        std::string line;
+        if (!std::getline(std::cin, line))
+        {
+            return Ask::Closed;
+        }
+        if (line.empty() || line == "y" || line == "yes")
+        {
+            return Ask::Once;
+        }
+        if (line == "a" || line == "always")
+        {
+            return Ask::AlwaysTool;
+        }
+        if (line == "f" || line == "full")
+        {
+            return Ask::Full;
+        }
+        return Ask::Deny;
+    }
+
+    std::optional<std::string> question(std::string prompt, std::vector<std::string> answers) override
+    {
+        std::println(stderr, "{}", prompt);
+        for (std::size_t i = 0; i < answers.size(); ++i)
+        {
+            std::println(stderr, "  {} {}", i, answers[i]);
+        }
+        std::print(stderr, "answer> ");
+        std::fflush(stderr);
+        std::string line;
+        if (!std::getline(std::cin, line) || line.empty())
+        {
+            return std::nullopt;
+        }
+        const bool digits = std::ranges::all_of(line, [](unsigned char c) { return std::isdigit(c) != 0; });
+        if (digits && !answers.empty())
+        {
+            try
+            {
+                const int index = std::stoi(line);
+                if (index >= 0 && static_cast<std::size_t>(index) < answers.size())
+                {
+                    return answers[static_cast<std::size_t>(index)];
+                }
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+        return line;
+    }
+
+    std::string read_line() override
+    {
+        std::string line;
+        if (!std::getline(std::cin, line))
+        {
+            return {};
+        }
+        return line;
+    }
 };
 
 const char *approval_name(ApprovalMode mode)
@@ -169,7 +286,7 @@ bool needs_approval(const AgentState &state, std::string_view name, const json &
     return true;
 }
 
-void print_edit_preview(const std::filesystem::path &cwd, const json &args)
+std::string edit_preview(const std::filesystem::path &cwd, const json &args)
 {
     const std::string path_text = arg_text(args, "path");
     const std::string content = arg_text(args, "content");
@@ -188,8 +305,7 @@ void print_edit_preview(const std::filesystem::path &cwd, const json &args)
             previous = buffer.str();
         }
     }
-    std::println(stderr, "{}--- {}{}", Color::DIM, path.string(), Color::RESET);
-    std::println(stderr, "{}+++ {} bytes{}", Color::DIM, content.size(), Color::RESET);
+    std::string preview = path.string() + "  (" + std::to_string(content.size()) + " bytes)\n";
     std::istringstream old_lines(previous);
     std::istringstream new_lines(content);
     std::string old_line;
@@ -207,20 +323,21 @@ void print_edit_preview(const std::filesystem::path &cwd, const json &args)
         }
         if (have_old)
         {
-            std::println(stderr, "{}- {}{}", Color::RED, old_line, Color::RESET);
+            preview += "- " + old_line + "\n";
             have_old = static_cast<bool>(std::getline(old_lines, old_line));
             ++shown;
         }
         if (have_new && shown < 40)
         {
-            std::println(stderr, "{}+ {}{}", Color::GREEN, new_line, Color::RESET);
+            preview += "+ " + new_line + "\n";
             have_new = static_cast<bool>(std::getline(new_lines, new_line));
             ++shown;
         }
     }
+    return preview;
 }
 
-void print_tool_header(std::string_view name, const json &args)
+void print_tool_header(AgentState &state, std::string_view name, const json &args)
 {
     std::string brief;
     if (name == "execute_command")
@@ -253,53 +370,25 @@ void print_tool_header(std::string_view name, const json &args)
         brief.resize(117);
         brief += "...";
     }
-    std::println(stderr, "{}• {} {}{}", Color::CYAN, name, brief, Color::RESET);
+    state.ui->note("• " + std::string(name) + (brief.empty() ? "" : " " + brief));
 }
 
-enum class Ask
-{
-    Once,
-    AlwaysTool,
-    Full,
-    Deny,
-    Closed
-};
-
-Ask ask_approval(std::string_view name, const json &args, const AgentState &state)
+Ask ask_approval(std::string_view name, const json &args, AgentState &state)
 {
     if (state.exec && !isatty(STDIN_FILENO))
     {
-        std::println(stderr, "{}denied {} (exec has no terminal to approve it){}", Color::YELLOW, name, Color::RESET);
+        state.ui->note("denied " + std::string(name) + " (exec has no terminal to approve it)");
         return Ask::Deny;
     }
     if (name == "write_file")
     {
-        print_edit_preview(state.cwd, args);
+        state.ui->note(edit_preview(state.cwd, args));
     }
     else if (name == "execute_command")
     {
-        std::println(stderr, "{}{}{}", Color::YELLOW, arg_text(args, "command"), Color::RESET);
+        state.ui->note(arg_text(args, "command"));
     }
-    std::print(stderr, "Allow {}? [y]es / [n]o / [a]lways this tool / [f]ull access: ", name);
-    std::fflush(stderr);
-    std::string line;
-    if (!std::getline(std::cin, line))
-    {
-        return Ask::Closed;
-    }
-    if (line.empty() || line == "y" || line == "yes")
-    {
-        return Ask::Once;
-    }
-    if (line == "a" || line == "always")
-    {
-        return Ask::AlwaysTool;
-    }
-    if (line == "f" || line == "full")
-    {
-        return Ask::Full;
-    }
-    return Ask::Deny;
+    return state.ui->ask("Allow " + std::string(name) + "?", "y yes, n no, a always this tool, f full access");
 }
 
 std::optional<json> run_tools(AgentState &state, const SessionResponse &session, const std::vector<Tool> &tools)
@@ -308,7 +397,7 @@ std::optional<json> run_tools(AgentState &state, const SessionResponse &session,
     for (const ParsedToolCall &call : session.pending_tool_calls)
     {
         json args = call.arguments.is_object() ? call.arguments : json::object();
-        print_tool_header(call.name, args);
+        print_tool_header(state, call.name, args);
         json item{{"id", call.id}, {"name", call.name}, {"denied", false}, {"content", ""}};
         if (needs_approval(state, call.name, args))
         {
@@ -321,7 +410,7 @@ std::optional<json> run_tools(AgentState &state, const SessionResponse &session,
                 break;
             case Ask::Full:
                 state.approval = ApprovalMode::Full;
-                std::println(stderr, "{}approval is now full{}", Color::GREEN, Color::RESET);
+                state.ui->note("approval is now full");
                 break;
             case Ask::Deny:
                 item["denied"] = true;
@@ -334,7 +423,7 @@ std::optional<json> run_tools(AgentState &state, const SessionResponse &session,
         }
         else if (tool_kind(call.name) == ToolKind::Write)
         {
-            print_edit_preview(state.cwd, args);
+            state.ui->note(edit_preview(state.cwd, args));
         }
         const std::string output = run_tool(tools, call.name, args);
         item["content"] = output;
@@ -345,7 +434,7 @@ std::optional<json> run_tools(AgentState &state, const SessionResponse &session,
             preview += "...";
         }
         std::ranges::replace(preview, '\n', ' ');
-        std::println(stderr, "{}  {}{}", Color::DIM, preview, Color::RESET);
+        state.ui->note("  " + preview);
         results.push_back(std::move(item));
     }
     return results;
@@ -448,18 +537,53 @@ ChatTool to_chat_tool(const Tool &tool)
     return spec;
 }
 
-void stream_reply(RestClient &client, SessionID session_id, JobKey key, bool show_think)
+void show_context(AgentState &state, int used, int size)
 {
+    if (size <= 0)
+    {
+        return;
+    }
+    state.ui->set_context(used, size);
+}
+
+void show_context(AgentState &state, const SessionResponse &session)
+{
+    show_context(state, session.context_used, session.context_size);
+}
+
+void stream_reply(AgentState &state, JobKey key)
+{
+    RestClient &client = *state.client;
+    const SessionID session_id = state.session;
     std::string pending;
     bool thinking = false;
-    bool header = false;
-    auto emit = [](std::string_view text) { std::print("{}", text); };
-    auto take_think = [&](std::string_view text) {
-        if (!show_think)
+    bool think_open = false;
+    bool answer_open = false;
+    auto close_think = [&] {
+        if (think_open)
+        {
+            state.ui->end();
+            think_open = false;
+        }
+    };
+    auto emit = [&](std::string_view text) {
+        if (text.empty())
         {
             return;
         }
-        while (!header && !text.empty() && (text.front() == '\n' || text.front() == '\r'))
+        if (!answer_open)
+        {
+            state.ui->begin("assistant");
+            answer_open = true;
+        }
+        state.ui->append(std::string(text));
+    };
+    auto take_think = [&](std::string_view text) {
+        if (!state.show_think)
+        {
+            return;
+        }
+        while (!think_open && !text.empty() && (text.front() == '\n' || text.front() == '\r'))
         {
             text.remove_prefix(1);
         }
@@ -467,19 +591,18 @@ void stream_reply(RestClient &client, SessionID session_id, JobKey key, bool sho
         {
             return;
         }
-        if (!header)
+        if (!think_open)
         {
-            std::println(stderr, "{}thinking{}", Color::DIM, Color::RESET);
-            std::print("{}", Color::GRAY);
-            header = true;
+            state.ui->begin("thinking");
+            think_open = true;
         }
-        emit(text);
+        state.ui->append(std::string(text));
     };
 
     std::jthread watcher([&](std::stop_token stop) {
         while (!stop.stop_requested())
         {
-            if (g_interrupt.load(std::memory_order_relaxed))
+            if (g_agent_interrupt.load(std::memory_order_relaxed))
             {
                 client.stop();
                 try
@@ -499,61 +622,72 @@ void stream_reply(RestClient &client, SessionID session_id, JobKey key, bool sho
     try
     {
         client.stream_tokens(session_id, key, [&](const string &piece) {
-            if (g_interrupt.load(std::memory_order_relaxed))
+            if (g_agent_interrupt.load(std::memory_order_relaxed))
             {
                 return false;
             }
             pending += piece;
+            const auto hold_tag_prefix = [](std::string_view text, std::string_view tag) {
+                const std::size_t max = std::min(text.size(), tag.size() - 1);
+                for (std::size_t size = max; size > 0; --size)
+                {
+                    if (tag.starts_with(text.substr(text.size() - size)))
+                    {
+                        return size;
+                    }
+                }
+                return std::size_t{0};
+            };
             while (!pending.empty())
             {
                 if (!thinking)
                 {
-                    const auto open = pending.find("<think>");
+                    constexpr std::string_view kOpen = "<think>";
+                    const auto open = pending.find(kOpen);
                     if (open == std::string::npos)
                     {
-                        if (pending.size() > 7)
+                        const std::size_t hold = hold_tag_prefix(pending, kOpen);
+                        if (pending.size() > hold)
                         {
-                            emit(std::string_view(pending).substr(0, pending.size() - 7));
-                            pending.erase(0, pending.size() - 7);
+                            emit(std::string_view(pending).substr(0, pending.size() - hold));
+                            pending.erase(0, pending.size() - hold);
                         }
                         break;
                     }
                     emit(std::string_view(pending).substr(0, open));
-                    pending.erase(0, open + std::string("<think>").size());
+                    pending.erase(0, open + kOpen.size());
                     thinking = true;
                     continue;
                 }
-                const auto close = pending.find("</think>");
+                constexpr std::string_view kClose = "</think>";
+                const auto close = pending.find(kClose);
                 if (close == std::string::npos)
                 {
-                    if (pending.size() > 8)
+                    const std::size_t hold = hold_tag_prefix(pending, kClose);
+                    if (pending.size() > hold)
                     {
-                        take_think(std::string_view(pending).substr(0, pending.size() - 8));
-                        pending.erase(0, pending.size() - 8);
+                        take_think(std::string_view(pending).substr(0, pending.size() - hold));
+                        pending.erase(0, pending.size() - hold);
                     }
                     break;
                 }
                 take_think(std::string_view(pending).substr(0, close));
-                pending.erase(0, close + std::string("</think>").size());
+                pending.erase(0, close + kClose.size());
                 thinking = false;
-                if (header)
-                {
-                    std::println("{}", Color::RESET);
-                    header = false;
-                }
+                close_think();
             }
             return true;
-        });
+        }, [&](int used, int size) { show_context(state, used, size); });
     }
     catch (...)
     {
         watcher.request_stop();
         watcher.join();
-        if (header)
+        close_think();
+        if (answer_open)
         {
-            std::println("{}", Color::RESET);
+            state.ui->end();
         }
-        std::println("");
         throw;
     }
     watcher.request_stop();
@@ -562,15 +696,15 @@ void stream_reply(RestClient &client, SessionID session_id, JobKey key, bool sho
     {
         emit(pending);
     }
-    else if (show_think)
+    else
     {
         take_think(pending);
     }
-    if (header)
+    close_think();
+    if (answer_open)
     {
-        std::println("{}", Color::RESET);
+        state.ui->end();
     }
-    std::println("");
 }
 
 std::filesystem::path session_file()
@@ -693,32 +827,33 @@ TurnStatus drive(AgentState &state, JobKey key, const std::vector<Tool> &tools)
     RestClient &client = *state.client;
     for (int round = 0; round < state.max_rounds; ++round)
     {
-        if (g_interrupt.exchange(false, std::memory_order_relaxed))
+        if (g_agent_interrupt.exchange(false, std::memory_order_relaxed))
         {
             client.cancel_job(state.session, key);
-            std::println(stderr, "{}cancelled{}", Color::YELLOW, Color::RESET);
+            state.ui->note("cancelled");
             return TurnStatus::Cancelled;
         }
         try
         {
-            stream_reply(client, state.session, key, state.show_think);
+            stream_reply(state, key);
         }
         catch (const RestClient::ClientError &error)
         {
-            if (g_interrupt.exchange(false, std::memory_order_relaxed))
+            if (g_agent_interrupt.exchange(false, std::memory_order_relaxed))
             {
-                std::println(stderr, "{}cancelled{}", Color::YELLOW, Color::RESET);
+                state.ui->note("cancelled");
                 return TurnStatus::Cancelled;
             }
             if (error.code == kContextFull)
             {
-                std::println(stderr, "{}", error.what());
-                std::println(stderr, "The message was removed. /compact the session, or send a smaller task.");
+                state.ui->note(error.what());
+                state.ui->note("The message was removed. /compact the session, or send a smaller task.");
                 return TurnStatus::ContextFull;
             }
             throw;
         }
         const SessionResponse session = client.get_session(state.session);
+        show_context(state, session);
         if (session.state.value == SessionState::Idle || session.state.value == SessionState::Unknown)
         {
             return TurnStatus::Idle;
@@ -736,11 +871,6 @@ TurnStatus drive(AgentState &state, JobKey key, const std::vector<Tool> &tools)
         }
         if (session.state.value == SessionState::AwaitingQuestion && session.pending_question)
         {
-            std::println(stderr, "{}? {}{}", Color::YELLOW, session.pending_question->text, Color::RESET);
-            for (std::size_t i = 0; i < session.pending_question->answers.size(); ++i)
-            {
-                std::println(stderr, "  {} {}", i, session.pending_question->answers[i]);
-            }
             std::string answer;
             if (state.exec && !isatty(STDIN_FILENO))
             {
@@ -748,22 +878,12 @@ TurnStatus drive(AgentState &state, JobKey key, const std::vector<Tool> &tools)
             }
             else
             {
-                std::print(stderr, "answer> ");
-                std::fflush(stderr);
-                if (!std::getline(std::cin, answer) || answer.empty())
+                auto typed = state.ui->question(session.pending_question->text, session.pending_question->answers);
+                if (!typed || typed->empty())
                 {
                     return TurnStatus::Cancelled;
                 }
-                const bool digits =
-                    std::ranges::all_of(answer, [](unsigned char c) { return std::isdigit(c) != 0; });
-                if (digits && !session.pending_question->answers.empty())
-                {
-                    const int index = std::stoi(answer);
-                    if (index >= 0 && static_cast<std::size_t>(index) < session.pending_question->answers.size())
-                    {
-                        answer = session.pending_question->answers[static_cast<std::size_t>(index)];
-                    }
-                }
+                answer = std::move(*typed);
             }
             SessionMessageRequest message;
             message.role = "user";
@@ -773,28 +893,28 @@ TurnStatus drive(AgentState &state, JobKey key, const std::vector<Tool> &tools)
         }
         return TurnStatus::Idle;
     }
-    std::println(stderr, "{}stopped after {} tool rounds{}", Color::YELLOW, state.max_rounds, Color::RESET);
+    state.ui->note("stopped after " + std::to_string(state.max_rounds) + " tool rounds");
     return TurnStatus::Idle;
 }
 
-void print_help()
+void print_help(AgentUi &ui)
 {
-    std::println(stderr, "  /help                 show these commands");
-    std::println(stderr, "  /approval [mode]      read-only, auto, or full");
-    std::println(stderr, "  /status               session id, approval, and server");
-    std::println(stderr, "  /diff                 git diff --stat for this directory");
-    std::println(stderr, "  /compact              summarize the chat into a new session");
-    std::println(stderr, "  /clear                start a new session");
-    std::println(stderr, "  /exit                 leave");
-    std::println(stderr, "Ctrl-C cancels the current generation.");
+    ui.note("/help                 show these commands\n"
+            "/approval [mode]      read-only, auto, or full\n"
+            "/status               session id, approval, and server\n"
+            "/diff                 git diff --stat for this directory\n"
+            "/compact              summarize the chat into a new session\n"
+            "/clear                start a new session\n"
+            "/exit                 leave\n"
+            "Ctrl-C cancels the current generation.");
 }
 
-void print_diff(const std::filesystem::path &)
+void print_diff(AgentUi &ui)
 {
     FILE *pipe = popen("git diff --stat", "r");
     if (pipe == nullptr)
     {
-        std::println(stderr, "git diff failed to start");
+        ui.note("git diff failed to start");
         return;
     }
     char buffer[512];
@@ -806,10 +926,10 @@ void print_diff(const std::filesystem::path &)
     pclose(pipe);
     if (output.empty())
     {
-        std::println(stderr, "no unstaged diff");
+        ui.note("no unstaged diff");
         return;
     }
-    std::print(stderr, "{}", output);
+    ui.note(output);
 }
 
 CreateSessionRequest make_session_request(const AgentConfig &config, const std::filesystem::path &cwd)
@@ -861,6 +981,8 @@ TurnStatus submit_prompt(AgentState &state, const std::string &prompt, const std
     return drive(state, queued.key, tools);
 }
 
+void refresh_status(AgentState &state, const AgentConfig &config);
+
 void compact_session(AgentState &state, const AgentConfig &config, const std::vector<Tool> &tools)
 {
     const TurnStatus status = submit_prompt(
@@ -875,7 +997,7 @@ void compact_session(AgentState &state, const AgentConfig &config, const std::ve
     const std::string summary = last_assistant(state.client->get_session(state.session));
     if (summary.empty())
     {
-        std::println(stderr, "compact produced no summary");
+        state.ui->note("compact produced no summary");
         return;
     }
     CreateSessionRequest request = make_session_request(config, state.cwd);
@@ -893,27 +1015,33 @@ void compact_session(AgentState &state, const AgentConfig &config, const std::ve
     const SessionResponse created = state.client->create_session(request);
     state.session = created.id;
     remember_session(config, created.id, state.cwd);
-    std::println(stderr, "{}compacted into session {}{}", Color::GREEN, created.id, Color::RESET);
+    refresh_status(state, config);
+    state.ui->note("compacted into session " + std::to_string(created.id));
+}
+
+void refresh_status(AgentState &state, const AgentConfig &config)
+{
+    state.ui->set_status(std::format("session {}   {}   {}   http://{}:{}", state.session, approval_name(state.approval),
+                                     state.cwd.string(), config.host, config.port));
+    show_context(state, state.client->get_session(state.session));
 }
 
 bool slash_command(const std::string &line, AgentState &state, const AgentConfig &config, const std::vector<Tool> &tools)
 {
     if (line == "/help")
     {
-        print_help();
+        print_help(*state.ui);
         return true;
     }
     if (line == "/status")
     {
-        std::println(stderr, "session {}", state.session);
-        std::println(stderr, "approval {}", approval_name(state.approval));
-        std::println(stderr, "server http://{}:{}", config.host, config.port);
-        std::println(stderr, "cwd {}", state.cwd.string());
+        state.ui->note(std::format("session {}\napproval {}\nserver http://{}:{}\ncwd {}", state.session,
+                                   approval_name(state.approval), config.host, config.port, state.cwd.string()));
         return true;
     }
     if (line == "/diff")
     {
-        print_diff(state.cwd);
+        print_diff(*state.ui);
         return true;
     }
     if (line == "/exit" || line == "/quit")
@@ -922,17 +1050,18 @@ bool slash_command(const std::string &line, AgentState &state, const AgentConfig
     }
     if (line == "/clear")
     {
-        state.session = 0;
         AgentConfig fresh = config;
         fresh.session = 0;
         fresh.resume = false;
         state.session = open_session(state, fresh, tools);
-        std::println(stderr, "session {}", state.session);
+        refresh_status(state, config);
+        state.ui->note("session " + std::to_string(state.session));
         return true;
     }
     if (line == "/compact")
     {
         compact_session(state, config, tools);
+        refresh_status(state, config);
         return true;
     }
     if (line.starts_with("/approval"))
@@ -940,7 +1069,7 @@ bool slash_command(const std::string &line, AgentState &state, const AgentConfig
         const auto space = line.find(' ');
         if (space == std::string::npos)
         {
-            std::println(stderr, "approval {}", approval_name(state.approval));
+            state.ui->note(std::string("approval ") + approval_name(state.approval));
             return true;
         }
         const std::string mode = line.substr(space + 1);
@@ -958,18 +1087,90 @@ bool slash_command(const std::string &line, AgentState &state, const AgentConfig
         }
         else
         {
-            std::println(stderr, "approval is read-only, auto, or full");
+            state.ui->note("approval is read-only, auto, or full");
             return true;
         }
-        std::println(stderr, "approval {}", approval_name(state.approval));
+        refresh_status(state, config);
+        state.ui->note(std::string("approval ") + approval_name(state.approval));
         return true;
     }
     if (line.starts_with('/'))
     {
-        std::println(stderr, "unknown command. /help lists them.");
+        state.ui->note("unknown command. /help lists them.");
         return true;
     }
     return false;
+}
+
+int session_loop(AgentState &state, const AgentConfig &config, const std::vector<Tool> &tools)
+{
+    state.session = open_session(state, config, tools);
+    refresh_status(state, config);
+    state.ui->note("Type a task, or /help. Ctrl-C cancels a running turn.");
+
+    if (!config.prompt.empty())
+    {
+        state.ui->begin("you");
+        state.ui->append(config.prompt);
+        state.ui->end();
+        const TurnStatus status = submit_prompt(state, config.prompt, tools);
+        if (status == TurnStatus::ContextFull)
+        {
+            return 2;
+        }
+        if (config.exec)
+        {
+            return status == TurnStatus::Cancelled ? 1 : 0;
+        }
+    }
+    else if (config.exec)
+    {
+        throw std::runtime_error("exec needs a task");
+    }
+    if (config.exec)
+    {
+        return 0;
+    }
+
+    while (true)
+    {
+        g_agent_interrupt.store(false, std::memory_order_relaxed);
+        const std::string line = state.ui->read_line();
+        if (line.empty())
+        {
+            break;
+        }
+        if (line == "/exit" || line == "/quit")
+        {
+            break;
+        }
+        bool handled = false;
+        try
+        {
+            handled = slash_command(line, state, config, tools);
+        }
+        catch (const std::exception &error)
+        {
+            state.ui->note(error.what());
+            continue;
+        }
+        if (handled)
+        {
+            continue;
+        }
+        state.ui->begin("you");
+        state.ui->append(line);
+        state.ui->end();
+        try
+        {
+            submit_prompt(state, line, tools);
+        }
+        catch (const std::exception &error)
+        {
+            state.ui->note(error.what());
+        }
+    }
+    return 0;
 }
 
 } // namespace
@@ -999,90 +1200,14 @@ int run_agent(const AgentConfig &config)
         }));
     }
 
-    state.session = open_session(state, config, tools);
-    std::println(stderr, "{}callisto{}  session {}  approval {}  {}", Color::BOLD, Color::RESET, state.session,
-                 approval_name(state.approval), state.cwd.string());
-    std::println(stderr, "server {}", client.base_url());
-
-    if (!config.prompt.empty())
-    {
-        const TurnStatus status = submit_prompt(state, config.prompt, tools);
-        if (status == TurnStatus::ContextFull)
-        {
-            return 2;
-        }
-        if (config.exec)
-        {
-            return status == TurnStatus::Cancelled ? 1 : 0;
-        }
-    }
-    else if (config.exec)
-    {
-        throw std::runtime_error("exec needs a task");
-    }
-
     if (config.exec)
     {
-        return 0;
+        ConsoleUi ui;
+        state.ui = &ui;
+        return session_loop(state, config, tools);
     }
-
-    std::println(stderr, "Type a task, or /help. Ctrl-C cancels a running turn. Ctrl-D exits.");
-    std::string line;
-    while (true)
-    {
-        g_interrupt.store(false, std::memory_order_relaxed);
-        std::print(stderr, "{}you>{} ", Color::BOLD, Color::RESET);
-        std::fflush(stderr);
-        if (!std::getline(std::cin, line))
-        {
-            std::println(stderr, "");
-            break;
-        }
-        if (line == "/exit" || line == "/quit")
-        {
-            break;
-        }
-        if (line.empty())
-        {
-            continue;
-        }
-        bool handled = false;
-        try
-        {
-            handled = slash_command(line, state, config, tools);
-        }
-        catch (const std::exception &error)
-        {
-            std::println(stderr, "{}", error.what());
-            continue;
-        }
-        if (!handled && (line.starts_with('/')))
-        {
-            continue;
-        }
-        if (line == "/exit" || line == "/quit")
-        {
-            break;
-        }
-        if (handled)
-        {
-            if (line == "/exit" || line == "/quit")
-            {
-                break;
-            }
-            continue;
-        }
-        try
-        {
-            if (submit_prompt(state, line, tools) == TurnStatus::ContextFull)
-            {
-                continue;
-            }
-        }
-        catch (const std::exception &error)
-        {
-            std::println(stderr, "{}", error.what());
-        }
-    }
-    return 0;
+    return run_tui([&](AgentUi &ui) {
+        state.ui = &ui;
+        return session_loop(state, config, tools);
+    });
 }

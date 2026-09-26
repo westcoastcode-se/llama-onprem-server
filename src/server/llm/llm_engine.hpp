@@ -92,6 +92,8 @@ struct LlamaRequest
     int max_tokens = -1;
     // KV-cache key. Empty is the anonymous slot. One context is shared, so sessions take turns in it.
     std::string session_id;
+    // Called on the worker once the prompt is in the KV cache, before the first sampled token.
+    mutable std::move_only_function<void()> on_prompt{};
     // Rendered into the Jinja template so the model sees the tool schema.
     std::vector<ChatTool> tools;
 };
@@ -151,6 +153,9 @@ class LlamaEngine
     [[nodiscard]] int get_context_size() const;
 
     [[nodiscard]] int get_used_context() const;
+
+    // Tokens stored for this session, live or parked. Worker thread only.
+    [[nodiscard]] int session_token_count(std::string_view session_id) const;
 
   private:
     // One session that is not currently loaded. state is llama_state_seq_get_data output.

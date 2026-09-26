@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <format>
+#include <limits>
 #include <fstream>
 #include <iterator>
 #include <ranges>
@@ -420,6 +421,22 @@ int LlamaEngine::get_used_context() const
     return ctx_ ? (llama_memory_seq_pos_max(llama_get_memory(ctx_.get()), 0) + 1) : 0;
 }
 
+int LlamaEngine::session_token_count(std::string_view session_id) const
+{
+    if (session_id.empty())
+    {
+        return 0;
+    }
+    const size_t count = session_id == active_session_id_
+                             ? active_tokens_.size()
+                             : [&] {
+                                   const auto it = std::ranges::find(stored_sessions_, session_id, &SessionKv::id);
+                                   return it == stored_sessions_.end() ? size_t{0} : it->tokens.size();
+                               }();
+    const size_t cap = static_cast<size_t>(std::numeric_limits<int>::max());
+    return static_cast<int>(std::min(count, cap));
+}
+
 std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, bool add_assistant,
                                          std::span<const ChatTool> tools) const
 {
@@ -580,6 +597,10 @@ std::string LlamaEngine::generate(std::string_view prompt, const LlamaRequest &r
     try
     {
         decode_tokens(std::span<const int32_t>(prompt_tokens).subspan(checkpoint), request.should_stop);
+        if (request.on_prompt)
+        {
+            request.on_prompt();
+        }
 
         Utf8Util::StreamBuffer utf8_buf;
         const int max_new = effective_max_tokens(config_, request);

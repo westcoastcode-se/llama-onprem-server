@@ -8,6 +8,11 @@
 #include <ranges>
 #include <utility>
 
+int Jobs::context_size() const
+{
+    return std::max(0, engine_.get_config().n_ctx);
+}
+
 Jobs::Jobs(LlamaEngine &engine, const ModelAdapter &adapter) : engine_(engine), adapter_(adapter)
 {
     worker_ = std::jthread([this](std::stop_token stop) { worker_loop(std::move(stop)); });
@@ -128,6 +133,12 @@ void notify_finished(const shared_ptr<Task> &task)
     }
 }
 
+void finish_task(const shared_ptr<Task> &task)
+{
+    notify_finished(task);
+    task->release_stream();
+}
+
 } // namespace
 
 shared_ptr<Task> Jobs::cancel(JobKey const id)
@@ -156,7 +167,7 @@ shared_ptr<Task> Jobs::cancel(JobKey const id)
     {
         task->request_cancel();
         task->set_cancelled();
-        notify_finished(task);
+        finish_task(task);
     }
     else
     {
@@ -253,7 +264,7 @@ void Jobs::worker_loop(std::stop_token stop)
         if (task->is_cancel_requested())
         {
             task->set_cancelled();
-            notify_finished(task);
+            finish_task(task);
             continue;
         }
 
@@ -294,6 +305,9 @@ void Jobs::worker_loop(std::stop_token stop)
         // Start stream the LLM response
         const auto buffer = task->buffer;
         const bool prompt_opened_think = engine_.get_config().reasoning;
+        const auto publish_context = [&] {
+            task->note_context(engine_.session_token_count(task->request.session_id), engine_.get_context_size());
+        };
         try
         {
             LlamaRequest call;
@@ -301,8 +315,10 @@ void Jobs::worker_loop(std::stop_token stop)
             call.max_tokens = task->request.max_tokens;
             call.session_id = task->request.session_id;
             call.tools = task->request.tools;
+            call.on_prompt = [&] { publish_context(); };
             bool think_prefix_sent = false;
-            call.token_cb = [task, buffer, prompt_opened_think, &think_prefix_sent](std::string &&piece) {
+            call.token_cb = [&](std::string &&piece) {
+                publish_context();
                 if (task->is_cancel_requested())
                 {
                     return false;
@@ -318,26 +334,29 @@ void Jobs::worker_loop(std::stop_token stop)
                 return true;
             };
             std::string response = engine_.chat(msgs, call);
+            publish_context();
             buffer->set_full_result(std::move(response));
         }
         catch (const LlamaContextFull &)
         {
+            publish_context();
             {
                 std::lock_guard lock(mutex_);
                 current_task_.reset();
             }
             task->set_error_state("context full: the latest message was rolled back", string(kContextFull));
-            notify_finished(task);
+            finish_task(task);
             continue;
         }
         catch (const std::exception &e)
         {
+            publish_context();
             {
                 std::lock_guard lock(mutex_);
                 current_task_.reset();
             }
             task->set_error_state(e.what());
-            notify_finished(task);
+            finish_task(task);
             continue;
         }
 
@@ -349,7 +368,7 @@ void Jobs::worker_loop(std::stop_token stop)
         if (task->is_cancel_requested())
         {
             task->set_result(full, JobState::Cancelled, {});
-            notify_finished(task);
+            finish_task(task);
             continue;
         }
 
@@ -362,6 +381,6 @@ void Jobs::worker_loop(std::stop_token stop)
         }
         actions.reasoning = split.reasoning;
         task->set_result(split.visible, JobState::Done, std::move(actions));
-        notify_finished(task);
+        finish_task(task);
     }
 }

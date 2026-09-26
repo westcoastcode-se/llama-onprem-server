@@ -696,6 +696,12 @@ components:
             Stable failure code. Omitted when empty. `context_full` means the turn was
             discarded and the message that started it is not in `messages`.
           example: context_full
+        context_used:
+          type: integer
+          description: Tokens stored in this session's KV cache. Zero before the first turn.
+        context_size:
+          type: integer
+          description: Context window length in tokens (`n_ctx`).
 
     Job:
       type: object
@@ -747,3 +753,9 @@ components:
           type: string
           description: Present on the terminal line when the server classified the failure.
           example: context_full
+        context_used:
+          type: integer
+          description: Session KV tokens at the time this line was written. Omitted when `context_size` is unknown.
+        context_size:
+          type: integer
+          description: Context window length. Omitted when the server has not measured this job yet.

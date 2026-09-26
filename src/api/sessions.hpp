@@ -178,6 +178,9 @@ struct MessageTokensResponse
     string state;
     string error;
     string error_code;
+    // Session KV tokens and window length. Zero size means the line does not report usage.
+    int context_used = 0;
+    int context_size = 0;
 
     [[nodiscard]] json to_json() const
     {
@@ -194,6 +197,11 @@ struct MessageTokensResponse
         {
             j["error_code"] = error_code;
         }
+        if (context_size > 0)
+        {
+            j["context_used"] = context_used;
+            j["context_size"] = context_size;
+        }
         return j;
     }
 
@@ -205,6 +213,8 @@ struct MessageTokensResponse
         response.state = j.value("state", string());
         response.error = j.value("error", string());
         response.error_code = j.value("error_code", string());
+        response.context_used = j.value("context_used", 0);
+        response.context_size = j.value("context_size", 0);
         return response;
     }
 };

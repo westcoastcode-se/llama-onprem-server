@@ -95,18 +95,30 @@ target_include_directories(callisto_client BEFORE PRIVATE
 target_link_libraries(callisto_client PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# Coding-agent CLI. CLI11 parses the command line. Tools run locally.
+# Coding-agent CLI. CLI11 parses argv. The interactive session is an FTXUI view.
 #
+include(FetchContent)
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+        GIT_TAG v6.1.9
+        GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(ftxui)
+
 add_executable(callisto_cli
         src/cli/main.cpp
         src/cli/agent.cpp
+        src/cli/tui.cpp
         src/common/log.cpp
         ${COMMON_TOOL_SOURCES})
 configure_localai_target(callisto_cli)
 target_include_directories(callisto_cli BEFORE PRIVATE
         ${CMAKE_SOURCE_DIR}/vendors/httplib
         ${CMAKE_SOURCE_DIR}/vendors/cli11)
-target_link_libraries(callisto_cli PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(callisto_cli PRIVATE ftxui::component CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # Tool tests. No model required.

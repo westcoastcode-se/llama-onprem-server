@@ -345,6 +345,10 @@ struct SessionResponse
     // Stable code such as "context_full". Empty when error is empty or unclassified.
     string error_code;
 
+    // Tokens currently stored in this session's KV cache, and the context window length.
+    int context_used = 0;
+    int context_size = 0;
+
     /**
      * Validate required properties
      */
@@ -371,7 +375,9 @@ struct SessionResponse
             {"system", system_prompt},
             {"messages", arr},
             {"state", state.to_string()},
-            {"questions", questions}
+            {"questions", questions},
+            {"context_used", context_used},
+            {"context_size", context_size}
         };
         // clang-format on
 
@@ -446,6 +452,8 @@ struct SessionResponse
         req.questions = j.value("questions", true);
         req.error = j.value("error", string());
         req.error_code = j.value("error_code", string());
+        req.context_used = j.value("context_used", 0);
+        req.context_size = j.value("context_size", 0);
 
         return req;
     }

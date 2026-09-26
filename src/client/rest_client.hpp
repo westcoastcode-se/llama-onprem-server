@@ -18,6 +18,7 @@ class RestClient
 {
   public:
     using TokenCallback = std::move_only_function<bool(const string &piece)>;
+    using ContextCallback = std::move_only_function<void(int used, int size)>;
 
     struct ClientError : std::runtime_error
     {
@@ -174,7 +175,8 @@ class RestClient
      * chunked body. Returning false makes cpp-httplib treat the call as
      * Error::Canceled with a null Result (looks like "no response").
      */
-    string stream_tokens(const SessionID session_id, const JobKey key, TokenCallback cb = {})
+    string stream_tokens(const SessionID session_id, const JobKey key, TokenCallback cb = {},
+                         ContextCallback on_context = {})
     {
         std::string accumulated;
         std::string line_buf;
@@ -199,6 +201,10 @@ class RestClient
                 return false;
             }
             const auto t = MessageTokensResponse::from_json(parsed);
+            if (on_context && t.context_size > 0)
+            {
+                on_context(t.context_used, t.context_size);
+            }
             accumulated += t.tokens;
             if (cb && !t.tokens.empty() && !cb(t.tokens))
             {

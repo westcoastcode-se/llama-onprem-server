@@ -31,6 +31,8 @@ void send_job_token_stream(const httplib::Request &, httplib::Response &res, con
                 mm.state = status.state.to_string();
                 mm.error = status.error;
                 mm.error_code = status.error_code;
+                mm.context_used = task->context_used();
+                mm.context_size = task->context_size();
                 auto line = mm.to_json().dump() + "\n";
                 if (!sink.write(line.data(), line.size()))
                 {
@@ -42,7 +44,14 @@ void send_job_token_stream(const httplib::Request &, httplib::Response &res, con
             }
 
             MessageTokensResponse mm{
-                .tokens = {std::move(*piece)}, .done = false, .state = {}, .error = {}, .error_code = {}};
+                .tokens = {std::move(*piece)},
+                .done = false,
+                .state = {},
+                .error = {},
+                .error_code = {},
+                .context_used = task->context_used(),
+                .context_size = task->context_size(),
+            };
             auto line = mm.to_json().dump() + "\n";
             if (!sink.write(line.data(), line.size()))
             {
