@@ -27,22 +27,22 @@ function(configure_localai_target target)
         ${CMAKE_SOURCE_DIR}/vendors/llama.cpp/vendor)
     if (CMAKE_BUILD_TYPE STREQUAL "Release")
         if (MSVC)
-            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
+            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
         else ()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -O3 -fno-math-errno -fno-trapping-math -Wstrict-overflow -std=c++23 "-DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -O3 -fno-math-errno -fno-trapping-math -Wstrict-overflow -std=c++23 "-DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
         endif ()
     elseif (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
         if (MSVC)
-            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
+            target_compile_options(${target} PRIVATE /W4 /O2 /wd4100 /FA /arch:SSE2 /DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
         else ()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -O3  -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -O3  -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
             target_link_libraries(${target} PRIVATE  -fno-omit-frame-pointer -Wstrict-overflow -g)
         endif ()
     else ()
         if (MSVC)
-            target_compile_options(${target} PRIVATE /W4 /wd4100 /FA /arch:SSE2 /DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
+            target_compile_options(${target} PRIVATE /W4 /wd4100 /FA /arch:SSE2 /DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE})
         else ()
-            target_compile_options(${target} PRIVATE -Wall -Wextra -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DCLIENT_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
+            target_compile_options(${target} PRIVATE -Wall -Wextra -fno-omit-frame-pointer -Wstrict-overflow -std=c++23 -g -mavx2 "-DAI_SOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
             target_link_libraries(${target} PRIVATE -fno-omit-frame-pointer -Wstrict-overflow -g)
         endif ()
     endif ()
@@ -66,41 +66,93 @@ set(COMMON_TOOL_SOURCES
 )
 
 #
-# 1. Server
+# HTTP server. One model, sessions, and a job queue.
 #
-add_executable(server
-    src/server.cpp
-    src/llm/llm_engine.cpp)
-configure_localai_target(server)
-target_link_libraries(server PRIVATE llama ${CMAKE_THREAD_LIBS_INIT})
+add_executable(callisto_server
+        src/server.cpp
+        src/server/http/routes.cpp
+        src/server/jobs/jobs.cpp
+        src/server/sessions/sessions.cpp
+        src/server/agent/response_parse.cpp
+        src/server/agent/model_adapter.cpp
+        src/common/log.cpp
+        src/server/llm/llm_engine.cpp)
+configure_localai_target(callisto_server)
+target_include_directories(callisto_server BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/vendors/httplib)
+target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# 2. Client (TCP Client)
+# Coding-agent client. Tools run here; the server only generates.
+# CLI11 parses argv. The interactive session is an FTXUI view.
 #
-add_executable(client
-    src/client.cpp
-    ${COMMON_TOOL_SOURCES}
-    src/common/agent.cpp)
-configure_localai_target(client)
-target_link_libraries(client PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+include(FetchContent)
+set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(ftxui
+        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+        GIT_TAG v6.1.9
+        GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(ftxui)
+
+add_executable(callisto_cli
+        src/cli.cpp
+        src/cli/agent.cpp
+        src/cli/agent_session.cpp
+        src/cli/reply_stream.cpp
+        src/cli/session_store.cpp
+        src/cli/tool_runner.cpp
+        src/cli/tool_schema.cpp
+        src/cli/tui.cpp
+        src/common/log.cpp
+        ${COMMON_TOOL_SOURCES})
+configure_localai_target(callisto_cli)
+target_include_directories(callisto_cli BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/vendors/httplib
+        ${CMAKE_SOURCE_DIR}/vendors/cli11)
+target_link_libraries(callisto_cli PRIVATE ftxui::component CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# 3. Fat Client
+# Unit tests. No model required. callisto_tests also links llama for the chat template.
+# Both binaries use tests/tests.hpp (RUN_TEST, assertEquals, assertTrue).
 #
-add_executable(fat_client
-    src/fat_client.cpp
-    src/llm/llm_engine.cpp
-    ${COMMON_TOOL_SOURCES}
-    src/common/agent.cpp)
-configure_localai_target(fat_client)
-target_link_libraries(fat_client PRIVATE llama CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+add_executable(tests
+    tests/tests.cpp
+    tests/common/test_tools.cpp
+    tests/common/test_tool_policy.cpp
+    tests/common/test_web_utils.cpp
+    tests/common/test_defer.cpp
+    tests/common/tools/test_tool_execute_command.cpp
+    tests/common/tools/test_tool_read_file.cpp
+    tests/common/tools/test_tool_write_file.cpp
+    tests/common/tools/test_tool_list_directory.cpp
+    tests/common/tools/test_tool_file_search.cpp
+    tests/common/tools/test_tool_search_text.cpp
+    tests/common/tools/test_tool_subagent.cpp
+    tests/cli/test_tool_schema.cpp
+    tests/cli/test_session_store.cpp
+    tests/server/test_utf8_stream.cpp
+    tests/server/test_token_buffer.cpp
+    tests/api/test_models.cpp
+    src/cli/tool_schema.cpp
+    src/cli/session_store.cpp
+    ${COMMON_TOOL_SOURCES})
+configure_localai_target(tests)
+target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
-#
-# 4. Tests
-#
-add_executable(test_components
-    tests/test_components.cpp
-    ${COMMON_TOOL_SOURCES}
-    src/common/agent.cpp)
-configure_localai_target(test_components)
-target_link_libraries(test_components PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+add_executable(callisto_tests
+        tests/test_llama_engine.cpp
+        tests/server/test_context_params.cpp
+        src/server/agent/response_parse.cpp
+        src/server/agent/model_adapter.cpp
+        src/common/log.cpp)
+configure_localai_target(callisto_tests)
+target_compile_definitions(callisto_tests PRIVATE
+        LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src/templates/Qwen3.8-27B.jinja")
+target_link_libraries(callisto_tests PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+
+enable_testing()
+add_test(NAME tests COMMAND $<TARGET_FILE:tests>)
+add_test(NAME callisto_tests COMMAND $<TARGET_FILE:callisto_tests>)

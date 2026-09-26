@@ -1,5 +1,6 @@
 #include "common/tools/tool_web_fetch.hpp"
 #include "common/tools/web_utils.hpp"
+#include <format>
 #include <string>
 
 namespace Tools {
@@ -14,7 +15,7 @@ std::string web_fetch(const nlohmann::json & args) {
         type = args["type"].get<std::string>();
     }
 
-    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0) {
+    if (!url.starts_with("http://") && !url.starts_with("https://")) {
         return "error: url must start with http:// or https://";
     }
 
@@ -22,7 +23,7 @@ std::string web_fetch(const nlohmann::json & args) {
     std::string error;
     long status = 0;
     if (!WebUtils::http_get(url, body, status, error)) {
-        return "error: request failed: " + error;
+        return std::format("error: request failed: {}", error);
     }
 
     std::string text = (type == "html") ? body : WebUtils::html_to_text(body);
@@ -41,10 +42,11 @@ std::string web_fetch(const nlohmann::json & args) {
 
 Tool create_web_fetch_tool() {
     return {
-        "web_fetch",
-        "Fetch the readable text or html content of a web page via HTTP(S).",
-        "arguments:\n      url: string (absolute http/https url)\n      type: 'text' or 'html' (optional, defaults to 'text')",
-        web_fetch
+        .name = "web_fetch",
+        .description = "Fetch the readable text or html content of a web page via HTTP(S).",
+        .schema_doc = "arguments:\n      url: string (absolute http/https url)\n      type: string (optional, text "
+                          "or html, defaults to text)",
+        .execute = web_fetch
     };
 }
 

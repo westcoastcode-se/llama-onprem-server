@@ -1,18 +1,72 @@
 #include "common/tools/web_utils.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstdio>
 #include <curl/curl.h>
+#include <string>
 
 namespace Tools::WebUtils {
 
 /**
  * @brief Callback function for libcurl accumulating downloaded chunks into a std::string.
  */
+struct HttpSink {
+    std::string * body = nullptr;
+    size_t max_bytes = 0;
+    bool overflow = false;
+    bool blocked = false;
+};
+
 static size_t http_write_cb(char * ptr, size_t size, size_t nmemb, void * userdata) {
-    auto * out = static_cast<std::string *>(userdata);
-    out->append(ptr, size * nmemb);
-    return size * nmemb;
+    auto * sink = static_cast<HttpSink *>(userdata);
+    const size_t n = size * nmemb;
+    if (sink->body->size() + n > sink->max_bytes) {
+        sink->overflow = true;
+        return 0;
+    }
+    sink->body->append(ptr, n);
+    return n;
 }
+
+static bool blocked_ipv4(unsigned a, unsigned b, unsigned c, unsigned d) {
+    (void)c;
+    (void)d;
+    if (a == 0 || a == 10 || a == 127) return true;
+    if (a == 169 && b == 254) return true;
+    if (a == 172 && b >= 16 && b <= 31) return true;
+    if (a == 192 && b == 168) return true;
+    if (a >= 224) return true;
+    return false;
+}
+
+static bool blocked_address(std::string_view ip) {
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (std::sscanf(std::string(ip).c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+        return blocked_ipv4(a, b, c, d);
+    }
+    std::string lower(ip);
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (lower == "::1" || lower == "0:0:0:0:0:0:0:1") return true;
+    if (lower.starts_with("fe80:") || lower.starts_with("fc") || lower.starts_with("fd")) return true;
+    const auto mapped = lower.rfind("::ffff:");
+    if (mapped != std::string::npos) {
+        return blocked_address(lower.substr(mapped + 7));
+    }
+    return false;
+}
+
+#if LIBCURL_VERSION_NUM >= 0x075000
+static int http_prereq(void * clientp, char * conn_primary_ip, char *, int, int) {
+    auto * sink = static_cast<HttpSink *>(clientp);
+    if (conn_primary_ip != nullptr && blocked_address(conn_primary_ip)) {
+        sink->blocked = true;
+        return CURL_PREREQFUNC_ABORT;
+    }
+    return CURL_PREREQFUNC_OK;
+}
+#endif
 
 std::string url_encode(std::string_view value) {
     CURL * curl = curl_easy_init();
@@ -24,27 +78,47 @@ std::string url_encode(std::string_view value) {
     return result;
 }
 
-bool http_get(const std::string & url, std::string & body, long & status_code, std::string & error) {
+bool http_get(const std::string & url, std::string & body, long & status_code, std::string & error,
+              HttpGetOptions options) {
     CURL * curl = curl_easy_init();
     if (!curl) {
         error = "failed to initialize curl";
         return false;
     }
 
-    // Configure timeouts and basic parameters for robust fetching
+    HttpSink sink;
+    sink.body = &body;
+    sink.max_bytes = options.max_bytes == 0 ? 1024 * 1024 : options.max_bytes;
+
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 25L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "local-ai-agent/2.0");
-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); // Support gzip/deflate
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, http_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
+#if LIBCURL_VERSION_NUM >= 0x075500
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+#endif
+#if LIBCURL_VERSION_NUM >= 0x075000
+    if (!options.allow_private) {
+        curl_easy_setopt(curl, CURLOPT_PREREQFUNCTION, http_prereq);
+        curl_easy_setopt(curl, CURLOPT_PREREQDATA, &sink);
+    }
+#endif
 
     const CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK) {
-        error = curl_easy_strerror(res);
+        if (sink.blocked) {
+            error = "blocked address";
+        } else if (sink.overflow) {
+            error = "response exceeded size limit";
+        } else {
+            error = curl_easy_strerror(res);
+        }
         curl_easy_cleanup(curl);
         return false;
     }

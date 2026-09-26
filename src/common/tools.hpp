@@ -26,7 +26,8 @@
 enum class ToolApproval {
     ALLOW,   ///< Allow tool execution this time
     DENY,    ///< Deny execution
-    ALWAYS   ///< Always allow tool execution during this session
+    ALWAYS,  ///< Always allow tool execution during this session
+    CLOSED   ///< stdin hit EOF; stop the turn instead of denying and continuing
 };
 
 /**
@@ -63,6 +64,91 @@ bool is_tool_allowed(std::string_view tool_name, bool auto_approve, std::span<co
  * @brief Strips thinking tags (<think>...</think>, <thought>, <reasoning>) from text.
  */
 std::string strip_think_tags(std::string_view text);
+
+/**
+ * @brief Class containing the various blocks that a response from the server might return, such as
+ * <think>...</think>, <tool_calls>...</tool_calls>, <question>...</question>, <answer>...</answer>
+ *
+ * Please note that the response block is short-lived - basically only available during the actual request-response cycle.
+ */
+class ResponseBlocks {
+public:
+    struct ToolCall {
+        std::string_view value{};
+        bool is_done{};
+    };
+
+    // The thinking block
+    std::string_view thinking{};
+    // A vector of tool calls that the AI wants to execute
+    std::vector<ToolCall> tool_calls{};
+    // The text inside a question block - in case the AI want more information from the user
+    std::string_view questions{};
+    // An array of all answers that the client is allowed to select
+    std::vector<std::string_view> answers{};
+
+    // Thinking
+    static constexpr int thinking_bit = 1 << 0;
+    // Thinking is done
+    static constexpr int thinking_done_bit = 1 << 1;
+
+
+    static constexpr int done_bit = 1 << 4;
+
+    // Flags containing information on which blocks was present in the response
+    int flags = 0;
+
+    /**
+     * @return true if the entire response is done
+     */
+    [[nodiscard]] bool is_done() const { return flags & done_bit; }
+
+    /**
+     * Extract the entire string inside the supplied tag.
+     *
+     * @param thinking Where to put the result
+     * @param text The complete text we've received so far from the server
+     * @param tag The tag we are looking for the end of
+     * @param pos The position where the tag body content starts
+     * @return
+     */
+    static std::string_view::size_type extract_string(std::string_view& thinking, std::string_view text, std::string_view tag, std::size_t pos);
+
+    /**
+     * @param text The text we've received so far from the server
+     * @return ResponseBlocks
+     */
+    static ResponseBlocks from_text(std::string_view text);
+};
+
+/**
+ * Trim the supplied string by removing spaces, newlines and tabs at the start and the end of the string
+ *
+ * @param text The text to trim
+ * @return The trimmed string
+ */
+constexpr std::string_view string_view_trim(std::string_view text)
+{
+    constexpr std::string_view exclude = " \n\t\r\0";
+    if (const size_t leftShift = text.find_first_not_of(exclude);
+        leftShift != std::string_view::npos
+    ) {
+        text.remove_prefix(leftShift);
+    }
+    else {
+        return {};
+    }
+
+    if (const size_t rightShift = text.find_last_not_of(exclude);
+        rightShift != std::string_view::npos
+    ) {
+        text.remove_suffix(text.size() - rightShift - 1);
+    }
+    else {
+        return {};
+    }
+    return text;
+}
 
 /**
  * @brief Streaming filter that intercepts and handles thinking tags from LLM output in real time.

@@ -1,253 +1,144 @@
-**DISCLAIMER: Use this project and executing any code from this project at your own risk.**
+**DISCLAIMER: Use this project and any code it runs at your own risk.**
 
-Most of the code in this project is vibe-coded. Keep that in mind when considering things like security flaws. The 
-server itself is only running the actual AI. It won't run any tasks outside running the AI model itself.
+# Callisto
 
-The client, however, has support for lots of tasks that can be considered insecure. Examples are: running arbitrary
-commands on the computer.
+Callisto is a local coding agent. Two programs share the work:
 
-You can increase the security somewhat by running the client itself in a virtual machine or container using devcontainers.
+1. **`callisto_server`** keeps chat sessions, generates text and exposes it over HTTP REST. It does not run tools.
+2. **`callisto_cli`** is the agent. It talks to the server over HTTP and runs tools locally.
 
-# Introduction
+llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.
 
-This project is basically a way for me to improve my understanding on how AI models and agents work. Most of the code is
-vibe-coded.
+## The client
 
-Complex tasks are delegated to subagents as a way to lower the complexity of the main agent context.
+With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. Thinking stays on one line until you open it. A tool call is one line, and opens while you answer the approval question. The assistant reply sits in a box. The context meter is in the upper right.
 
-Experiment yourself how much context you allow the server to give the client. If you have a Nvidia 4090 GTX with 64GB 
-RAM, you can use at least `-c 100000`. You can also use `Qwen3.8-27B-UD-Q4_K_XL.gguf` as a model, which is really 
-good for that kind of hardware.
+![Callisto client](example.gif)
 
-# Setup Dev
+`exec` runs one task as plain text and then exits, for scripts. `health`, `session`, `send`, `job`, and `tools` talk to the HTTP API directly.
 
-Install the necessary tools needed for the project to work — C++ development tools with CMake and Python.
-Optionally with CUDA as well. Replace `pacman` with `apt` if you are building on a Debian system.
+# Compile
+
+You need CMake 4.1 or newer, a C++23 compiler, libcurl, and git. Ninja is optional. CUDA is optional and only needed for GPU inference.
+
+Arch:
 
 ```bash
-sudo pacman -S --needed base-devel git cmake ninja python curl cuda
+sudo pacman -S --needed base-devel git cmake ninja curl
 ```
 
-Models can be found on https://huggingface.co, for example: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+Debian or Ubuntu: install the same packages with `apt` (`build-essential`, `cmake`, `ninja-build`, `libcurl4-openssl-dev`, `git`). Add the CUDA toolkit when you want GPU layers.
 
-## Checking out and building llama.cpp outside this project
-
-Here is an example on how to build llama.cpp from scratch. You don't need to do this beforehand if you don't want to.
+From the repository root:
 
 ```bash
-# Clone llama.cpp
-git clone https://github.com/ggml-org/llama.cpp.git
-cd llama.cpp
+cmake -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build cmake-build-debug -j$(nproc)
+```
 
-# Add cuda to PATH
-export PATH=/opt/cuda/bin:$PATH
-export LD_LIBRARY_PATH=/opt/cuda/lib64:$LD_LIBRARY_PATH
+That produces:
 
-# Compile llama.cpp with CUDA support
-cmake -B build \
-  -DGGML_CUDA=ON \
-  -DCMAKE_CUDA_ARCHITECTURES="89" \
-  -DCMAKE_BUILD_TYPE=Release \
-  -G Ninja
-cmake --build build --config Release -j$(nproc)
+- `cmake-build-debug/callisto_server`
+- `cmake-build-debug/callisto_cli`
+- `cmake-build-debug/callisto_tests`
+- `cmake-build-debug/tests`
 
-# Setup Python tools
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+A Release build is the one to run a model with:
 
-# Download Qwen3.8-27B-UD-Q4_K_XL
+```bash
+cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build cmake-build-release --target callisto_server callisto_cli -j$(nproc)
+```
+
+GPU layers need CUDA turned on. `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints the architecture number. An RTX 40-series card is `89`.
+
+```bash
+cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build cmake-build-release --target callisto_server callisto_cli -j$(nproc)
+```
+
+The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages the binaries already built in `cmake-build-debug`. Build those first.
+
+# Run
+
+Download a GGUF model. This tree ships chat templates for Qwen3.8-27B and Ternary-Bonsai-2-27B under `src/templates/`. Pass `--chat-template` when the file inside the GGUF is not the one you want.
+
+```bash
+pip install huggingface_hub
 python <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
 EOF
 ```
 
-After building the project, you can start llama.cpp locally by:
+Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`.
 
 ```bash
-# Start llama.cpp server
-./build/bin/llama-server -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 99 --host 0.0.0.0 --port 8080
-
-# Or run one of the example applications with 32k tokens
-./build/bin/llama-simple-chat -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf -c 32768 -ngl 99
+./cmake-build-release/callisto_server \
+  -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf \
+  -c 32768 -ngl 99
 ```
 
-## Building this project
-
-Check out this project:
+Start the client in the project you want it to edit:
 
 ```bash
-git clone <this-repo> --recurse-submodules
+./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
-Open the project and build it with your favorite IDE (e.g. CLion) or directly via CMake:
+One task from a script:
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="89"
-cmake --build build -j$(nproc)
+./cmake-build-release/callisto_cli exec "Summarize the README"
 ```
 
-## Build this project inside devcontainer
+`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.callisto/last-session` for this directory and server. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
 
-The devcontainer doesn't have access to CUDA. So build without it
-
-## Download Qwen3.8
-
-This project uses Qwen3.8 by default. Support for other models can also be used:
-
-```bash
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
-EOF
-```
-
-Replace `Qwen3.8-27B-UD-Q4_K_XL.gguf` with the model you want to use. Check Hugging Face for the system requirements for each model.
-
-## Download other models
-
-Use the same script as for Qwen3.8. The application requires GGUF format, so you might need to convert the model with:
-
-```bash
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="microsoft/Phi-3-mini-128k-instruct", local_dir="Phi-3-mini-128k-instruct")
-EOF
-
-python llama.cpp/convert_hf_to_gguf.py ./Phi-3-mini-128k-instruct --outfile Phi-3-mini-128k-instruct.gguf --outtype q8_0
-```
-
-## Building Devcontainer
-
-You can build a devcontainer where the local AI client is available. Both the client and the fat_client will be part of the docker image:
-
-```bash
-docker build . -t local_ai:latest
-```
-
-## Before Running
-
-If you want to have support for searching the internet for information, then start the attached docker-compose.yml file
-to start SearXNG. Makes the AI's web-integration much more powerful:
+`web_search` calls a local SearXNG on port 4488. Start it with:
 
 ```bash
 docker compose up -d
 ```
 
-# Autonomous AI Agent & Architecture
+# Using the session
 
-The application is modularly split into standalone components:
+Reads run without a prompt. A write, a shell command, or a network tool asks first. The list is:
 
-1. **`server`** — Dedicated LLM inference server listening on TCP (default port `8080`). Loads GGUF models via `llama.cpp` and serves token generation and chat completion requests over TCP.
-2. **`client`** — Lightweight agent client that connects to the `server` over TCP. It manages the interactive agent CLI, runs the ReAct reasoning loop, and executes tools locally on the client host.
-3. **`fat_client`** — Standalone all-in-one agent binary embedding both the local `llama.cpp` inference engine and tool execution in a single process.
-4. **`web`** (Standalone Web UI) — Standalone web interface and bridge that connects web browsers to the `server` over TCP, offering real-time SSE streaming, live context meter visualization, chat management, and temperature/system prompt configuration.
+- **Yes, this once** (`y`)
+- **No** (`n`)
+- **Always this tool** (`a`)
+- **Full access** (`f`)
 
-### Running the Server and Client (Client-Server Mode)
+Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D` or `/exit` leaves.
 
-Start the TCP server:
-```bash
-./build/server -m <path-to-model.gguf> -c 32768 -ngl 99 --host 0.0.0.0 -p 8080
-```
+| Command | What it does |
+|---|---|
+| `/help` | Show the commands |
+| `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
+| `/status` | Session id, approval mode, and server |
+| `/diff` | `git diff --stat` for the working directory |
+| `/compact` | Summarize the chat into a new session |
+| `/clear` | Start a new session |
+| `/exit` | Leave |
 
-Start the client (connecting to the server over TCP, optionally enabling sub-agents and auto-approval):
-```bash
-./build/client --host 127.0.0.1 -p 8080 --sub-agents
-```
+If `AI_INSTRUCTIONS.md` or `.github/copilot-instructions.md` is in the working directory, that text is added to the system prompt.
 
-#### Running Single Commands / Prompts directly (stdout output):
+Tools the client can run: `read_file`, `write_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`.
 
-You can execute a command or prompt directly from the terminal and have the response printed to stdout without entering interactive mode:
+# Credits
 
-```bash
-# Run a single prompt and print the response to stdout
-./build/client -c "Summarize the contents of README.md"
+Callisto sits on other people's work. Thank you.
 
-# Run with --command or --exec flag
-./build/client --command "List files in the working directory and explain their purpose" -y
+| Project | Role | License |
+|---|---|---|
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) and ggml | Model runtime in `callisto_server` | MIT, © 2023-2026 The ggml authors |
+| [nlohmann/json](https://github.com/nlohmann/json) | JSON, both programs | MIT, © 2013-2025 Niels Lohmann |
+| [cpp-httplib](https://github.com/yhirose/cpp-httplib) | HTTP, both programs | MIT, © Yuji Hirose |
+| [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Fullscreen client | MIT, © 2019 Arthur Sonzogni |
+| [CLI11](https://github.com/CLIUtils/CLI11) | Command-line parsing | BSD-3-Clause, © 2017-2025 University of Cincinnati, Henry Schreiner |
+| [subprocess.h](https://github.com/sheredom/subprocess.h) | Process helper inside llama.cpp | The Unlicense |
+| [libcurl](https://curl.se) | HTTP fetch in the client | curl license, system library |
 
-# Quiet mode (-q / --quiet / --silent): suppresses reasoning steps, tool statuses, and prints only the final answer
-./build/client -q -c "Fetch and summarize https://example.com" --allow-tool web_fetch
+The license texts those projects require for a binary build are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Source copies keep their own `LICENSE` files. CLI11's BSD-3-Clause terms forbid using the University of Cincinnati or the contributors' names to endorse a product. The thanks above is attribution, not an endorsement.
 
-# Allow specific tools automatically via --allow-tool or --allow-tools (comma-separated list)
-./build/client -q -c "What is on https://example.com?" --allow-tools web_fetch,read_file
-
-# Execute a direct shell command via /exec and print the output to stdout
-./build/client -c "/exec ls -la src/"
-```
-
-### Running the Web Interface
-
-Start the standalone web interface (default port `3000`, connects to AI server on `127.0.0.1:8080`):
-```bash
-python3 web/server.py --port 3000 --server-host 127.0.0.1 --server-port 8080
-```
-Then open your browser at `http://localhost:3000`.
-
-Features:
-- Chat interface with Markdown rendering and syntax-highlighted code blocks (with copy buttons).
-- Real-time token streaming via Server-Sent Events (SSE).
-- Real-time visualization of server context usage.
-- Server status, context resetting (`/reset`), custom system prompt, and temperature adjustments.
-- Configuration modal to dynamically change connected server address/port.
-
-### Running the Fat Client (Standalone Mode)
-
-```bash
-./build/fat_client -m <path-to-model.gguf> -c 4096 -ngl 99 --sub-agents
-```
-
-### Custom Project Instructions (`AI_INSTRUCTIONS.md`)
-
-If a file named `AI_INSTRUCTIONS.md` (or alternatives such as `copilot_instructions.md` / `.github/copilot-instructions.md`) is found in the project root/working directory, it is automatically loaded and appended to the agent's system prompt under `## Project Instructions (AI_INSTRUCTIONS.md):`.
-This allows project-specific rules, coding conventions, and architectural guidelines to be consistently followed by the agent.
-
-### Tool Approval & Security Control
-
-By default, the user must approve each tool execution before commands or file modifications are performed.
-When the agent requests to invoke a tool, the user is prompted to choose:
-- **`yes`** (`y`, `ja`, `j`) — Approve and execute the requested tool this time.
-- **`no`** (`n`, `nej`) — Deny the tool execution (the agent is informed of the rejection).
-- **`always`** (`a`, `alltid`, `always yes`) — Auto-approve this and all subsequent tool executions during the session.
-
-You can also start the client in auto-approval mode:
-- CLI flags: `-y`, `--yes`, `--auto-approve` (or `--require-approval` to enforce prompts).
-- Pre-approve specific tools without confirmation: `--allow-tool <tool>` or `--allow-tools <tool1,tool2>` (e.g. `--allow-tool web_fetch`).
-- Slash command: `/approval` to toggle between confirmation mode and automatic approval during an interactive session.
-
-### Available Agent Tools
-
-When solving tasks, the agent iteratively reasons, invokes tools via `<tool_call>` blocks, receives observations via `<tool_response>`, and continues reasoning until the task is complete.
-
-```xml
-<tool_call>
-{
-  "name": "read_file",
-  "arguments": {"path": "src/client.cpp", "offset": 1, "limit": 50}
-}
-</tool_call>
-```
-
-- **`execute_command`** — Executes bash/shell commands on the local system, returning stdout/stderr and exit codes.
-- **`read_file`** — Reads local file contents with line numbering, offset, and limit support.
-- **`write_file`** — Writes/creates files (with automatic directory creation).
-- **`list_directory`** — Lists files and directories with sizes and file types.
-- **`file_search`** — Recursively searches for files/directories matching patterns.
-- **`search_text`** — Recursively searches for text or regular expressions across project files.
-- **`web_fetch`** — Downloads and parses readable text from HTTP(S) URLs via `libcurl`.
-- **`web_search`** — Searches the web via local SearXNG instance.
-- **`sub_agent`** — Delegates a sub-task or complex task to an isolated sub-agent. When sub-agents are enabled, the agent breaks down complex problems into modular tasks during the planning phase (Thought/Plan) and runs each task sequentially via sub-agents. The sub-agent runs with its own context and tools, keeping the main conversation context compact and avoiding context pollution, returning only its final result. Each sub-agent's response can also directly trigger follow-up tool executions (such as file operations, commands, or further sub-agent tasks). (Toggleable via `--sub-agents` / `/subagents`).
-
-### Interactive Slash Commands
-
-- `/help` — Display list of commands.
-- `/exec <cmd>`, `/sh <cmd>` — Run a shell command directly and print output to stdout.
-- `/tools` — Display all registered tools and their argument schemas.
-- `/subagents` — Toggle sub-agent tool delegation (enable/disable) dynamically.
-- `/approval` — Toggle tool approval mode (Require approval / Auto-approve).
-- `/context` — Display current context usage and memory statistics.
-- `/compact` — Manually compact conversation context history.
-- `/clear`, `/reset` — Clear conversation history and reset context memory.
-- `/system` — View the active agent system prompt.
-- `/exit`, `/quit` — Exit the program.
+SearXNG (AGPL-3.0) and Valkey (BSD-3-Clause) are optional separate services started by `docker-compose.yml`. They are not part of the Callisto binaries.

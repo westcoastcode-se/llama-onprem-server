@@ -5,5 +5,8 @@ cmake-build-verify
 build
 __pycache__
 
+# Junie AI
+.junie
+
 # Ignore model if downloaded in the project directory
 Qwen3.8-27B-GGUF

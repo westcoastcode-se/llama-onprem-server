@@ -1,293 +1,323 @@
-#include "llm/llm_engine.hpp"
-#include "common/cli.hpp"
-#include "common/color.hpp"
-#include "common/context.hpp"
-#include "common/net.hpp"
-#include "common/protocol.hpp"
+#include "common/log.hpp"
+#include "server/agent/model_adapter.hpp"
+#include "server/api/errors.hpp"
+#include "server/http/json.hpp"
+#include "server/http/routes.hpp"
+#include "server/jobs/jobs.hpp"
+#include "server/llm/llm_engine.hpp"
+#include "server/sessions/sessions.hpp"
 #include <atomic>
 #include <csignal>
-#include <cstdio>
+#include <cstdint>
 #include <cstdlib>
-#include <cstring>
-#include <iostream>
-#include <mutex>
+#include <format>
+#include <httplib.h>
+#include <poll.h>
+#include <print>
+#include <string>
 #include <thread>
-#include <vector>
+#include <unistd.h>
 
-static std::atomic<bool> g_running{true};
+namespace
+{
+int g_wake_fd = -1;
+volatile sig_atomic_t g_stop_flag = 0;
 
-static void signal_handler(int) {
-    g_running = false;
-}
-
-static void print_server_usage(int, char ** argv) {
-    printf("\n%sLocal AI Server%s\n", Color::BOLD, Color::RESET);
-    printf("Usage:\n");
-    printf("    %s -m <model.gguf> [options]\n\n", argv[0]);
-    printf("Options:\n");
-    printf("    -m  <path>       Path to GGUF model file (required)\n");
-    printf("    -c  <int>        Context size (default: 4096)\n");
-    printf("    -b  <int>        Batch size (default: 2048)\n");
-    printf("    -ngl <int>       Number of GPU layers (default: 99)\n");
-    printf("    -t  <float>      Sampling temperature (default: 0.7)\n");
-    printf("    --host <ip/host> Host address to bind (default: 0.0.0.0)\n");
-    printf("    -p, --port <int> Port to listen on (default: 8080)\n");
-    printf("    -h, --help       Show this help message\n\n");
-}
-
-struct ClientThread {
-    std::thread thread;
-    std::shared_ptr<std::atomic<bool>> done;
-};
-
-template <typename F>
-static void handle_streaming_request(TcpSocket * client_sock,
-                                     const std::string & client_ip,
-                                     int client_port,
-                                     const std::string & op_name,
-                                     LlamaEngine & engine,
-                                     std::mutex & engine_mutex,
-                                     F && func) {
-    std::string full_response;
-    int n_ctx = 0;
-    int used_ctx = 0;
+void on_signal(int)
+{
+    if (g_stop_flag)
     {
-        std::lock_guard<std::mutex> lock(engine_mutex);
-        full_response = func([&](std::string_view piece) -> bool {
-            if (client_sock && client_sock->is_valid()) {
-                return client_sock->send_json({{"type", "token"}, {"piece", std::string(piece)}});
-            }
-            return false;
-        });
-        n_ctx = engine.get_context_size();
-        used_ctx = engine.get_used_context();
+        return;
     }
-    if (client_sock && client_sock->is_valid()) {
-        client_sock->send_json({
-            {"type", "done"},
-            {"response", full_response},
-            {"n_ctx", n_ctx},
-            {"used_ctx", used_ctx}
-        });
+    g_stop_flag = 1;
+    if (g_wake_fd >= 0)
+    {
+        const char byte = 1;
+        const ssize_t n = ::write(g_wake_fd, &byte, 1);
+        (void)n;
     }
-    float pct = Context::get_usage_percentage(used_ctx, n_ctx);
-    printf("%s📊 [server] Client %s:%d %s context: %d / %d tokens (%.1f%%)%s\n",
-           Color::CYAN, client_ip.c_str(), client_port, op_name.c_str(), used_ctx, n_ctx, pct, Color::RESET);
 }
 
-static void handle_client(std::unique_ptr<TcpSocket> client_sock,
-                          std::string client_ip,
-                          int client_port,
-                          LlamaEngine & engine,
-                          std::mutex & engine_mutex,
-                          std::shared_ptr<std::atomic<bool>> done_flag) {
-    printf("%s[server] Client connected from %s:%d%s\n", Color::GREEN, client_ip.c_str(), client_port, Color::RESET);
-
-    try {
-        while (g_running && client_sock->is_valid()) {
-            nlohmann::json req;
-            if (!client_sock->read_json(req)) {
-                break; // Client disconnected or error
-            }
-
-            std::string req_type = req.value("type", "");
-
-            if (req_type == "ping") {
-                int n_ctx = 0;
-                int used_ctx = 0;
-                std::string model_path;
-                {
-                    std::lock_guard<std::mutex> lock(engine_mutex);
-                    model_path = engine.get_config().model_path;
-                    n_ctx = engine.get_context_size();
-                    used_ctx = engine.get_used_context();
-                }
-                nlohmann::json resp = {
-                    {"type", "pong"},
-                    {"status", "ok"},
-                    {"model", model_path},
-                    {"n_ctx", n_ctx},
-                    {"used_ctx", used_ctx}
-                };
-                client_sock->send_json(resp);
-            } else if (req_type == "context") {
-                int n_ctx = 0;
-                int used_ctx = 0;
-                {
-                    std::lock_guard<std::mutex> lock(engine_mutex);
-                    n_ctx = engine.get_context_size();
-                    used_ctx = engine.get_used_context();
-                }
-                nlohmann::json resp = {
-                    {"type", "context"},
-                    {"n_ctx", n_ctx},
-                    {"used_ctx", used_ctx}
-                };
-                client_sock->send_json(resp);
-                float pct = Context::get_usage_percentage(used_ctx, n_ctx);
-                printf("%s📊 [server] Client %s:%d queried context: %d / %d tokens (%.1f%%)%s\n",
-                       Color::DIM, client_ip.c_str(), client_port, used_ctx, n_ctx, pct, Color::RESET);
-            } else if (req_type == "reset") {
-                int n_ctx = 0;
-                {
-                    std::lock_guard<std::mutex> lock(engine_mutex);
-                    engine.reset();
-                    n_ctx = engine.get_context_size();
-                }
-                printf("%s[server] Context reset by client %s:%d (0 / %d tokens)%s\n",
-                       Color::DIM, client_ip.c_str(), client_port, n_ctx, Color::RESET);
-                client_sock->send_json({{"type", "ok"}, {"message", "context reset successful"}});
-            } else if (req_type == "format") {
-                auto msgs = Protocol::parse_messages(req.value("messages", nlohmann::json::array()));
-                bool add_assistant = req.value("add_assistant", true);
-                std::string formatted;
-                {
-                    std::lock_guard<std::mutex> lock(engine_mutex);
-                    formatted = engine.apply_template(msgs, add_assistant);
-                }
-                client_sock->send_json({{"type", "formatted"}, {"text", formatted}});
-            } else if (req_type == "generate") {
-                std::string prompt = req.value("prompt", "");
-                float temperature = req.value("temperature", engine.get_config().temperature);
-                handle_streaming_request(client_sock.get(), client_ip, client_port, "generate", engine, engine_mutex,
-                    [&](auto cb) { return engine.generate(prompt, cb, temperature); });
-            } else if (req_type == "chat") {
-                auto msgs = Protocol::parse_messages(req.value("messages", nlohmann::json::array()));
-                float temperature = req.value("temperature", engine.get_config().temperature);
-                handle_streaming_request(client_sock.get(), client_ip, client_port, "chat", engine, engine_mutex,
-                    [&](auto cb) { return engine.chat(msgs, cb, temperature); });
-            } else {
-                client_sock->send_json({{"type", "error"}, {"message", "unknown request type: " + req_type}});
-            }
-        }
-    } catch (const std::exception & e) {
-        fprintf(stderr, "%s[server] Error handling client %s:%d: %s%s\n",
-                Color::RED, client_ip.c_str(), client_port, e.what(), Color::RESET);
-    } catch (...) {
-        fprintf(stderr, "%s[server] Unknown error handling client %s:%d%s\n",
-                Color::RED, client_ip.c_str(), client_port, Color::RESET);
-    }
-
-    if (done_flag) {
-        done_flag->store(true);
-    }
-
-    printf("%s[server] Client disconnected: %s:%d%s\n", Color::YELLOW, client_ip.c_str(), client_port, Color::RESET);
+void print_usage(const char *argv0)
+{
+    std::println(stderr,
+                 "Usage: {} -m <model.gguf> [options]\n"
+                 "  -m PATH       model path (required)\n"
+                 "  -c N          context size (default 4096)\n"
+                 "  -b N          batch size (default 2048)\n"
+                 "  -ngl N        GPU layers (default 99)\n"
+                 "  -t F          temperature (default 1.0)\n"
+                 "  --top-p F     nucleus sampling (default 0.95)\n"
+                 "  --top-k N     top-k sampling (default 20, 0 = off)\n"
+                 "  --min-p F     min-p sampling (default 0, 0 = off)\n"
+                 "  --presence-penalty F   (default 0)\n"
+                 "  --frequency-penalty F  (default 0)\n"
+                 "  --repetition-penalty F (default 1.0 = off)\n"
+                 "  --penalty-last-n N     penalty window (default 64)\n"
+                 "  --seed N      sampler seed (default random)\n"
+                 "  --max-tokens N         cap new tokens, -1 = context (default -1)\n"
+                 "  --threads N            generation threads, 0 = default\n"
+                 "  --threads-batch N      prompt threads, 0 = default\n"
+                 "  --flash-attn auto|on|off (default auto)\n"
+                 "  --cache-type-k TYPE    KV cache K type (default f16)\n"
+                 "  --cache-type-v TYPE    KV cache V type (default f16)\n"
+                 "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
+                 "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
+                 "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
+                 "  --host HOST   bind host (default 127.0.0.1)\n"
+                 "  -p/--port N   port (default 8080)",
+                 argv0);
 }
+} // namespace
 
-int main(int argc, char ** argv) {
-    std::signal(SIGINT, signal_handler);
-    std::signal(SIGTERM, signal_handler);
-    std::signal(SIGPIPE, SIG_IGN);
+int main(int argc, char **argv)
+{
+    Logger::set_level(Logger::LEVEL_DEBUG);
 
     LlamaConfig config;
-    std::string host = "0.0.0.0";
+    string host = "127.0.0.1";
     int port = 8080;
 
-    for (int i = 1; i < argc; i++) {
-        try {
-            std::string arg = argv[i];
-            if (parse_llama_cli_arg(i, argc, argv, config)) {
-                continue;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string arg = argv[i];
+        auto need = [&](const char *name) -> const char * {
+            if (i + 1 >= argc)
+            {
+                std::println(stderr, "missing value for {}", name);
+                std::exit(1);
             }
-            if (parse_network_cli_arg(i, argc, argv, host, port)) {
-                continue;
-            }
-            if (arg == "-h" || arg == "--help") {
-                print_server_usage(argc, argv);
-                return 0;
-            }
-            fprintf(stderr, "Unknown or incomplete argument: %s\n", argv[i]);
-            print_server_usage(argc, argv);
-            return 1;
-        } catch (const std::exception & e) {
-            fprintf(stderr, "error parsing CLI options: %s\n", e.what());
-            print_server_usage(argc, argv);
+            return argv[++i];
+        };
+        if (arg == "-m")
+        {
+            config.model_path = need("-m");
+        }
+        else if (arg == "-c")
+        {
+            config.n_ctx = std::stoi(need("-c"));
+        }
+        else if (arg == "-b")
+        {
+            config.n_batch = std::stoi(need("-b"));
+        }
+        else if (arg == "-ngl")
+        {
+            config.n_gpu_layers = std::stoi(need("-ngl"));
+        }
+        else if (arg == "-t")
+        {
+            config.temperature = std::stof(need("-t"));
+        }
+        else if (arg == "--top-p")
+        {
+            config.top_p = std::stof(need("--top-p"));
+        }
+        else if (arg == "--top-k")
+        {
+            config.top_k = std::stoi(need("--top-k"));
+        }
+        else if (arg == "--min-p")
+        {
+            config.min_p = std::stof(need("--min-p"));
+        }
+        else if (arg == "--presence-penalty")
+        {
+            config.presence_penalty = std::stof(need("--presence-penalty"));
+        }
+        else if (arg == "--repetition-penalty")
+        {
+            config.repetition_penalty = std::stof(need("--repetition-penalty"));
+        }
+        else if (arg == "--frequency-penalty")
+        {
+            config.frequency_penalty = std::stof(need("--frequency-penalty"));
+        }
+        else if (arg == "--penalty-last-n")
+        {
+            config.penalty_last_n = std::stoi(need("--penalty-last-n"));
+        }
+        else if (arg == "--seed")
+        {
+            config.seed = static_cast<uint32_t>(std::stoul(need("--seed")));
+        }
+        else if (arg == "--max-tokens")
+        {
+            config.max_tokens = std::stoi(need("--max-tokens"));
+        }
+        else if (arg == "--threads")
+        {
+            config.n_threads = std::stoi(need("--threads"));
+        }
+        else if (arg == "--threads-batch")
+        {
+            config.n_threads_batch = std::stoi(need("--threads-batch"));
+        }
+        else if (arg == "--flash-attn")
+        {
+            config.flash_attn = need("--flash-attn");
+        }
+        else if (arg == "--cache-type-k")
+        {
+            config.cache_type_k = need("--cache-type-k");
+        }
+        else if (arg == "--cache-type-v")
+        {
+            config.cache_type_v = need("--cache-type-v");
+        }
+        else if (arg == "--chat-template")
+        {
+            config.template_path = need("--chat-template");
+        }
+        else if (arg == "--reasoning")
+        {
+            config.reasoning = true;
+        }
+        else if (arg == "--no-reasoning")
+        {
+            config.reasoning = false;
+        }
+        else if (arg == "--kv-sessions")
+        {
+            config.kv_sessions = std::stoi(need("--kv-sessions"));
+        }
+        else if (arg == "--host")
+        {
+            host = need("--host");
+        }
+        else if (arg == "-p" || arg == "--port")
+        {
+            port = std::stoi(need(arg.c_str()));
+        }
+        else if (arg == "-h" || arg == "--help")
+        {
+            print_usage(argv[0]);
+            return 0;
+        }
+        else
+        {
+            std::println(stderr, "unknown argument: {}", arg);
+            print_usage(argv[0]);
             return 1;
         }
     }
 
-    if (config.model_path.empty()) {
-        fprintf(stderr, "error: missing required model path (-m)\n");
-        print_server_usage(argc, argv);
-        return 1;
-    }
-
-    if (config.n_ctx <= 0 || config.n_batch <= 0 || config.temperature < 0.0f || port <= 0 || port > 65535) {
-        fprintf(stderr, "error: invalid configuration parameters\n");
+    if (config.model_path.empty())
+    {
+        print_usage(argv[0]);
         return 1;
     }
 
     LlamaEngine engine;
-    std::string err;
-    if (!engine.init(config, err)) {
-        fprintf(stderr, "%s[server] Error initializing LLM engine: %s%s\n", Color::RED, err.c_str(), Color::RESET);
+    try
+    {
+        engine = LlamaEngine::create(config);
+    }
+    catch (std::exception &e)
+    {
+        log_error("Failed to create LLamaEngine: ", e.what());
         return 1;
     }
 
-    TcpServer server;
-    if (!server.listen(host, port, err)) {
-        fprintf(stderr, "%s[server] Error listening on %s:%d: %s%s\n", Color::RED, host.c_str(), port, err.c_str(), Color::RESET);
+    const auto adapter = make_model_adapter(config.model_path, config.template_path);
+    log_info("[llm] assistant format ", adapter->name());
+    Jobs jobs(engine, *adapter);
+    Sessions sessions(jobs, *adapter);
+    httplib::Server svr;
+
+    int wake[2] = {-1, -1};
+    if (::pipe(wake) != 0)
+    {
+        log_error("failed to create shutdown pipe");
         return 1;
     }
-
-    printf("%s=======================================================%s\n", Color::CYAN, Color::RESET);
-    printf("%s           Local AI TCP Server Running                 %s\n", Color::BOLD, Color::RESET);
-    printf("  Listening on : %s:%d\n", host.c_str(), port);
-    printf("  Model path   : %s\n", config.model_path.c_str());
-    printf("  Context size : %d | GPU Layers: %d\n", config.n_ctx, config.n_gpu_layers);
-    printf("%s=======================================================%s\n\n", Color::CYAN, Color::RESET);
-
-    std::mutex engine_mutex;
-    std::vector<ClientThread> client_threads;
-
-    while (g_running) {
-        // Prune finished client threads periodically
-        for (auto it = client_threads.begin(); it != client_threads.end();) {
-            if (it->done && it->done->load() && it->thread.joinable()) {
-                it->thread.join();
-                it = client_threads.erase(it);
-            } else {
-                ++it;
+    g_wake_fd = wake[1];
+    std::jthread stopper([&svr, &jobs, read_fd = wake[0]](std::stop_token stop) {
+        while (!stop.stop_requested())
+        {
+            pollfd pfd{};
+            pfd.fd = read_fd;
+            pfd.events = POLLIN;
+            const int rc = ::poll(&pfd, 1, 200);
+            if (rc > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+            {
+                jobs.request_shutdown();
+                svr.stop();
+                return;
             }
         }
+    });
 
-        struct pollfd pfd{};
-        pfd.fd = server.native_handle();
-        pfd.events = POLLIN;
+    std::signal(SIGINT, on_signal);
+    std::signal(SIGTERM, on_signal);
 
-        int poll_ret = poll(&pfd, 1, 500);
-        if (poll_ret < 0) {
-            if (errno == EINTR) continue;
-            break;
+    // Timeouts
+    svr.set_read_timeout(30, 0);
+    svr.set_write_timeout(300, 0);
+    svr.set_keep_alive_timeout(300);
+
+    // Add simple request logging
+    svr.set_pre_routing_handler([](const auto &req, auto &) {
+        log_info(req.method, " ", req.path);
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
+
+    // Custom exception handler
+    svr.set_exception_handler([](const auto &, auto &res, const std::exception_ptr& ep) {
+        try
+        {
+            if (ep)
+            {
+                std::rethrow_exception(ep);
+            }
         }
-        if (poll_ret == 0) continue; // timeout, check g_running
-
-        std::string client_ip;
-        int client_port = 0;
-        auto client_sock = server.accept(&client_ip, &client_port);
-        if (client_sock && client_sock->is_valid()) {
-            auto done_flag = std::make_shared<std::atomic<bool>>(false);
-            std::thread t(handle_client,
-                          std::move(client_sock),
-                          client_ip,
-                          client_port,
-                          std::ref(engine),
-                          std::ref(engine_mutex),
-                          done_flag);
-            client_threads.push_back({std::move(t), done_flag});
+        catch (const NotFound &e)
+        {
+            send_json(res, 404, ErrorResponse{404, e.what()});
         }
+        catch (const Busy &e)
+        {
+            send_json(res, 503, ErrorResponse{503, e.what()});
+        }
+        catch (const BadRequest &e)
+        {
+            send_json(res, 400, ErrorResponse{400, e.what()});
+        }
+        catch (const json::exception &e)
+        {
+            log_error("unhandled JSON exception: ", e.what());
+            send_json(res, 400, ErrorResponse{400, e.what()});
+        }
+        catch (const std::invalid_argument &)
+        {
+            send_json(res, 400, ErrorResponse{400, "invalid id"});
+        }
+        catch (const std::out_of_range &)
+        {
+            send_json(res, 400, ErrorResponse{400, "invalid id"});
+        }
+        catch (const std::exception &e)
+        {
+            log_error("unhandled exception: ", e.what());
+            send_json(res, 500, ErrorResponse{500, e.what()});
+        }
+    });
+
+    AppState state{engine, jobs, sessions};
+    register_endpoints(svr, state);
+
+    log_info("server listening on ", host, ":", port);
+    if (!svr.listen(host, port))
+    {
+        log_error("failed to listen on ", host, ":", port);
+        return 1;
     }
 
-    printf("\n%s[server] Shutting down server...%s\n", Color::YELLOW, Color::RESET);
-    server.close();
-
-    for (auto & ct : client_threads) {
-        if (ct.thread.joinable()) {
-            ct.thread.join();
-        }
-    }
-    client_threads.clear();
-
+    jobs.stop();
+    stopper.request_stop();
+    stopper.join();
+    g_wake_fd = -1;
+    ::close(wake[0]);
+    ::close(wake[1]);
     return 0;
 }

@@ -41,10 +41,10 @@ std::string list_directory(const nlohmann::json & args) {
 
 Tool create_list_directory_tool() {
     return {
-        "list_directory",
-        "List files and subdirectories in a directory path.",
-        "arguments:\n      path: string (optional directory path, defaults to '.')",
-        list_directory
+        .name = "list_directory",
+        .description = "List files and subdirectories in a directory path.",
+        .schema_doc = "arguments:\n      path: string (optional directory path, defaults to '.')",
+        .execute = list_directory
     };
 }
 

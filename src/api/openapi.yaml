@@ -1,0 +1,761 @@
+openapi: 3.0.3
+info:
+  title: Callisto server
+  version: 1.0.0
+  description: |
+    HTTP API for `callisto_server`. One loaded model serves many chat sessions.
+    Generation runs on a single worker. The server does not execute tools: a finished
+    turn that contains tool calls or a question pauses the session, and the client
+    continues it with `POST /v1/sessions/{id}/tools` or `POST /v1/sessions/{id}/messages`.
+
+    There is no authentication. The process binds `127.0.0.1:8080` unless `--host`
+    and `-p` / `--port` say otherwise.
+
+    At most 256 sessions are kept. A session that is not generating is removed after
+    600 seconds of inactivity, including sessions waiting on tools or a question.
+    Only the active job and the latest finished job of a session can be read or streamed.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Default bind address
+tags:
+  - name: health
+  - name: sessions
+  - name: jobs
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: health
+      summary: Liveness check
+      responses:
+        "200":
+          description: Process is accepting connections.
+          content:
+            text/plain:
+              schema:
+                type: string
+                enum: ["OK"]
+              example: OK
+
+  /v1/sessions:
+    post:
+      tags: [sessions]
+      operationId: createSession
+      summary: Create a session
+      description: |
+        Builds the model system prompt from the loaded adapter, the supplied tools,
+        `system`, and `questions`. An empty body is accepted and treated as `{}`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+            example:
+              questions: true
+              system: ""
+              messages: []
+              tools: []
+              max_tokens: -1
+      responses:
+        "201":
+          description: Session created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: The server already holds 256 sessions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error_code: 503
+                message: too many sessions
+
+  /v1/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: getSession
+      summary: Read a session
+      responses:
+        "200":
+          description: Current session, including history and anything it is waiting on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+    delete:
+      tags: [sessions]
+      operationId: deleteSession
+      summary: Delete a session
+      description: |
+        Cancels the active job if one is running and drops the session's KV cache.
+        Deleting an unknown id is `404`.
+      responses:
+        "200":
+          description: Session removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Deleted"
+              example:
+                deleted: true
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+
+  /v1/sessions/{id}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: snapshotSession
+      summary: Clone a session
+      description: |
+        Copies the conversation, system prompt, and KV cache into a new session.
+        The `sub_agent` tool is omitted from the copy. The request body is ignored.
+        Fails with `503` while the parent is generating.
+      responses:
+        "201":
+          description: Child session created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "503":
+          description: The parent is generating, or the server already holds 256 sessions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                generating:
+                  value:
+                    error_code: 503
+                    message: session is generating
+                full:
+                  value:
+                    error_code: 503
+                    message: too many sessions
+
+  /v1/sessions/{id}/messages:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: postMessage
+      summary: Append a message and start generation
+      description: |
+        Appends the message, then queues one generation. The response is the job key
+        to poll or stream. It does not contain the model output.
+
+        A session that is already generating returns `503`. If this turn does not fit
+        in the context, the message is removed again and the job finishes with
+        `state: error` and `error_code: context_full`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageRequest"
+            example:
+              role: user
+              content: List the files in the project.
+      responses:
+        "200":
+          description: Generation queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueuedJob"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "503":
+          description: A generation is already running, or the job queue is full.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                busy:
+                  value:
+                    error_code: 503
+                    message: session is generating
+                queue:
+                  value:
+                    error_code: 503
+                    message: job queue is full
+
+  /v1/sessions/{id}/tools:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      tags: [sessions]
+      operationId: postToolResults
+      summary: Submit tool results and continue generation
+      description: |
+        Accepted only while `state` is `awaiting_tools`. The results are appended as
+        one user message and a new generation is queued.
+
+        The body may be `{"tool_results": [...]}`, `{"results": [...]}`, or a bare array.
+        An empty list is `400`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/ToolResultsRequest"
+                - type: array
+                  minItems: 1
+                  items:
+                    $ref: "#/components/schemas/ToolResult"
+            examples:
+              object:
+                value:
+                  tool_results:
+                    - id: "1"
+                      name: read_file
+                      content: "1: hello"
+                      denied: false
+              denied:
+                value:
+                  tool_results:
+                    - id: "1"
+                      name: execute_command
+                      content: denied by user
+                      denied: true
+      responses:
+        "200":
+          description: Generation queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueuedJob"
+        "400":
+          description: The session is not waiting for tool results, or the list is empty.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                state:
+                  value:
+                    error_code: 400
+                    message: session is not awaiting tool results
+                empty:
+                  value:
+                    error_code: 400
+                    message: tool_results must be a non-empty array
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
+        "503":
+          $ref: "#/components/responses/Busy"
+
+  /v1/sessions/{id}/jobs/{job}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/JobKey"
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: Read job status
+      description: |
+        `content` is empty until the job is finished. When `state` is `done`, `content`
+        is the visible assistant text, `reasoning_content` is the think body when one
+        was split out, and `tool_calls` or `question` are present when the session is
+        paused on them.
+      responses:
+        "200":
+          description: Job status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          description: The session does not exist, or this session does not have that job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                session:
+                  value:
+                    error_code: 404
+                    message: session not found
+                job:
+                  value:
+                    error_code: 404
+                    message: job not found
+    delete:
+      tags: [jobs]
+      operationId: cancelJob
+      summary: Cancel the active job
+      description: Only the job currently generating for this session can be cancelled.
+      responses:
+        "200":
+          description: Cancel requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Cancelled"
+              example:
+                cancelled: true
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          description: No such session, or the job is not the active one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error_code: 404
+                message: job not found
+
+  /v1/sessions/{id}/jobs/{job}/tokens:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/JobKey"
+    get:
+      tags: [jobs]
+      operationId: streamJobTokens
+      summary: Stream generated text
+      description: |
+        Chunked `application/x-ndjson`. Each line is one JSON object.
+
+        Lines before the end have `done: false` and a `tokens` fragment. The last line
+        has `done: true`, an empty `tokens` string, and `state` set to the terminal job
+        state (`done`, `error`, or `cancelled`). On `error`, `error` and sometimes
+        `error_code` are set. `context_full` means the turn did not fit and the message
+        that started it was removed from the session.
+
+        The response header `Cache-Control` is `no-cache`.
+      responses:
+        "200":
+          description: Token stream until the job finishes.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: no-cache
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+                description: One TokenChunk JSON object per line, each line ending in `\n`.
+              examples:
+                answer:
+                  summary: Visible answer, then done
+                  value: |
+                    {"tokens":"Hello","done":false}
+                    {"tokens":"","done":true,"state":"done"}
+                contextFull:
+                  summary: Turn did not fit
+                  value: |
+                    {"tokens":"","done":true,"state":"error","error":"context full: the latest message was rolled back","error_code":"context_full"}
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          description: The session or job does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      description: Session id assigned at creation. Decimal integer.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    JobKey:
+      name: job
+      in: path
+      required: true
+      description: Job key returned by a message or tool-result post.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+  responses:
+    BadRequest:
+      description: The JSON body is malformed or missing a required field.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            content:
+              value:
+                error_code: 400
+                message: property 'content' is required
+            role:
+              value:
+                error_code: 400
+                message: property 'role' is required
+            toolName:
+              value:
+                error_code: 400
+                message: tool name is required
+            toolParameters:
+              value:
+                error_code: 400
+                message: tool parameters must be a JSON object
+    InvalidId:
+      description: A path id is not an integer.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error_code: 400
+            message: invalid id
+    SessionNotFound:
+      description: No session with that id.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error_code: 404
+            message: session not found
+    Busy:
+      description: The server cannot accept another generation right now.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error_code, message]
+      properties:
+        error_code:
+          type: integer
+          description: Same number as the HTTP status.
+        message:
+          type: string
+      description: |
+        Body for 400, 404, 500, and 503. This integer `error_code` is not the string
+        `error_code` carried on a failed job (`context_full`).
+
+    Deleted:
+      type: object
+      required: [deleted]
+      properties:
+        deleted:
+          type: boolean
+          enum: [true]
+
+    Cancelled:
+      type: object
+      required: [cancelled]
+      properties:
+        cancelled:
+          type: boolean
+          enum: [true]
+
+    SessionState:
+      type: string
+      enum: [idle, generating, awaiting_tools, awaiting_question]
+
+    JobState:
+      type: string
+      enum: [queued, running, done, error, cancelled]
+
+    Role:
+      type: string
+      description: Stored roles are `system`, `user`, `assistant`, and `tool`.
+      enum: [system, user, assistant, tool]
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+        content:
+          type: string
+          description: Visible text. Assistant content may be empty when the turn was only reasoning.
+        reasoning_content:
+          type: string
+          description: Think body. Omitted when empty.
+
+    JsonSchema:
+      description: JSON Schema object for a function's parameters. A JSON string of such an object is also accepted on input.
+      oneOf:
+        - type: object
+          additionalProperties: true
+        - type: string
+
+    ChatTool:
+      description: |
+        Either an OpenAI function wrapper or a flat object. `type` is ignored on input
+        and written as `function` on output.
+      oneOf:
+        - type: object
+          required: [function]
+          properties:
+            type:
+              type: string
+              enum: [function]
+            function:
+              $ref: "#/components/schemas/FunctionSpec"
+        - $ref: "#/components/schemas/FunctionSpec"
+
+    FunctionSpec:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        description:
+          type: string
+        parameters:
+          $ref: "#/components/schemas/JsonSchema"
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        system:
+          type: string
+          default: ""
+          description: Extra instructions appended to the system prompt the server builds.
+        messages:
+          type: array
+          default: []
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+          description: History used to recreate a session. A `system` role here is folded into the leading system prompt at generation time.
+        questions:
+          type: boolean
+          default: true
+          description: When true, a parsed `<question>` pauses the session in `awaiting_question`.
+        tools:
+          type: array
+          default: []
+          items:
+            $ref: "#/components/schemas/ChatTool"
+        max_tokens:
+          type: integer
+          default: -1
+          description: Cap for each turn. Negative means no session cap.
+
+    MessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          default: user
+          description: Required to be non-empty when present. Defaults to `user` when omitted.
+        max_tokens:
+          type: integer
+          default: -1
+          description: Cap for this turn only. Negative inherits the session cap.
+
+    ToolResult:
+      type: object
+      properties:
+        id:
+          type: string
+          default: ""
+        name:
+          type: string
+          default: ""
+        content:
+          type: string
+          description: Tool output. `result` is accepted as an alias on input.
+        result:
+          type: string
+          writeOnly: true
+          description: Alias of `content` accepted on input.
+        denied:
+          type: boolean
+          default: false
+          description: When true, the model is told the user denied this call.
+
+    ToolResultsRequest:
+      type: object
+      properties:
+        tool_results:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ToolResult"
+        results:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ToolResult"
+          description: Alias of `tool_results`.
+
+    QueuedJob:
+      type: object
+      required: [session_id, key]
+      properties:
+        session_id:
+          type: integer
+          format: int64
+        key:
+          type: integer
+          format: int64
+          description: Job key. Pass it as `{job}` on the job routes.
+
+    ParsedToolCall:
+      type: object
+      required: [id, name, arguments]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        arguments:
+          type: object
+          additionalProperties: true
+
+    ParsedQuestion:
+      type: object
+      required: [text, answers]
+      properties:
+        text:
+          type: string
+        answers:
+          type: array
+          items:
+            type: string
+          description: Empty means a free-form answer. The client sends the answer with `POST /messages`.
+
+    Session:
+      type: object
+      required: [id, system, messages, state, questions]
+      properties:
+        id:
+          type: integer
+          format: int64
+        system:
+          type: string
+          description: System prompt stored for the session. JSON name is `system`, not `system_prompt`.
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        state:
+          $ref: "#/components/schemas/SessionState"
+        questions:
+          type: boolean
+        active_job_key:
+          type: integer
+          format: int64
+          description: Present while `state` is `generating`.
+        pending_tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ParsedToolCall"
+          description: Present while `state` is `awaiting_tools`.
+        pending_question:
+          $ref: "#/components/schemas/ParsedQuestion"
+          description: Present while `state` is `awaiting_question`, and sometimes together with pending tool calls.
+        error:
+          type: string
+          description: Latest generation error. Omitted after a successful turn and when empty.
+        error_code:
+          type: string
+          description: |
+            Stable failure code. Omitted when empty. `context_full` means the turn was
+            discarded and the message that started it is not in `messages`.
+          example: context_full
+        context_used:
+          type: integer
+          description: Tokens stored in this session's KV cache. Zero before the first turn.
+        context_size:
+          type: integer
+          description: Context window length in tokens (`n_ctx`).
+
+    Job:
+      type: object
+      required: [key, state, done, content]
+      properties:
+        key:
+          type: integer
+          format: int64
+        state:
+          $ref: "#/components/schemas/JobState"
+        done:
+          type: boolean
+          description: True when `state` is `done`, `error`, or `cancelled`.
+        content:
+          type: string
+          description: Visible assistant text once the job is finished. Empty while it is still running.
+        error:
+          type: string
+        error_code:
+          type: string
+          example: context_full
+        reasoning_content:
+          type: string
+          description: Think body split out of the completion. Omitted when empty.
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ParsedToolCall"
+        question:
+          $ref: "#/components/schemas/ParsedQuestion"
+
+    TokenChunk:
+      type: object
+      required: [tokens, done]
+      description: One NDJSON line from `GET /v1/sessions/{id}/jobs/{job}/tokens`.
+      properties:
+        tokens:
+          type: string
+          description: Text fragment. Empty on the terminal line.
+        done:
+          type: boolean
+        state:
+          $ref: "#/components/schemas/JobState"
+          description: Present on the terminal line.
+        error:
+          type: string
+          description: Present on the terminal line when `state` is `error`.
+        error_code:
+          type: string
+          description: Present on the terminal line when the server classified the failure.
+          example: context_full
+        context_used:
+          type: integer
+          description: Session KV tokens at the time this line was written. Omitted when `context_size` is unknown.
+        context_size:
+          type: integer
+          description: Context window length. Omitted when the server has not measured this job yet.

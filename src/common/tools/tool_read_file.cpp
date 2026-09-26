@@ -25,18 +25,38 @@ std::string read_file(const nlohmann::json & args) {
     if (offset < 1) offset = 1;
     if (limit < 1) limit = 1;
 
-    std::string line;
     int current_line = 1;
     int lines_read = 0;
     std::string result;
     bool truncated = false;
+    bool any_byte = false;
 
-    // Read line by line and format with line numbers
-    while (std::getline(file, line)) {
-        if (current_line >= offset && lines_read < limit) {
+    while (lines_read < limit) {
+        std::string line;
+        bool got = false;
+        char ch = 0;
+        while (file.get(ch)) {
+            any_byte = true;
+            got = true;
+            if (ch == '\n') {
+                break;
+            }
+            if (line.size() >= MAX_TOOL_OUTPUT_CHARS) {
+                truncated = true;
+                while (file.get(ch) && ch != '\n') {
+                }
+                break;
+            }
+            line.push_back(ch);
+        }
+        if (!got) {
+            break;
+        }
+        if (current_line >= offset) {
             result += std::to_string(current_line) + ": " + line + "\n";
             lines_read++;
             if (result.size() > MAX_TOOL_OUTPUT_CHARS) {
+                result.resize(MAX_TOOL_OUTPUT_CHARS);
                 truncated = true;
                 break;
             }
@@ -44,12 +64,18 @@ std::string read_file(const nlohmann::json & args) {
         current_line++;
     }
 
-    if (lines_read == 0 && current_line <= offset) {
-        return "error: offset " + std::to_string(offset) + " is beyond file length (" + std::to_string(current_line - 1) + " lines)";
+    if (!any_byte) {
+        if (offset <= 1) {
+            return "(empty file)";
+        }
+        return "error: offset " + std::to_string(offset) + " is beyond file length (0 lines)";
     }
-
-    if (result.empty()) {
-        return "(empty file)";
+    if (file.bad()) {
+        return "error: failed to read file '" + path + "'";
+    }
+    if (lines_read == 0) {
+        return "error: offset " + std::to_string(offset) + " is beyond file length (" +
+               std::to_string(current_line - 1) + " lines)";
     }
     if (truncated) {
         result += "\n[content truncated]";
@@ -59,10 +85,12 @@ std::string read_file(const nlohmann::json & args) {
 
 Tool create_read_file_tool() {
     return {
-        "read_file",
-        "Read file contents with line numbers.",
-        "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, 1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",
-        read_file
+        .name = "read_file",
+        .description = "Read file contents with line numbers.",
+        .schema_doc =
+                "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, "
+                "1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",
+        .execute = read_file
     };
 }
 

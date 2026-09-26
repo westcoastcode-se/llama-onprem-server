@@ -46,7 +46,8 @@ static bool icontains(std::string_view haystack, std::string_view needle_lower) 
     auto it = std::search(haystack.begin(), haystack.end(),
                           needle_lower.begin(), needle_lower.end(),
                           [](char ch1, char ch2) {
-                              return std::tolower(static_cast<unsigned char>(ch1)) == ch2;
+                              return std::tolower(static_cast<unsigned char>(ch1)) ==
+                                     std::tolower(static_cast<unsigned char>(ch2));
                           });
     return it != haystack.end();
 }
@@ -215,12 +216,15 @@ std::string search_text(const nlohmann::json & args) {
 
 Tool create_search_text_tool() {
     return {
-        "search_text",
-        "Search for text or regular expressions across files in the project.",
-        "arguments:\n      query: string (the text or regex pattern to search for in files)\n      path: string (optional directory or file to search in, default '.')\n      file_pattern: string (optional filename filter or extension, e.g. '.cpp')\n      case_sensitive: boolean (optional, default false)\n      is_regex: boolean (optional, default false)\n      max_matches: integer (optional, default 100)",
-        search_text,
-        {"grep", "grep_search", "find_text", "search_in_files", "search_files_text", "search_file_content"}
-    };
+        .name = "search_text",
+        .description = "Search for text or regular expressions across files in the project.",
+        .schema_doc =
+            "arguments:\n      query: string (the text or regex pattern to search for in files)\n      path: string "
+            "(optional directory or file to search in, default '.')\n      file_pattern: string (optional filename "
+            "filter or extension, e.g. '.cpp')\n      case_sensitive: boolean (optional, default false)\n      "
+            "is_regex: boolean (optional, default false)\n      max_matches: integer (optional, default 100)",
+        .execute = search_text,
+        .aliases = {"grep", "grep_search", "find_text", "search_in_files", "search_files_text", "search_file_content"}};
 }
 
 } // namespace Tools
