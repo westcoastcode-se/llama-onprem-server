@@ -5,140 +5,314 @@
 #include "../api/messages.hpp"
 #include "../api/sessions.hpp"
 #include "../jobs/jobs.hpp"
-#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 /**
- * Active session. Only one session can interact with the LLM at the same time.
+ * Active session. Only one generation at a time; turns go through Jobs.
  *
- * If a chat requests get in between this session and another then the context will
- * be reset and a new context will be created and prepared based on the chat history
- * of the new session.
+ * Thread-safety: all public methods take mutex_. Callers must not lock it.
  */
-struct Session
+class Session
 {
-    // Unique ID for this session
+  public:
     SessionID id = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-    // The system prompt
-    string system_prompt;
-    // All chat messages associated with this session
-    vector<ChatMessage> messages;
-    // Job currently owned by this session (queued or running)
-    optional<JobKey> active_task;
-    // Last completed job for this session (status/token tail after active_task is cleared)
-    shared_ptr<Task> latest_finished_task;
-    // What state the session is in
-    SessionState state = SessionState::Idle;
-    vector<ParsedToolCall> pending_tool_calls;
-    optional<ParsedQuestion> pending_question;
-    /** When false, do not pause on model <question> tags or teach question protocol. */
-    bool questions_enabled = true;
     // Timestamp when the session was created
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
-    // Timestamp when the session was last active. Normally used by the server
-    // for garbage collection
-    std::chrono::steady_clock::time_point last_active = std::chrono::steady_clock::now();
-
-    mutable std::mutex mutex;
 
     void touch()
     {
-        last_active = std::chrono::steady_clock::now();
+        std::lock_guard lock(mutex_);
+        last_active_ = std::chrono::steady_clock::now();
     }
 
-    void clear_pending()
+    [[nodiscard]] std::chrono::steady_clock::time_point last_active() const
     {
-        pending_tool_calls.clear();
-        pending_question.reset();
+        std::lock_guard lock(mutex_);
+        return last_active_;
     }
 
-    /**
-     * @return The current active job key, if any
-     */
-    optional<JobKey> get_active_task() const
+    [[nodiscard]] optional<JobKey> active_job() const
     {
-        std::lock_guard slock(mutex);
-        return active_task;
+        std::lock_guard lock(mutex_);
+        return active_job_;
     }
 
-    shared_ptr<Task> get_latest_finished_task() const
+    [[nodiscard]] shared_ptr<Task> latest_finished_job() const
     {
-        std::lock_guard slock(mutex);
-        return latest_finished_task;
+        std::lock_guard lock(mutex_);
+        return latest_finished_;
     }
 
-    /**
-     * True if this session currently tracks the job (active or last finished).
-     */
+    /** True if this session tracks the job (active or last finished). */
     [[nodiscard]] bool owns_job(JobKey job_key) const
     {
-        std::lock_guard slock(mutex);
-        if (active_task && *active_task == job_key)
-        {
-            return true;
-        }
-        return latest_finished_task && latest_finished_task->key == job_key;
+        std::lock_guard lock(mutex_);
+        return tracks_job_unlocked(job_key);
     }
 
     /**
      * Resolve a job that belongs to this session.
-     * Prefers the live Jobs registry, then falls back to latest_finished_task.
+     * Prefers the live Jobs registry, then falls back to latest finished task.
      */
     [[nodiscard]] shared_ptr<Task> resolve_job(JobKey job_key, const Jobs &jobs) const
     {
-        std::lock_guard slock(mutex);
-        const bool is_active = active_task && *active_task == job_key;
-        const bool is_latest = latest_finished_task && latest_finished_task->key == job_key;
-        if (!is_active && !is_latest)
+        std::lock_guard lock(mutex_);
+        if (!tracks_job_unlocked(job_key))
         {
             return {};
         }
-
         if (auto live = jobs.get_task(job_key))
         {
             return live;
         }
-        if (is_latest)
+        if (latest_finished_ && latest_finished_->key == job_key)
         {
-            return latest_finished_task;
+            return latest_finished_;
         }
         return {};
     }
 
-    /**
-     * @return Response object based on the session
-     */
     [[nodiscard]] SessionResponse to_response() const
     {
-        std::lock_guard lock(mutex);
-
-        // caller must hold mutex or own exclusive access
+        std::lock_guard lock(mutex_);
         SessionResponse r;
         r.id = id;
-        r.system_prompt = system_prompt;
-        r.messages = messages;
-        r.active_job_key = active_task;
-        r.state = state;
-        // If generating, prefer that over stale wait flags
-        if (active_task)
-        {
-            r.state = SessionState::Generating;
-        }
-        r.pending_tool_calls = pending_tool_calls;
-        r.pending_question = pending_question;
-        r.questions = questions_enabled;
+        r.system_prompt = system_prompt_;
+        r.messages = messages_;
+        r.active_job_key = active_job_;
+        r.state = active_job_ ? SessionState::Generating : state_;
+        r.pending_tool_calls = pending_tool_calls_;
+        r.pending_question = pending_question_;
+        r.questions = questions_enabled_;
         return r;
     }
 
-    friend std::ostream &operator<<(std::ostream &o, const Session &ptr)
+    /** Idle and no active job — candidate for GC. */
+    [[nodiscard]] bool is_gc_idle() const
     {
-        return o << "Session(" << ptr.id << ")";
+        std::lock_guard lock(mutex_);
+        return !active_job_ && state_ == SessionState::Idle;
+    }
+
+    void configure(CreateSessionRequest req)
+    {
+        std::lock_guard lock(mutex_);
+        questions_enabled_ = req.questions;
+        if (req.system.empty())
+        {
+            system_prompt_ = default_agent_system_prompt("", req.questions);
+        }
+        else
+        {
+            system_prompt_ = std::move(req.system);
+        }
+        messages_ = std::move(req.messages);
+        last_active_ = std::chrono::steady_clock::now();
+    }
+
+    /**
+     * Append a user message and clear pending waits.
+     * @throws Busy if a generation is already in flight.
+     */
+    void accept_user_message(const SessionMessageRequest &msg)
+    {
+        std::lock_guard lock(mutex_);
+        ensure_no_active_generation_unlocked();
+        clear_pending_unlocked();
+        state_ = SessionState::Idle;
+        messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content});
+        last_active_ = std::chrono::steady_clock::now();
+    }
+
+    /**
+     * Append tool results and clear pending tool wait.
+     * @throws Busy / BadRequest on invalid state.
+     */
+    void accept_tool_results(const SessionToolResultsRequest &body)
+    {
+        std::lock_guard lock(mutex_);
+        ensure_no_active_generation_unlocked();
+        if (state_ != SessionState::AwaitingTools && pending_tool_calls_.empty())
+        {
+            throw BadRequest("session is not awaiting tool results");
+        }
+
+        messages_.push_back(
+            ChatMessage{.role = ChatMessage::ROLE_USER, .content = format_tool_results(body)});
+        clear_pending_unlocked();
+        state_ = SessionState::Idle;
+        last_active_ = std::chrono::steady_clock::now();
+    }
+
+    /**
+     * Claim a new generation: set active_job, Generating, snapshot request onto task.
+     * Call before Jobs::enqueue so ownership is registered first.
+     * @throws Busy if already generating.
+     */
+    shared_ptr<Task> begin_generation()
+    {
+        auto task = std::make_shared<Task>();
+        std::lock_guard lock(mutex_);
+        ensure_no_active_generation_unlocked();
+        task->request.system = system_prompt_;
+        task->request.messages = messages_;
+        state_ = SessionState::Generating;
+        clear_pending_unlocked();
+        last_active_ = std::chrono::steady_clock::now();
+        active_job_ = task->key;
+        latest_finished_.reset();
+        return task;
+    }
+
+    /**
+     * Apply a finished job (any terminal state). Ignores stale keys.
+     * Takes a status snapshot via Task::to_status (locks task mutex while session held).
+     */
+    void complete_job(shared_ptr<Task> task)
+    {
+        std::lock_guard lock(mutex_);
+        if (!active_job_ || *active_job_ != task->key)
+        {
+            log_error("Session(", id, ") | was notified by stale Task(", task->key, ")");
+            return;
+        }
+
+        const auto status = task->to_status();
+        active_job_.reset();
+        last_active_ = std::chrono::steady_clock::now();
+        latest_finished_ = std::move(task);
+
+        if (status.state != JobState::Done)
+        {
+            state_ = SessionState::Idle;
+            clear_pending_unlocked();
+            return;
+        }
+
+        messages_.push_back(
+            ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = status.content});
+
+        auto actions = actions_from_status(status);
+        if (!questions_enabled_)
+        {
+            actions.question.reset();
+        }
+
+        clear_pending_unlocked();
+        if (!actions.tool_calls.empty())
+        {
+            pending_tool_calls_ = std::move(actions.tool_calls);
+            pending_question_ = std::move(actions.question);
+            state_ = SessionState::AwaitingTools;
+        }
+        else if (actions.question)
+        {
+            pending_question_ = std::move(actions.question);
+            state_ = SessionState::AwaitingQuestion;
+        }
+        else
+        {
+            state_ = SessionState::Idle;
+        }
+    }
+
+    friend std::ostream &operator<<(std::ostream &o, const Session &s)
+    {
+        return o << "Session(" << s.id << ")";
+    }
+
+    friend std::ostream &operator<<(std::ostream &o, const shared_ptr<Session> &s)
+    {
+        if (!s)
+        {
+            return o << "Session(null)";
+        }
+        return o << *s;
+    }
+
+  private:
+    mutable std::mutex mutex_;
+    string system_prompt_;
+    vector<ChatMessage> messages_;
+    optional<JobKey> active_job_;
+    shared_ptr<Task> latest_finished_;
+    SessionState state_ = SessionState::Idle;
+    vector<ParsedToolCall> pending_tool_calls_;
+    optional<ParsedQuestion> pending_question_;
+    bool questions_enabled_ = true;
+    std::chrono::steady_clock::time_point last_active_ = std::chrono::steady_clock::now();
+
+    [[nodiscard]] bool tracks_job_unlocked(JobKey job_key) const
+    {
+        if (active_job_ && *active_job_ == job_key)
+        {
+            return true;
+        }
+        return latest_finished_ && latest_finished_->key == job_key;
+    }
+
+    void clear_pending_unlocked()
+    {
+        pending_tool_calls_.clear();
+        pending_question_.reset();
+    }
+
+    void ensure_no_active_generation_unlocked() const
+    {
+        if (active_job_ || state_ == SessionState::Generating)
+        {
+            throw Busy("session already has an active generation");
+        }
+    }
+
+    static string format_tool_results(const SessionToolResultsRequest &body)
+    {
+        std::ostringstream combined;
+        for (size_t i = 0; i < body.results.size(); ++i)
+        {
+            const auto &r = body.results[i];
+            if (i > 0)
+            {
+                combined << "\n";
+            }
+            if (r.denied)
+            {
+                combined << "<tool_response>\nerror: tool execution was denied by the user";
+                if (!r.name.empty())
+                {
+                    combined << " for tool '" << r.name << "'";
+                }
+                else if (!r.id.empty())
+                {
+                    combined << " for tool id '" << r.id << "'";
+                }
+                combined << ".\n</tool_response>";
+            }
+            else
+            {
+                combined << "<tool_response>\n" << r.content << "\n</tool_response>";
+            }
+        }
+        return combined.str();
+    }
+
+    static ParsedAssistantActions actions_from_status(const MessageStatusResponse &status)
+    {
+        ParsedAssistantActions actions;
+        actions.tool_calls = status.tool_calls;
+        actions.question = status.question;
+        if (actions.tool_calls.empty() && !actions.question && !status.content.empty())
+        {
+            actions = parse_assistant_actions(status.content);
+        }
+        return actions;
     }
 };
 
@@ -154,41 +328,19 @@ class Sessions
 
     explicit Sessions(Jobs &jobs);
 
-    /**
-     * Create a new session
-     *
-     * @param req The session request
-     * @return A new session
-     */
     shared_ptr<Session> create(CreateSessionRequest req);
-
-    /**
-     * Get a session using the supplied id
-     *
-     * @param id The session key
-     * @return A session if found; empty otherwise
-     */
     shared_ptr<Session> get(const SessionID &id);
-
-    /**
-     * Destroy the session with the supplied key
-     *
-     * @param id The session id
-     * @return The destroyed session if found; empty otherwise
-     */
     shared_ptr<Session> destroy(const SessionID &id);
 
     /**
      * Append a user turn and enqueue a generation job.
-     *
-     * @return job key, or nullopt if queue full.
+     * @return job key
      */
     optional<JobKey> post_message(const SessionID &id, const SessionMessageRequest &msg);
 
     /**
      * Client finished running pending tool_calls; append tool results and continue.
-     *
-     * @return new job key, or empty if queue full.
+     * @return new job key
      */
     optional<JobKey> post_tool_results(const SessionID &id, const SessionToolResultsRequest &body);
 
@@ -201,19 +353,7 @@ class Sessions
 
     void unsafe_gc();
 
-    /**
-     * Enqueue a new LLM text generation request to be processed as soon as a slot is available
-     *
-     * @param session The session
-     * @return A job based on the currently running task for this session
-     */
     optional<JobKey> enqueue_generation(const shared_ptr<Session> &session);
 
-    /**
-     * Method called when a job is finished. The job itself might've been cancelled
-     *
-     * @param session The session
-     * @param task The task
-     */
     void on_job_finished(const shared_ptr<Session> &session, shared_ptr<Task> task);
 };

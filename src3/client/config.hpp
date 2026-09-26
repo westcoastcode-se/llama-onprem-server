@@ -38,10 +38,7 @@ struct CliConfig
     int port = 8080;
     bool questions = true;
     bool auto_approve = false;
-    bool quiet = false;
-    bool no_session = false; // one-shot: create session, one message, delete session
     std::string system_prompt;
-    std::string single_command;
     std::vector<std::string> allowed_tools;
     int max_tool_rounds = 40;
 
@@ -67,17 +64,9 @@ struct CliConfig
             {
                 cfg.port = std::stoi(need(arg.c_str()));
             }
-            else if (arg == "-c" || arg == "-e" || arg == "--command" || arg == "--exec" || arg == "--prompt")
-            {
-                cfg.single_command = need(arg.c_str());
-            }
             else if (arg == "-s")
             {
                 cfg.system_prompt = need("-s");
-            }
-            else if (arg == "-q" || arg == "--quiet" || arg == "--silent")
-            {
-                cfg.quiet = true;
             }
             else if (arg == "-y" || arg == "--yes" || arg == "--auto-approve")
             {
@@ -104,10 +93,6 @@ struct CliConfig
             {
                 cfg.questions = true;
             }
-            else if (arg == "--oneshot" || arg == "--no-session")
-            {
-                cfg.no_session = true;
-            }
             else if (arg == "-it" && i + 1 < argc)
             {
                 cfg.max_tool_rounds = std::stoi(need("-it"));
@@ -117,24 +102,11 @@ struct CliConfig
                 print_usage(argv[0]);
                 std::exit(0);
             }
-            else if (!arg.empty() && arg[0] != '-')
-            {
-                if (!cfg.single_command.empty())
-                {
-                    cfg.single_command += " ";
-                }
-                cfg.single_command += arg;
-            }
             else
             {
                 throw std::runtime_error{"unknown argument: " + arg};
             }
         }
-        if (cfg.quiet && cfg.questions)
-        {
-            throw std::runtime_error{"you cannot have a quiet chat and supporting user-input questions at the same time"};
-        }
-
         return cfg;
     }
 };

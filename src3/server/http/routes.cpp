@@ -119,10 +119,10 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 
     // NDJSON stream of token chunks until done
     s.Get("/v1/sessions/:id/jobs/:job/tokens", [&state](const httplib::Request &req, httplib::Response &res) {
-        const SessionID id = std::stoll(req.path_params.at("id"));
+        const auto session_id = static_cast<SessionID>(std::stoll(req.path_params.at("id")));
         const JobKey job_key = std::stoll(req.path_params.at("job"));
-        log_info("Streaming tokens from session: ", id, " jobkey: ", job_key);
-        const auto task = state.require_session_job(id, job_key);
+        log_info("Streaming tokens from session: ", session_id, " job: ", job_key);
+        const auto task = state.require_session_job(session_id, job_key);
         send_job_token_stream(req, res, task);
     });
 }

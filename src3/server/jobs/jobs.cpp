@@ -85,14 +85,8 @@ namespace
 
 void notify_finished(const shared_ptr<Task> &task)
 {
-    // Take callback under lock, invoke without holding task->mutex so session callbacks
-    // can safely call Task getters without deadlocking.
-    std::function<void(const shared_ptr<Task> &)> cb;
-    {
-        std::lock_guard lock(task->mutex);
-        cb = std::move(task->on_finished);
-        task->on_finished = nullptr;
-    }
+    // Invoke without holding task->mutex so session callbacks can call Task getters.
+    auto cb = task->take_on_finished();
     if (!cb)
     {
         return;

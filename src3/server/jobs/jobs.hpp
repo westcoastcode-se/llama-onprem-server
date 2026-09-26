@@ -33,7 +33,18 @@ struct Task
     std::chrono::steady_clock::time_point finished_at{};
 
     // Lambda called when reaching an exit state
-    std::function<void(const shared_ptr<Task>&)> on_finished;
+    std::function<void(const shared_ptr<Task> &)> on_finished;
+
+    /**
+     * Move out on_finished under lock so the callback can run without holding mutex.
+     */
+    std::function<void(const shared_ptr<Task> &)> take_on_finished()
+    {
+        std::lock_guard lock(mutex);
+        auto cb = std::move(on_finished);
+        on_finished = nullptr;
+        return cb;
+    }
 
     mutable std::mutex mutex;
     JobState state = JobState::Queued;

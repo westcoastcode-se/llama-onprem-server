@@ -24,7 +24,7 @@ struct AppState
         if (!session || !session->owns_job(job_key))
             return false;
         // Only the active job is cancellable; finished jobs are already terminal.
-        if (session->get_active_task() != job_key)
+        if (session->active_job() != job_key)
             return false;
         return static_cast<bool>(jobs.cancel(job_key));
     }
