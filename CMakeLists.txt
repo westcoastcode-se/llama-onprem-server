@@ -83,19 +83,8 @@ target_include_directories(callisto_server BEFORE PRIVATE
 target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# HTTP agent client. Tools run here; the server only generates.
-#
-add_executable(callisto_client
-        src/client.cpp
-        src/common/log.cpp
-        ${COMMON_TOOL_SOURCES})
-configure_localai_target(callisto_client)
-target_include_directories(callisto_client BEFORE PRIVATE
-        ${CMAKE_SOURCE_DIR}/vendors/httplib)
-target_link_libraries(callisto_client PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
-
-#
-# Coding-agent CLI. CLI11 parses argv. The interactive session is an FTXUI view.
+# Coding-agent client. Tools run here; the server only generates.
+# CLI11 parses argv. The interactive session is an FTXUI view.
 #
 include(FetchContent)
 set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)

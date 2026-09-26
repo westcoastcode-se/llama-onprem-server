@@ -13,6 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 USER 1000
 
 ADD cmake-build-debug/callisto_server /callisto_server
-ADD cmake-build-debug/callisto_client /callisto_client
+ADD cmake-build-debug/callisto_cli /callisto_cli
 
 WORKDIR /workspaces

@@ -235,7 +235,7 @@ int main(int argc, char **argv)
     CLI::App app{"Coding agent for the local Callisto server"};
     app.set_help_all_flag("--help-all", "Show help for every subcommand");
     app.footer("With no subcommand, start an interactive session in the current directory.\n"
-               "callisto_client is the older line client. health, session, send, job, and tools talk to the HTTP API.");
+               "health, session, send, job, and tools talk to the HTTP API.");
 
     Options options;
     add_connection(app, options);

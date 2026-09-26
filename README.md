@@ -149,7 +149,7 @@ docker compose up -d
 The application is split into two programs:
 
 1. **`callisto_server`** — HTTP server. Loads one GGUF model, keeps chat sessions, and generates text. It does not run tools.
-2. **`callisto_client`** — Agent CLI. Talks to the server over HTTP and runs tools on the machine where the client runs.
+2. **`callisto_cli`** — Coding agent. Talks to the server over HTTP and runs tools on the machine where the client runs.
 3. **`web`** — Browser UI. It still expects the older TCP protocol and is not wired to this server.
 
 ### Running the Server and Client
@@ -159,16 +159,12 @@ Start the server:
 ./cmake-build-debug/callisto_server -m <path-to-model.gguf> -c 32768 -ngl 99 --host 0.0.0.0 -p 8080
 ```
 
-Start the client:
+Start the client in the project directory:
 ```bash
-./cmake-build-debug/callisto_client --host 127.0.0.1 -p 8080
+./cmake-build-debug/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
-The client is interactive. `-y` approves every tool, and `--allow-tools` approves a list without asking:
-
-```bash
-./cmake-build-debug/callisto_client --host 127.0.0.1 -p 8080 -y --allow-tools web_fetch,read_file
-```
+`--approval` is `read-only` by default. `auto` writes inside the working directory without asking. `full` runs tools without asking.
 
 ### Running the Web Interface
 
@@ -192,16 +188,15 @@ This allows project-specific rules, coding conventions, and architectural guidel
 
 ### Tool Approval & Security Control
 
-By default, the user must approve each tool execution before commands or file modifications are performed.
-When the agent requests to invoke a tool, the user is prompted to choose:
-- **`yes`** (`y`, `ja`, `j`) — Approve and execute the requested tool this time.
-- **`no`** (`n`, `nej`) — Deny the tool execution (the agent is informed of the rejection).
-- **`always`** (`a`, `alltid`, `always yes`) — Auto-approve this and all subsequent tool executions during the session.
+`--approval read-only` asks before writes, shell commands, and network tools. Reads run without a prompt. `auto` also allows writes inside the working directory. `full` asks for nothing.
 
-You can also start the client in auto-approval mode:
-- CLI flags: `-y`, `--yes`, `--auto-approve` (or `--require-approval` to enforce prompts).
-- Pre-approve specific tools without confirmation: `--allow-tool <tool>` or `--allow-tools <tool1,tool2>` (e.g. `--allow-tool web_fetch`).
-- Slash command: `/approval` to toggle between confirmation mode and automatic approval during an interactive session.
+When a tool needs approval, the client shows a list:
+- **Yes, this once** (`y`)
+- **No** (`n`)
+- **Always this tool** (`a`)
+- **Full access** (`f`)
+
+`/approval` switches the mode during the session.
 
 ### Available Agent Tools
 
@@ -211,7 +206,7 @@ When solving tasks, the agent iteratively reasons, invokes tools via `<tool_call
 <tool_call>
 {
   "name": "read_file",
-  "arguments": {"path": "src/client.cpp", "offset": 1, "limit": 50}
+  "arguments": {"path": "src/cli/main.cpp", "offset": 1, "limit": 50}
 }
 </tool_call>
 ```
@@ -224,17 +219,14 @@ When solving tasks, the agent iteratively reasons, invokes tools via `<tool_call
 - **`search_text`** — Recursively searches for text or regular expressions across project files.
 - **`web_fetch`** — Downloads and parses readable text from HTTP(S) URLs via `libcurl`.
 - **`web_search`** — Searches the web via local SearXNG instance.
-- **`sub_agent`** — Delegates a sub-task or complex task to an isolated sub-agent. When sub-agents are enabled, the agent breaks down complex problems into modular tasks during the planning phase (Thought/Plan) and runs each task sequentially via sub-agents. The sub-agent runs with its own context and tools, keeping the main conversation context compact and avoiding context pollution, returning only its final result. Each sub-agent's response can also directly trigger follow-up tool executions (such as file operations, commands, or further sub-agent tasks). (Toggleable via `--sub-agents` / `/subagents`).
+- **`sub_agent`** — Delegates a sub-task or complex task to an isolated sub-agent. When sub-agents are enabled, the agent breaks down complex problems into modular tasks during the planning phase (Thought/Plan) and runs each task sequentially via sub-agents. The sub-agent runs with its own context and tools, keeping the main conversation context compact and avoiding context pollution, returning only its final result. Each sub-agent's response can also directly trigger follow-up tool executions (such as file operations, commands, or further sub-agent tasks).
 
 ### Interactive Slash Commands
 
-- `/help` — Display list of commands.
-- `/exec <cmd>`, `/sh <cmd>` — Run a shell command directly and print output to stdout.
-- `/tools` — Display all registered tools and their argument schemas.
-- `/subagents` — Toggle sub-agent tool delegation (enable/disable) dynamically.
-- `/approval` — Toggle tool approval mode (Require approval / Auto-approve).
-- `/context` — Display current context usage and memory statistics.
-- `/compact` — Manually compact conversation context history.
-- `/clear`, `/reset` — Clear conversation history and reset context memory.
-- `/system` — View the active agent system prompt.
-- `/exit`, `/quit` — Exit the program.
+- `/help` — Show the commands.
+- `/approval [mode]` — Show or set `read-only`, `auto`, or `full`.
+- `/status` — Session id, approval mode, and server.
+- `/diff` — `git diff --stat` for the working directory.
+- `/compact` — Summarize the chat into a new session.
+- `/clear` — Start a new session.
+- `/exit` — Leave. Ctrl-C cancels the current generation.
