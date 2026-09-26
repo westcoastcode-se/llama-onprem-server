@@ -1,0 +1,143 @@
+#include "common/span_prefix.hpp"
+#include "server/agent/response_parse.hpp"
+
+#include "chat.h"
+
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+
+namespace
+{
+
+int g_fails = 0;
+
+void check(bool cond, const char *expr, int line)
+{
+    if (!cond)
+    {
+        std::cerr << "FAIL " << line << ": " << expr << "\n";
+        ++g_fails;
+    }
+}
+
+#define CHECK(cond) check(static_cast<bool>(cond), #cond, __LINE__)
+
+void test_prefix()
+{
+    const int32_t a[] = {1, 2, 3, 4};
+    const int32_t b[] = {1, 2, 9};
+    CHECK(common_prefix_length(std::span<const int32_t>(a, 4), std::span<const int32_t>(b, 3)) == 2);
+    CHECK(common_prefix_length(std::span<const int32_t>(a, 4), std::span<const int32_t>(a, 4)) == 4);
+    CHECK(common_prefix_length(std::span<const int32_t>(), std::span<const int32_t>(a, 4)) == 0);
+}
+
+void test_tool_parse()
+{
+    const char *json_call = "<tool_call>\n{\"name\":\"read_file\",\"arguments\":{\"path\":\"/tmp/a.txt\"}}\n</tool_call>";
+    auto json_actions = parse_assistant_actions(json_call);
+    CHECK(json_actions.tool_calls.size() == 1);
+    if (!json_actions.tool_calls.empty())
+    {
+        CHECK(json_actions.tool_calls[0].name == "read_file");
+        CHECK(json_actions.tool_calls[0].arguments.value("path", "") == "/tmp/a.txt");
+    }
+
+    const char *qwen_call =
+        "<tool_call>\n<function=read_file>\n<parameter=path>\n/tmp/a.txt\n</parameter>\n</function>\n</tool_call>";
+    auto qwen_actions = parse_assistant_actions(qwen_call);
+    CHECK(qwen_actions.tool_calls.size() == 1);
+    if (!qwen_actions.tool_calls.empty())
+    {
+        CHECK(qwen_actions.tool_calls[0].name == "read_file");
+        CHECK(qwen_actions.tool_calls[0].arguments.value("path", "") == "/tmp/a.txt");
+    }
+}
+
+std::string read_file(const std::string &path)
+{
+    std::ifstream in(path);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+void test_qwen_template()
+{
+    const std::string src = read_file(LLAMA_ENGINE_TEMPLATE);
+    CHECK(!src.empty());
+    if (src.empty())
+    {
+        return;
+    }
+
+    common_chat_templates_ptr tmpls = common_chat_templates_init(nullptr, src);
+    CHECK(tmpls != nullptr);
+    if (!tmpls)
+    {
+        return;
+    }
+
+    auto apply = [&](bool thinking, bool with_tool, bool add_assistant) {
+        common_chat_templates_inputs inputs;
+        inputs.use_jinja = true;
+        inputs.enable_thinking = thinking;
+        inputs.add_generation_prompt = add_assistant;
+        common_chat_msg user;
+        user.role = "user";
+        user.content = "hello";
+        inputs.messages.push_back(user);
+        if (!add_assistant)
+        {
+            common_chat_msg assistant;
+            assistant.role = "assistant";
+            assistant.content = "hi there";
+            inputs.messages.push_back(std::move(assistant));
+        }
+        if (with_tool)
+        {
+            inputs.tools.push_back(common_chat_tool{"read_file", "Read a file", R"({"type":"object","properties":{}})"});
+        }
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    try
+    {
+        const std::string thinking = apply(true, false, true);
+        CHECK(thinking.find("<|im_start|>assistant\n<think>\n") != std::string::npos);
+        CHECK(thinking.find("<think>\n\n</think>") == std::string::npos);
+
+        const std::string quiet = apply(false, false, true);
+        CHECK(quiet.find("<think>\n\n</think>\n\n") != std::string::npos);
+
+        const std::string with_tool = apply(true, true, true);
+        CHECK(with_tool.find("read_file") != std::string::npos);
+        CHECK(with_tool.find("<tools>") != std::string::npos);
+
+        const std::string done = apply(true, false, false);
+        CHECK(done.find("hi there") != std::string::npos);
+        CHECK(done.find("<|im_end|>") != std::string::npos);
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "FAIL template apply: " << e.what() << "\n";
+        ++g_fails;
+    }
+}
+
+} // namespace
+
+int main()
+{
+    test_prefix();
+    test_tool_parse();
+    test_qwen_template();
+    if (g_fails != 0)
+    {
+        std::cerr << g_fails << " failed\n";
+        return 1;
+    }
+    std::cout << "ok\n";
+    return 0;
+}
