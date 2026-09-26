@@ -342,6 +342,8 @@ struct SessionResponse
 
     // Set when the latest generation failed. Empty after a successful turn.
     string error;
+    // Stable code such as "context_full". Empty when error is empty or unclassified.
+    string error_code;
 
     /**
      * Validate required properties
@@ -376,6 +378,10 @@ struct SessionResponse
         if (!error.empty())
         {
             j["error"] = error;
+        }
+        if (!error_code.empty())
+        {
+            j["error_code"] = error_code;
         }
 
         if (active_job_key)
@@ -439,6 +445,7 @@ struct SessionResponse
 
         req.questions = j.value("questions", true);
         req.error = j.value("error", string());
+        req.error_code = j.value("error_code", string());
 
         return req;
     }

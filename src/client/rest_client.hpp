@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../api/errors.hpp"
 #include "../api/models.hpp"
 #include "../common/std.hpp"
 #include "common/log.hpp"
@@ -22,9 +23,10 @@ class RestClient
     {
         int status = 0;
         string body;
+        string code;
 
-        ClientError(const int status, string body, const string &what)
-            : std::runtime_error(what), status(status), body(std::move(body))
+        ClientError(const int status, string body, const string &what, string code = {})
+            : std::runtime_error(what), status(status), body(std::move(body)), code(std::move(code))
         {
         }
     };
@@ -177,6 +179,7 @@ class RestClient
         std::string accumulated;
         std::string line_buf;
         std::string stream_error;
+        std::string stream_code;
         bool is_done = false;
         bool client_cancel = false;
 
@@ -208,6 +211,7 @@ class RestClient
                 if (t.state == "error")
                 {
                     stream_error = t.error.empty() ? "generation failed" : t.error;
+                    stream_code = t.error_code;
                 }
                 return false;
             }
@@ -253,7 +257,7 @@ class RestClient
             }
             if (!stream_error.empty() && !client_cancel)
             {
-                throw ClientError(0, stream_error, stream_error);
+                throw ClientError(0, stream_error, stream_error, stream_code);
             }
             const auto err = res.error();
             throw ClientError(0, "", std::format("token stream failed: no response for job {} (httplib error {})", key,
@@ -266,7 +270,7 @@ class RestClient
         }
         if (!stream_error.empty() && !client_cancel)
         {
-            throw ClientError(0, stream_error, stream_error);
+            throw ClientError(0, stream_error, stream_error, stream_code);
         }
         return accumulated;
     }

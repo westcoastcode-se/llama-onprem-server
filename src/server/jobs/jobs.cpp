@@ -1,6 +1,7 @@
 #include "../jobs/jobs.hpp"
 #include "../agent/model_adapter.hpp"
 #include "../agent/response_parse.hpp"
+#include "api/errors.hpp"
 #include "common/log.hpp"
 
 #include <algorithm>
@@ -318,6 +319,16 @@ void Jobs::worker_loop(std::stop_token stop)
             };
             std::string response = engine_.chat(msgs, call);
             buffer->set_full_result(std::move(response));
+        }
+        catch (const LlamaContextFull &)
+        {
+            {
+                std::lock_guard lock(mutex_);
+                current_task_.reset();
+            }
+            task->set_error_state("context full: the latest message was rolled back", string(kContextFull));
+            notify_finished(task);
+            continue;
         }
         catch (const std::exception &e)
         {

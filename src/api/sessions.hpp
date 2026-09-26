@@ -177,6 +177,7 @@ struct MessageTokensResponse
     // Present on the terminal line. "done", "error", or "cancelled".
     string state;
     string error;
+    string error_code;
 
     [[nodiscard]] json to_json() const
     {
@@ -189,6 +190,10 @@ struct MessageTokensResponse
         {
             j["error"] = error;
         }
+        if (!error_code.empty())
+        {
+            j["error_code"] = error_code;
+        }
         return j;
     }
 
@@ -199,6 +204,7 @@ struct MessageTokensResponse
         response.done = j.value("done", false);
         response.state = j.value("state", string());
         response.error = j.value("error", string());
+        response.error_code = j.value("error_code", string());
         return response;
     }
 };

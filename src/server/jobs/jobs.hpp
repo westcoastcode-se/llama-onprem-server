@@ -55,6 +55,7 @@ struct Task
     mutable std::mutex mutex;
     JobState state = JobState::Queued;
     string error;
+    string error_code;
     string result;
     string reasoning;
     std::atomic<bool> cancel_requested{false};
@@ -74,10 +75,11 @@ struct Task
      *
      * @param msg The error message
      */
-    void set_error_state(string msg)
+    void set_error_state(string msg, string code = {})
     {
         std::lock_guard lock(mutex);
         error = std::move(msg);
+        error_code = std::move(code);
         state = JobState::Error;
         finished_at = std::chrono::steady_clock::now();
         buffer->set_done();
@@ -148,6 +150,7 @@ struct Task
         r.done = state.is_finished();
         r.content = result;
         r.error = error;
+        r.error_code = error_code;
         r.reasoning = reasoning;
         r.tool_calls = tool_calls;
         r.question = question;
@@ -163,6 +166,7 @@ struct Task
         r.done = state.is_finished();
         r.content = result;
         r.error = error;
+        r.error_code = error_code;
         r.reasoning = reasoning;
         r.tool_calls = tool_calls;
         r.question = question;

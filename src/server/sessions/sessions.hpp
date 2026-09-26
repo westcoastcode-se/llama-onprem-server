@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../common/std.hpp"
+#include "../../api/errors.hpp"
 #include "../agent/response_parse.hpp"
 #include "../api/messages.hpp"
 #include "../api/sessions.hpp"
@@ -100,6 +101,7 @@ class Session
         r.pending_question = pending_question_;
         r.questions = questions_enabled_;
         r.error = last_error_;
+        r.error_code = error_code_;
         return r;
     }
 
@@ -171,6 +173,7 @@ class Session
     {
         std::lock_guard lock(mutex_);
         ensure_no_active_generation_unlocked();
+        arm_rollback_unlocked();
         clear_pending_unlocked();
         state_ = SessionState::Idle;
         messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content, .reasoning_content = {}});
@@ -191,6 +194,7 @@ class Session
             throw BadRequest("session is not awaiting tool results");
         }
 
+        arm_rollback_unlocked();
         messages_.push_back(
             ChatMessage{.role = string(ChatMessage::ROLE_USER), .content = format_tool_results(body), .reasoning_content = {}});
         turn_max_tokens_ = max_tokens_;
@@ -243,19 +247,32 @@ class Session
         if (status.state == JobState::Error)
         {
             last_error_ = status.error.empty() ? "generation failed" : status.error;
-            state_ = SessionState::Idle;
-            clear_pending_unlocked();
+            error_code_ = status.error_code;
+            if (status.error_code == kContextFull)
+            {
+                rollback_last_turn_unlocked();
+            }
+            else
+            {
+                state_ = SessionState::Idle;
+                clear_pending_unlocked();
+            }
+            disarm_rollback_unlocked();
             return;
         }
         if (status.state != JobState::Done)
         {
             last_error_.clear();
+            error_code_.clear();
             state_ = SessionState::Idle;
             clear_pending_unlocked();
+            disarm_rollback_unlocked();
             return;
         }
 
         last_error_.clear();
+        error_code_.clear();
+        disarm_rollback_unlocked();
         ChatMessage assistant;
         assistant.role = string(ChatMessage::ROLE_ASSISTANT);
         assistant.content = status.content;
@@ -314,6 +331,13 @@ class Session
     shared_ptr<Task> latest_finished_;
     SessionState state_ = SessionState::Idle;
     string last_error_;
+    string error_code_;
+    // Captured at the start of the turn that was just appended, so a context-full
+    // failure can remove that message and put the session back.
+    bool rollback_armed_ = false;
+    SessionState rollback_state_ = SessionState::Idle;
+    vector<ParsedToolCall> rollback_tools_;
+    optional<ParsedQuestion> rollback_question_;
     const ModelAdapter &adapter_;
     vector<ParsedToolCall> pending_tool_calls_;
     optional<ParsedQuestion> pending_question_;
@@ -377,6 +401,35 @@ class Session
             }
         }
         return combined;
+    }
+
+    void arm_rollback_unlocked()
+    {
+        rollback_armed_ = true;
+        rollback_state_ = state_;
+        rollback_tools_ = pending_tool_calls_;
+        rollback_question_ = pending_question_;
+    }
+
+    void disarm_rollback_unlocked()
+    {
+        rollback_armed_ = false;
+        rollback_tools_.clear();
+        rollback_question_.reset();
+    }
+
+    void rollback_last_turn_unlocked()
+    {
+        if (rollback_armed_ && !messages_.empty() && messages_.back().role == ChatMessage::ROLE_USER)
+        {
+            messages_.pop_back();
+            pending_tool_calls_ = rollback_tools_;
+            pending_question_ = rollback_question_;
+            state_ = rollback_state_;
+            return;
+        }
+        state_ = SessionState::Idle;
+        clear_pending_unlocked();
     }
 
     ParsedAssistantActions actions_from_status(const MessageStatusResponse &status) const

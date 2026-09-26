@@ -1,4 +1,5 @@
 #include "client/config.hpp"
+#include "api/errors.hpp"
 #include "client/rest_client.hpp"
 #include "common/defer.hpp"
 #include "common/log.hpp"
@@ -520,9 +521,20 @@ std::string run_subagent(RestClient &client, const SessionID parent, const std::
         task);
     const auto started = client.post_message(
         snap.id, SessionMessageRequest{.content = assignment, .role = string(ChatMessage::ROLE_USER)});
-    if (drive_session_turn(client, snap.id, tools, cfg, started.key))
+    try
     {
-        return "sub-agent cancelled";
+        if (drive_session_turn(client, snap.id, tools, cfg, started.key))
+        {
+            return "sub-agent cancelled";
+        }
+    }
+    catch (const RestClient::ClientError &e)
+    {
+        if (e.code == kContextFull)
+        {
+            return e.what();
+        }
+        throw;
     }
 
     const auto summary_job = client.post_message(
@@ -682,6 +694,18 @@ int run_session_mode(RestClient &client, CliConfig &cfg)
                 client.post_message(session_id,
                                     SessionMessageRequest{.content = string(view), .role = string(ChatMessage::ROLE_USER)});
             return drive_session_turn(client, session_id, tools, cfg, resp.key);
+        }
+        catch (const RestClient::ClientError &e)
+        {
+            std::println(stderr, "{}[client] {}{}", Color::RED, e.what(), Color::RESET);
+            if (e.code == kContextFull)
+            {
+                std::println(stderr,
+                             "{}[client] that message is not in the session. Compact the history and send it again, "
+                             "or send a shorter one.{}",
+                             Color::YELLOW, Color::RESET);
+            }
+            return false;
         }
         catch (const std::exception &e)
         {

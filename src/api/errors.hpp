@@ -19,6 +19,9 @@ struct BadRequest : std::runtime_error
     using std::runtime_error::runtime_error;
 };
 
+// Prompt or generation did not fit. The server removes the message that caused the turn.
+inline constexpr std::string_view kContextFull = "context_full";
+
 /**
  * Generic error response
  */
