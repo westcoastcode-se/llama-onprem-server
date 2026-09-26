@@ -1,4 +1,3 @@
-#include "common/defer.hpp"
 #include "common/log.hpp"
 #include "server/api/errors.hpp"
 #include "server/http/json.hpp"
@@ -43,7 +42,12 @@ void print_usage(const char *argv0)
             "  -c N          context size (default 4096)\n"
             "  -b N          batch size (default 2048)\n"
             "  -ngl N        GPU layers (default 99)\n"
-            "  -t F          temperature (default 0.7)\n"
+            "  -t F          temperature (default 1.0)\n"
+            "  --top-p F     nucleus sampling (default 0.95)\n"
+            "  --top-k N     top-k sampling (default 20, 0 = off)\n"
+            "  --min-p F     min-p sampling (default 0, 0 = off)\n"
+            "  --presence-penalty F   (default 0)\n"
+            "  --repetition-penalty F (default 1.0 = off)\n"
             "  --host HOST   bind host (default 0.0.0.0)\n"
             "  -p/--port N   port (default 8080)\n",
             argv0);
@@ -89,6 +93,26 @@ int main(int argc, char **argv)
         {
             config.temperature = std::stof(need("-t"));
         }
+        else if (arg == "--top-p")
+        {
+            config.top_p = std::stof(need("--top-p"));
+        }
+        else if (arg == "--top-k")
+        {
+            config.top_k = std::stoi(need("--top-k"));
+        }
+        else if (arg == "--min-p")
+        {
+            config.min_p = std::stof(need("--min-p"));
+        }
+        else if (arg == "--presence-penalty")
+        {
+            config.presence_penalty = std::stof(need("--presence-penalty"));
+        }
+        else if (arg == "--repetition-penalty")
+        {
+            config.repetition_penalty = std::stof(need("--repetition-penalty"));
+        }
         else if (arg == "--host")
         {
             host = need("--host");
@@ -126,7 +150,6 @@ int main(int argc, char **argv)
         log_error("Failed to create LLamaEngine: ", e.what());
         return 1;
     }
-    defer(engine.destroy());
 
     Jobs jobs(engine);
     Sessions sessions(jobs);

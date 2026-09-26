@@ -4,38 +4,47 @@
 #include "../api/sessions.hpp"
 #include "common/log.hpp"
 #include "json.hpp"
+#include <atomic>
 
 namespace
 {
-void send_job_token_stream(const httplib::Request &req, httplib::Response &res, const std::shared_ptr<Task> &task)
+void send_job_token_stream(const httplib::Request &, httplib::Response &res, const std::shared_ptr<Task> &task)
 {
     auto buffer = task->buffer;
     res.set_header("Cache-Control", "no-cache");
-    res.set_chunked_content_provider("application/x-ndjson",
-                                     [buffer, &req](size_t /*offset*/, httplib::DataSink &sink) {
-                                         if (req.is_connection_closed())
-                                         {
-                                             sink.done();
-                                             return false;
-                                         }
+    auto connection_closed = std::make_shared<std::atomic<bool>>(false);
+    res.set_chunked_content_provider(
+        "application/x-ndjson",
+        [buffer, connection_closed](size_t /*offset*/, httplib::DataSink &sink) {
+            if (connection_closed->load(std::memory_order_relaxed))
+            {
+                sink.done();
+                return false;
+            }
 
-                                         auto piece = buffer->wait_pull();
-                                         if (!piece)
-                                         {
-                                             MessageTokensResponse mm{.tokens = {}, .done = true};
-                                             auto line = mm.to_json().dump();
-                                             if (!sink.write(line.data(), line.size()))
-                                             {
-                                                 return false;
-                                             }
-                                             sink.done();
-                                             return true;
-                                         }
+            auto piece = buffer->wait_pull();
+            if (!piece)
+            {
+                MessageTokensResponse mm{.tokens = {}, .done = true};
+                auto line = mm.to_json().dump() + "\n";
+                if (!sink.write(line.data(), line.size()))
+                {
+                    connection_closed->store(true, std::memory_order_relaxed);
+                    return false;
+                }
+                sink.done();
+                return true;
+            }
 
-                                         MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false};
-                                         auto line = mm.to_json().dump();
-                                         return sink.write(line.data(), line.size());
-                                     });
+            MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false};
+            auto line = mm.to_json().dump() + "\n";
+            if (!sink.write(line.data(), line.size()))
+            {
+                connection_closed->store(true, std::memory_order_relaxed);
+                return false;
+            }
+            return true;
+        });
 }
 } // namespace
 

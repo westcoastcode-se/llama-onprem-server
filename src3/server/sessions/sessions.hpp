@@ -22,9 +22,10 @@
 class Session
 {
   public:
-    SessionID id = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    // Unique ID for this session
+    const SessionID id = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     // Timestamp when the session was created
-    std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
+    const std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
 
     void touch()
     {

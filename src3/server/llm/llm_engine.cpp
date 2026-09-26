@@ -4,9 +4,11 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <utility>
 
-void LlamaEngine::destroy()
+void LlamaEngine::destroy() noexcept
 {
     if (smpl_)
     {
@@ -25,9 +27,97 @@ void LlamaEngine::destroy()
     }
     vocab_ = nullptr;
     chat_template_ = nullptr;
+    chat_template_owned_.clear();
     cached_messages_.clear();
     formatted_buf_.clear();
     prev_formatted_len_ = 0;
+}
+
+LlamaEngine::~LlamaEngine()
+{
+    destroy();
+}
+
+LlamaEngine::LlamaEngine(LlamaEngine &&other) noexcept
+    : config_(std::move(other.config_)), model_(other.model_), vocab_(other.vocab_), ctx_(other.ctx_), smpl_(other.smpl_),
+      chat_template_(other.chat_template_), chat_template_owned_(std::move(other.chat_template_owned_)),
+      cached_messages_(std::move(other.cached_messages_)), formatted_buf_(std::move(other.formatted_buf_)),
+      prev_formatted_len_(other.prev_formatted_len_)
+{
+    other.model_ = nullptr;
+    other.vocab_ = nullptr;
+    other.ctx_ = nullptr;
+    other.smpl_ = nullptr;
+    other.chat_template_ = nullptr;
+    other.prev_formatted_len_ = 0;
+    if (!chat_template_owned_.empty())
+    {
+        chat_template_ = chat_template_owned_.c_str();
+    }
+}
+
+LlamaEngine &LlamaEngine::operator=(LlamaEngine &&other) noexcept
+{
+    if (this != &other)
+    {
+        destroy();
+        config_ = std::move(other.config_);
+        model_ = other.model_;
+        vocab_ = other.vocab_;
+        ctx_ = other.ctx_;
+        smpl_ = other.smpl_;
+        chat_template_owned_ = std::move(other.chat_template_owned_);
+        chat_template_ = other.chat_template_;
+        cached_messages_ = std::move(other.cached_messages_);
+        formatted_buf_ = std::move(other.formatted_buf_);
+        prev_formatted_len_ = other.prev_formatted_len_;
+        other.model_ = nullptr;
+        other.vocab_ = nullptr;
+        other.ctx_ = nullptr;
+        other.smpl_ = nullptr;
+        other.chat_template_ = nullptr;
+        other.prev_formatted_len_ = 0;
+        if (!chat_template_owned_.empty())
+        {
+            chat_template_ = chat_template_owned_.c_str();
+        }
+    }
+    return *this;
+}
+
+void LlamaEngine::rebuild_sampler(float temperature)
+{
+    if (smpl_)
+    {
+        llama_sampler_free(smpl_);
+        smpl_ = nullptr;
+    }
+    smpl_ = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    if (!smpl_)
+    {
+        throw LlamaModelInitError("failed to create sampler chain");
+    }
+    const bool penalties_on = config_.repetition_penalty != 1.0f || config_.presence_penalty != 0.0f;
+    if (penalties_on && vocab_)
+    {
+        llama_sampler_chain_add(
+            smpl_, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab_), 64, config_.repetition_penalty, 0.0f,
+                                                config_.presence_penalty));
+    }
+    if (config_.top_k > 0)
+    {
+        llama_sampler_chain_add(smpl_, llama_sampler_init_top_k(config_.top_k));
+    }
+    if (config_.top_p < 1.0f)
+    {
+        llama_sampler_chain_add(smpl_, llama_sampler_init_top_p(config_.top_p, 1));
+    }
+    if (config_.min_p > 0.0f)
+    {
+        llama_sampler_chain_add(smpl_, llama_sampler_init_min_p(config_.min_p, 1));
+    }
+    llama_sampler_chain_add(smpl_, llama_sampler_init_temp(temperature));
+    llama_sampler_chain_add(smpl_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 }
 
 LlamaEngine LlamaEngine::create(const LlamaConfig &config)
@@ -58,6 +148,20 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
 
     engine.vocab_ = llama_model_get_vocab(engine.model_);
     engine.chat_template_ = llama_model_chat_template(engine.model_, nullptr);
+    if (!engine.chat_template_ && !config.template_path.empty())
+    {
+        std::ifstream in(config.template_path);
+        if (!in)
+        {
+            llama_model_free(engine.model_);
+            engine.model_ = nullptr;
+            throw LlamaModelInitError("failed to read chat template from " + config.template_path);
+        }
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        engine.chat_template_owned_ = ss.str();
+        engine.chat_template_ = engine.chat_template_owned_.c_str();
+    }
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = config.n_ctx;
@@ -68,13 +172,22 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
     if (!engine.ctx_)
     {
         llama_model_free(engine.model_);
+        engine.model_ = nullptr;
         throw LlamaModelInitError("failed to create llama_context for " + config.model_path);
     }
 
-    engine.smpl_ = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(engine.smpl_, llama_sampler_init_min_p(0.05f, 1));
-    llama_sampler_chain_add(engine.smpl_, llama_sampler_init_temp(config.temperature));
-    llama_sampler_chain_add(engine.smpl_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    try
+    {
+        engine.rebuild_sampler(config.temperature);
+    }
+    catch (...)
+    {
+        llama_free(engine.ctx_);
+        engine.ctx_ = nullptr;
+        llama_model_free(engine.model_);
+        engine.model_ = nullptr;
+        throw;
+    }
 
     engine.formatted_buf_.resize(llama_n_ctx(engine.ctx_));
     engine.prev_formatted_len_ = 0;
@@ -118,6 +231,10 @@ int LlamaEngine::format_chat_internal(std::span<const ChatMessage> msgs, bool ad
         out.resize(4096);
     int len = llama_chat_apply_template(chat_template_, raw_msgs.data(), raw_msgs.size(), add_assistant, out.data(),
                                         static_cast<int32_t>(out.size()));
+    if (len < 0)
+    {
+        return len;
+    }
     if (len > static_cast<int>(out.size()))
     {
         out.resize(static_cast<size_t>(len) + 1);
@@ -136,20 +253,13 @@ std::string LlamaEngine::apply_template(std::span<const ChatMessage> messages, b
     return std::string(buf.data(), static_cast<size_t>(len));
 }
 
-string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, float temp_override)
+std::string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, float temp_override)
 {
     if (!ctx_ || !vocab_ || !smpl_)
-        return "";
+        throw LlamaRuntimeError("LlamaEngine is not initialized");
 
-    if (temp_override >= 0.0f && temp_override != config_.temperature)
-    {
-        llama_sampler_free(smpl_);
-        smpl_ = llama_sampler_chain_init(llama_sampler_chain_default_params());
-        llama_sampler_chain_add(smpl_, llama_sampler_init_min_p(0.05f, 1));
-        llama_sampler_chain_add(smpl_, llama_sampler_init_temp(temp_override));
-        llama_sampler_chain_add(smpl_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
-        config_.temperature = temp_override;
-    }
+    const float temperature = temp_override >= 0.0f ? temp_override : config_.temperature;
+    rebuild_sampler(temperature);
 
     const int max_ctx = static_cast<int>(llama_n_ctx(ctx_));
 
@@ -164,15 +274,14 @@ string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, fl
         -llama_tokenize(vocab_, prompt.data(), static_cast<int32_t>(prompt.size()), nullptr, 0, is_first, true);
     if (n_prompt_tokens <= 0)
     {
-        return "";
+        throw LlamaRuntimeError("failed to tokenize prompt");
     }
 
     std::vector<llama_token> prompt_tokens(static_cast<size_t>(n_prompt_tokens));
     if (llama_tokenize(vocab_, prompt.data(), static_cast<int32_t>(prompt.size()), prompt_tokens.data(),
                        static_cast<int32_t>(prompt_tokens.size()), is_first, true) < 0)
     {
-        fprintf(stderr, "error: failed to tokenize prompt\n");
-        return "";
+        throw LlamaRuntimeError("failed to tokenize prompt");
     }
 
     const int batch_size = static_cast<int>(llama_n_batch(ctx_));
@@ -183,19 +292,17 @@ string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, fl
 
         if (context_would_overflow(batch.n_tokens))
         {
-            fprintf(stderr, "\n[Warning: Context size (%d) reached limit]\n", max_ctx);
-            return "";
+            throw LlamaRuntimeError("context size reached limit");
         }
 
         int ret = llama_decode(ctx_, batch);
         if (ret != 0)
         {
-            fprintf(stderr, "error: failed to decode prompt batch (ret = %d)\n", ret);
-            return "";
+            throw LlamaRuntimeError("failed to decode prompt batch");
         }
     }
 
-    string response;
+    std::string response;
     Utf8Util::StreamBuffer utf8_buf;
     while (true)
     {
@@ -249,8 +356,7 @@ string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, fl
         int ret = llama_decode(ctx_, batch);
         if (ret != 0)
         {
-            fprintf(stderr, "error: failed to decode batch (ret = %d)\n", ret);
-            break;
+            throw LlamaRuntimeError("failed to decode generation batch");
         }
     }
 
@@ -266,20 +372,12 @@ string LlamaEngine::generate(std::string_view prompt, TokenCallback token_cb, fl
     return response;
 }
 
-string LlamaEngine::chat(span<const ChatMessage> messages, TokenCallback token_cb, const float temp_override)
+std::string LlamaEngine::chat(std::span<const ChatMessage> messages, TokenCallback token_cb, const float temp_override)
 {
-    if (!ctx_ || !vocab_ || !smpl_ || !chat_template_)
-        return "";
-
-    if (temp_override >= 0.0f && temp_override != config_.temperature)
-    {
-        llama_sampler_free(smpl_);
-        smpl_ = llama_sampler_chain_init(llama_sampler_chain_default_params());
-        llama_sampler_chain_add(smpl_, llama_sampler_init_min_p(0.05f, 1));
-        llama_sampler_chain_add(smpl_, llama_sampler_init_temp(temp_override));
-        llama_sampler_chain_add(smpl_, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
-        config_.temperature = temp_override;
-    }
+    if (!ctx_ || !vocab_ || !smpl_)
+        throw LlamaRuntimeError("LlamaEngine is not initialized");
+    if (!chat_template_)
+        throw LlamaRuntimeError("no chat template in GGUF and no template_path configured");
 
     bool is_prefix = true;
     if (cached_messages_.size() > messages.size())
@@ -306,17 +404,16 @@ string LlamaEngine::chat(span<const ChatMessage> messages, TokenCallback token_c
     const int new_len = format_chat_internal(messages, true, formatted_buf_);
     if (new_len < 0)
     {
-        fprintf(stderr, "error: failed to format chat template\n");
-        return "";
+        throw LlamaRuntimeError("failed to format chat template");
     }
 
     std::string_view prompt(formatted_buf_.data() + prev_formatted_len_,
                             static_cast<size_t>(new_len - prev_formatted_len_));
 
-    string response = generate(prompt, token_cb);
+    std::string response = generate(prompt, token_cb, temp_override);
 
     cached_messages_.assign(messages.begin(), messages.end());
-    cached_messages_.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT,.content = response});
+    cached_messages_.push_back(ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = response});
 
     prev_formatted_len_ = format_chat_internal(cached_messages_, false, formatted_buf_);
     if (prev_formatted_len_ < 0)

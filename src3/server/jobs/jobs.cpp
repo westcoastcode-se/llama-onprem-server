@@ -15,6 +15,13 @@ Jobs::~Jobs()
 void Jobs::stop()
 {
     stop_ = true;
+    {
+        std::lock_guard lock(mutex_);
+        if (current_task_)
+        {
+            current_task_->request_cancel();
+        }
+    }
     cv_.notify_all();
     if (worker_.joinable())
     {
@@ -202,6 +209,10 @@ void Jobs::worker_loop()
         }
 
         // Task is now running!
+        {
+            std::lock_guard lock(mutex_);
+            current_task_ = task;
+        }
         task->set_running();
 
         // Build message list: optional system + messages
@@ -216,7 +227,7 @@ void Jobs::worker_loop()
         const auto buffer = task->buffer;
         try
         {
-            string response = engine_.chat(msgs, [task, buffer](string &&piece) {
+            std::string response = engine_.chat(msgs, [task, buffer](std::string &&piece) {
                 if (task->is_cancel_requested())
                 {
                     return false;
@@ -228,12 +239,20 @@ void Jobs::worker_loop()
         }
         catch (const std::exception &e)
         {
+            {
+                std::lock_guard lock(mutex_);
+                current_task_.reset();
+            }
             task->set_error_state(e.what());
             notify_finished(task);
             continue;
         }
 
         const string full = buffer->full_result();
+        {
+            std::lock_guard lock(mutex_);
+            current_task_.reset();
+        }
         if (task->is_cancel_requested())
         {
             task->set_result(full, JobState::Cancelled, {});

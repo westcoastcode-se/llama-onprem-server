@@ -68,7 +68,7 @@ EOF
 # Download prism-ml/Ternary-Bonsai-2-27B-gguf
 python <<EOF
 from huggingface_hub import snapshot_download
-snapshot_download(repo_id="prism-ml/Ternary-Bonsai-2-27B-gguf", allow_patterns=["*Ternary-Bonsai-2-27B-PTQ1_0.gguf"], local_dir="Ternary-Bonsai-2-27B")
+snapshot_download(repo_id="prism-ml/Ternary-Bonsai-2-27B-gguf", allow_patterns=["*Ternary-Bonsai-2-27B-PQ2_0.gguf"], local_dir="Ternary-Bonsai-2-27B")
 EOF
 ```
 

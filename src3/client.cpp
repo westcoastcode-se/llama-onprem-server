@@ -4,9 +4,11 @@
 #include "common/log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <clocale>
+#include <csignal>
 #include <cstdio>
 #include <curl/curl.h>
 #include <iostream>
@@ -18,6 +20,22 @@
 
 namespace
 {
+
+std::atomic<bool> g_interrupt{false};
+
+void on_sigint(int)
+{
+    g_interrupt.store(true, std::memory_order_relaxed);
+}
+
+void install_sigint()
+{
+    struct sigaction sa {};
+    sa.sa_handler = on_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; // no SA_RESTART: getline returns on Ctrl-C
+    sigaction(SIGINT, &sa, nullptr);
+}
 
 /** Poll until session is not generating (job callback may lag stream EOF slightly). */
 SessionResponse wait_session_ready(RestClient &client, const SessionID &session_id, int max_ms = 5000)
@@ -38,39 +56,220 @@ SessionResponse wait_session_ready(RestClient &client, const SessionID &session_
     return last;
 }
 
-SessionResponse stream_job(RestClient &client, const SessionID &session_id, const JobKey job_key)
+struct StreamResult
 {
-    std::ostringstream stream;
+    SessionResponse session;
+    bool cancelled = false;
+};
+
+StreamResult stream_job(RestClient &client, const SessionID &session_id, const JobKey job_key, bool show_think)
+{
+    std::string pending;
     bool thinking = false;
-    printf("💭%s", Color::GRAY);
-    string text = client.stream_tokens(session_id, job_key, [&](const string &piece) {
-        stream << piece;
-        auto str = stream.view();
-        if (thinking)
+    bool think_started = false;
+    bool think_closed = false;
+    bool answer_started = false;
+    bool status_line = false;
+    int spin = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    auto elapsed_s = [&]() {
+        return std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+    };
+
+    auto emit = [](std::string_view s) {
+        if (!s.empty())
         {
-            const auto idx = str.find("</think>");
-            if (idx != std::string_view::npos)
-            {
-                thinking = false;
-                str = str.substr(0, idx);
-            }
+            printf("%.*s", static_cast<int>(s.size()), s.data());
         }
-        else
+    };
+
+    auto clear_status = [&]() {
+        if (status_line)
         {
-            const auto idx = str.find("<think>");
-            if (idx != std::string_view::npos)
-            {
-                thinking = true;
-                str = str.substr(idx + 7);
-            }
+            printf("\r\033[K");
+            status_line = false;
         }
-        printf("%.*s", static_cast<int>(str.size()), str.data());
+    };
+
+    auto draw_thinking = [&]() {
+        static constexpr const char *kFrames = "|/-\\";
+        printf("\r%s%c Thinking… %.1fs%s\033[K", Color::DIM, kFrames[spin & 3], elapsed_s(), Color::RESET);
+        status_line = true;
+        ++spin;
         fflush(stdout);
-        return true;
+    };
+
+    auto emit_answer = [&](std::string_view s) {
+        if (s.empty())
+        {
+            return;
+        }
+        if (!answer_started)
+        {
+            clear_status();
+            if (think_started && !think_closed && !show_think)
+            {
+                printf("%s✓ Thinking  %.1fs%s\n", Color::DIM, elapsed_s(), Color::RESET);
+                think_closed = true;
+            }
+            answer_started = true;
+        }
+        emit(s);
+    };
+
+    draw_thinking();
+
+    g_interrupt.store(false, std::memory_order_relaxed);
+    std::atomic<bool> stream_over{false};
+    std::thread watcher([&]() {
+        while (!stream_over.load(std::memory_order_relaxed))
+        {
+            if (g_interrupt.load(std::memory_order_relaxed))
+            {
+                client.stop();
+                try
+                {
+                    RestClient killer(client.host(), client.port());
+                    killer.cancel_job(session_id, job_key);
+                }
+                catch (...)
+                {
+                }
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
     });
-    printf("%s\n", Color::RESET);
+
+    bool cancelled = false;
+    try
+    {
+        client.stream_tokens(session_id, job_key, [&](const string &piece) {
+            if (g_interrupt.load(std::memory_order_relaxed))
+            {
+                return false;
+            }
+            pending += piece;
+            constexpr std::string_view kOpen = "<think>";
+            constexpr std::string_view kClose = "</think>";
+
+            while (!pending.empty())
+            {
+                if (thinking)
+                {
+                    const auto idx = pending.find(kClose);
+                    if (idx == std::string::npos)
+                    {
+                        const size_t keep = std::min(pending.size(), kClose.size() - 1);
+                        const auto vis = std::string_view(pending).substr(0, pending.size() - keep);
+                        if (show_think)
+                        {
+                            emit_answer(vis);
+                        }
+                        else
+                        {
+                            think_started = true;
+                            draw_thinking();
+                        }
+                        pending.erase(0, pending.size() - keep);
+                        break;
+                    }
+                    if (show_think)
+                    {
+                        emit_answer(std::string_view(pending).substr(0, idx));
+                    }
+                    pending.erase(0, idx + kClose.size());
+                    thinking = false;
+                    if (!show_think)
+                    {
+                        clear_status();
+                        printf("%s✓ Thinking  %.1fs%s\n", Color::DIM, elapsed_s(), Color::RESET);
+                        think_closed = true;
+                    }
+                    else
+                    {
+                        printf("%s", Color::RESET);
+                    }
+                }
+                else
+                {
+                    const auto idx = pending.find(kOpen);
+                    if (idx == std::string::npos)
+                    {
+                        const size_t keep = std::min(pending.size(), kOpen.size() - 1);
+                        emit_answer(std::string_view(pending).substr(0, pending.size() - keep));
+                        pending.erase(0, pending.size() - keep);
+                        break;
+                    }
+                    emit_answer(std::string_view(pending).substr(0, idx));
+                    pending.erase(0, idx + kOpen.size());
+                    thinking = true;
+                    think_started = true;
+                    if (show_think)
+                    {
+                        if (!answer_started)
+                        {
+                            clear_status();
+                            answer_started = true;
+                        }
+                        printf("%s", Color::GRAY);
+                    }
+                    else
+                    {
+                        draw_thinking();
+                    }
+                }
+            }
+            fflush(stdout);
+            return !g_interrupt.load(std::memory_order_relaxed);
+        });
+        if (!pending.empty() && !thinking)
+        {
+            emit_answer(pending);
+        }
+        else if (!pending.empty() && show_think)
+        {
+            emit_answer(pending);
+        }
+    }
+    catch (const RestClient::ClientError &)
+    {
+        cancelled = g_interrupt.load(std::memory_order_relaxed);
+        if (!cancelled)
+        {
+            stream_over.store(true, std::memory_order_relaxed);
+            watcher.join();
+            throw;
+        }
+    }
+
+    stream_over.store(true, std::memory_order_relaxed);
+    watcher.join();
+
+    if (g_interrupt.load(std::memory_order_relaxed))
+    {
+        cancelled = true;
+    }
+
+    if (cancelled)
+    {
+        clear_status();
+        printf("%s⚠ cancelled%s\n", Color::YELLOW, Color::RESET);
+    }
+    else if (!answer_started && think_started && !think_closed && !show_think)
+    {
+        clear_status();
+        printf("%s✓ Thinking  %.1fs%s\n", Color::DIM, elapsed_s(), Color::RESET);
+    }
+    else
+    {
+        clear_status();
+        printf("%s\n", Color::RESET);
+    }
     fflush(stdout);
-    return wait_session_ready(client, session_id);
+
+    return StreamResult{wait_session_ready(client, session_id), cancelled};
 }
 
 json run_pending_tools(const SessionResponse &session, span<const Tool> tools, CliConfig &cfg)
@@ -204,7 +403,12 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
     while (true)
     {
         // Stream session until done. If idle then no more turns.
-        auto session = stream_job(client, session_id, job_key);
+        auto streamed = stream_job(client, session_id, job_key, cfg.show_think);
+        if (streamed.cancelled)
+        {
+            return true;
+        }
+        auto session = std::move(streamed.session);
         if (session.state == SessionState::Idle)
         {
             break;
@@ -248,6 +452,7 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
 
 int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
 {
+    install_sigint();
     auto created = client.create_session(
         CreateSessionRequest{.system = cfg.system_prompt, .messages = {}, .questions = cfg.questions});
     const SessionID session_id = created.id;
@@ -274,15 +479,23 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         }
     };
 
-    printf("%sType a message, or /help. Ctrl-D or /exit to quit.%s\n\n", Color::DIM, Color::RESET);
+    printf("%sType a message, or /help. Ctrl-C cancels generation. Ctrl-D or /exit to quit.%s\n\n", Color::DIM,
+           Color::RESET);
 
     string line;
     while (true)
     {
+        g_interrupt.store(false, std::memory_order_relaxed);
         printf("%syou>%s ", Color::BOLD, Color::RESET);
         fflush(stdout);
         if (!std::getline(std::cin, line))
         {
+            if (g_interrupt.load(std::memory_order_relaxed))
+            {
+                std::cin.clear();
+                printf("\n");
+                continue;
+            }
             printf("\n");
             break;
         }
@@ -335,6 +548,12 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         {
             cfg.auto_approve = !cfg.auto_approve;
             printf("auto-approve: %s\n", cfg.auto_approve ? "on" : "off");
+            continue;
+        }
+        if (view == "/think")
+        {
+            cfg.show_think = !cfg.show_think;
+            printf("show-think: %s\n", cfg.show_think ? "on" : "off");
             continue;
         }
 

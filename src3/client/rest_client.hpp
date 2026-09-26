@@ -41,6 +41,22 @@ class RestClient
         return "http://" + base_host_ + ":" + std::to_string(port_);
     }
 
+    [[nodiscard]] const std::string &host() const
+    {
+        return base_host_;
+    }
+
+    [[nodiscard]] int port() const
+    {
+        return port_;
+    }
+
+    /** Interrupt an in-flight request (e.g. token stream) from another thread. */
+    void stop()
+    {
+        cli_.stop();
+    }
+
     /**
      * Do a health check against the server
      *

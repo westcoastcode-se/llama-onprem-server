@@ -8,7 +8,10 @@
 namespace Utf8Util
 {
 
-// Returns the byte length of the longest prefix of `s` that ends on a complete UTF-8 codepoint.
+/**
+ * @param s A string
+ * @return Returns the byte length of the longest prefix of `s` that ends on a complete UTF-8 codepoint.
+ */
 inline size_t get_complete_utf8_prefix_len(std::string_view s)
 {
     if (s.empty())
@@ -19,7 +22,7 @@ inline size_t get_complete_utf8_prefix_len(std::string_view s)
 
     for (size_t i = 1; i <= max_lookback; ++i)
     {
-        unsigned char c = static_cast<unsigned char>(s[len - i]);
+        const auto c = static_cast<unsigned char>(s[len - i]);
         if ((c & 0xC0) != 0x80)
         {
             size_t expected = 1;
@@ -44,13 +47,17 @@ inline size_t get_complete_utf8_prefix_len(std::string_view s)
             {
                 return len - i;
             }
+
             return len;
         }
     }
 
-    return len;
+    return 0;
 }
 
+/**
+ * A buffer that ensures that pieces of text is UTF-8 encoded.
+ */
 class StreamBuffer
 {
   public:
@@ -73,7 +80,12 @@ class StreamBuffer
     {
         if (buf_.empty())
             return "";
-        std::string remaining = std::move(buf_);
+        size_t valid_len = get_complete_utf8_prefix_len(buf_);
+        std::string remaining;
+        if (valid_len > 0)
+        {
+            remaining = buf_.substr(0, valid_len);
+        }
         buf_.clear();
         return remaining;
     }

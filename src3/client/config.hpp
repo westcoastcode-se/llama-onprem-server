@@ -21,6 +21,7 @@ void print_usage(const char *argv0)
     printf("    --allow-tools <list>  Comma-separated auto-approve list\n");
     printf("    --no-questions        Create session with questions:false\n");
     printf("    --questions           Create session with questions:true (default)\n");
+    printf("    --show-think          Print model <think> text (hidden by default)\n");
     printf("    --oneshot             Temp session: one message, no tools loop, then delete\n");
     printf("    -it <n>               Max tool/question rounds per user turn (default: 40)\n");
     printf("    -h, --help            Show help\n\n");
@@ -29,6 +30,7 @@ void print_usage(const char *argv0)
     printf("    /state                Print session JSON state\n");
     printf("    /tools                List local tools\n");
     printf("    /approval             Toggle auto-approve\n");
+    printf("    /think                Toggle printing <think> text\n");
     printf("    /help                 This help\n\n");
 }
 
@@ -41,6 +43,7 @@ struct CliConfig
     std::string system_prompt;
     std::vector<std::string> allowed_tools;
     int max_tool_rounds = 40;
+    bool show_think = false;
 
     static CliConfig from_args(int argc, char **argv)
     {
@@ -92,6 +95,10 @@ struct CliConfig
             else if (arg == "--questions")
             {
                 cfg.questions = true;
+            }
+            else if (arg == "--show-think")
+            {
+                cfg.show_think = true;
             }
             else if (arg == "-it" && i + 1 < argc)
             {

@@ -19,10 +19,16 @@
 #include <thread>
 #include <unordered_map>
 
+inline JobKey next_job_key()
+{
+    static std::atomic<JobKey> counter{1};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
+
 struct Task
 {
     // Unique ID for the task
-    JobKey key = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    JobKey key = next_job_key();
 
     MessagesRequest request;
 
@@ -244,6 +250,7 @@ class Jobs
     std::unordered_map<JobKey, std::shared_ptr<Task>> tasks_;
     std::deque<JobKey> queue_;
     std::atomic<bool> stop_{false};
+    std::shared_ptr<Task> current_task_;
     std::thread worker_;
 
     void worker_loop();
