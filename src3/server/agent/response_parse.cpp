@@ -1,6 +1,10 @@
 #include "../agent/response_parse.hpp"
+
+#include <algorithm>
 #include <cctype>
-#include <sstream>
+#include <format>
+#include <functional>
+#include <ranges>
 
 namespace
 {
@@ -19,26 +23,15 @@ std::string_view trim_sv(std::string_view text)
 
 bool ieq(std::string_view a, std::string_view b)
 {
-    if (a.size() != b.size())
-    {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); ++i)
-    {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            std::tolower(static_cast<unsigned char>(b[i])))
-        {
-            return false;
-        }
-    }
-    return true;
+    const auto lower = [](char c) { return static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(c))); };
+    return std::ranges::equal(a, b, std::equal_to{}, lower, lower);
 }
 
 bool extract_tag_body(std::string_view text, std::string_view open_name, size_t open_gt,
                       std::string_view &body, size_t &after_close)
 {
     // open_gt points at '>' of opening tag
-    const std::string close = std::string("</") + std::string(open_name) + ">";
+    const auto close = std::format("</{}>", open_name);
     size_t depth = 1;
     size_t pos = open_gt + 1;
     const size_t body_start = pos;
@@ -157,80 +150,6 @@ bool extract_single_tool(const nlohmann::json &j, ParsedToolCall &tc)
     return !tc.name.empty();
 }
 
-void parse_qwen_function_calls(std::string_view text, std::vector<ParsedToolCall> &out)
-{
-    constexpr std::string_view kFunction = "<function=";
-    constexpr std::string_view kFunctionEnd = "</function>";
-    constexpr std::string_view kParameter = "<parameter=";
-    constexpr std::string_view kParameterEnd = "</parameter>";
-
-    size_t pos = 0;
-    while (pos < text.size())
-    {
-        const size_t start = text.find(kFunction, pos);
-        if (start == std::string_view::npos)
-        {
-            break;
-        }
-        const size_t name_begin = start + kFunction.size();
-        const size_t name_end = text.find('>', name_begin);
-        if (name_end == std::string_view::npos)
-        {
-            break;
-        }
-        const size_t end = text.find(kFunctionEnd, name_end);
-        if (end == std::string_view::npos)
-        {
-            break;
-        }
-
-        ParsedToolCall call;
-        call.name = std::string(trim_sv(text.substr(name_begin, name_end - name_begin)));
-        const std::string_view body = text.substr(name_end + 1, end - (name_end + 1));
-        call.arguments = nlohmann::json::object();
-
-        size_t param = 0;
-        while (param < body.size())
-        {
-            const size_t ps = body.find(kParameter, param);
-            if (ps == std::string_view::npos)
-            {
-                break;
-            }
-            const size_t nb = ps + kParameter.size();
-            const size_t ne = body.find('>', nb);
-            if (ne == std::string_view::npos)
-            {
-                break;
-            }
-            const size_t pe = body.find(kParameterEnd, ne);
-            if (pe == std::string_view::npos)
-            {
-                break;
-            }
-            const auto pname = std::string(trim_sv(body.substr(nb, ne - nb)));
-            const auto value = trim_sv(body.substr(ne + 1, pe - (ne + 1)));
-            if (!pname.empty())
-            {
-                try
-                {
-                    call.arguments[pname] = nlohmann::json::parse(value);
-                }
-                catch (...)
-                {
-                    call.arguments[pname] = std::string(value);
-                }
-            }
-            param = pe + kParameterEnd.size();
-        }
-        if (!call.name.empty())
-        {
-            out.push_back(std::move(call));
-        }
-        pos = end + kFunctionEnd.size();
-    }
-}
-
 void parse_tool_json_segment(std::string_view segment, std::vector<ParsedToolCall> &out)
 {
     auto trimmed = trim_sv(segment);
@@ -347,7 +266,7 @@ std::string strip_special_blocks(std::string_view text)
 
 } // namespace
 
-ParsedAssistantActions parse_assistant_actions(std::string_view text)
+ParsedAssistantActions parse_assistant_actions(std::string_view text, const ModelAdapter &adapter)
 {
     ParsedAssistantActions actions;
     if (text.empty())
@@ -400,10 +319,10 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
             size_t after = gt + 1;
             extract_tag_body(text, name, gt, body, after);
             const size_t before = actions.tool_calls.size();
-            parse_tool_json_segment(body, actions.tool_calls);
+            adapter.parse_tool_calls(body, actions.tool_calls);
             if (actions.tool_calls.size() == before)
             {
-                parse_qwen_function_calls(body, actions.tool_calls);
+                parse_tool_json_segment(body, actions.tool_calls);
             }
             pos = after;
             continue;
@@ -452,17 +371,14 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
         pos = gt + 1;
     }
 
-    // Fallback: whole text is a tool JSON object
+    // No tagged block matched. Ask the model adapter, then accept a bare JSON tool object.
     if (actions.tool_calls.empty())
     {
+        adapter.parse_tool_calls(text, actions.tool_calls);
         auto trimmed = trim_sv(text);
-        if (!trimmed.empty() && (trimmed.front() == '{' || trimmed.front() == '['))
+        if (actions.tool_calls.empty() && !trimmed.empty() && (trimmed.front() == '{' || trimmed.front() == '['))
         {
             parse_tool_json_segment(trimmed, actions.tool_calls);
-        }
-        if (actions.tool_calls.empty())
-        {
-            parse_qwen_function_calls(text, actions.tool_calls);
         }
     }
 
@@ -485,48 +401,76 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
     return actions;
 }
 
-string default_agent_system_prompt(std::string_view extra, bool allow_questions)
+ParsedAssistantActions parse_assistant_actions(std::string_view text)
 {
-    std::ostringstream ss;
-    ss << "You are a coding agent. Solve the user's task carefully.\n\n";
-    ss << "You cannot run commands yourself. When you need the client to run something, "
-          "emit one or more tool calls. The client executes them and returns results.\n\n";
-    ss << "Tool call format (valid JSON inside the tag):\n";
-    ss << "<tool_call>\n";
-    ss << "{\"name\": \"execute_command\", \"arguments\": {\"command\": \"ls -la\"}}\n";
-    ss << "</tool_call>\n\n";
-    ss << "Supported tool names (client-side):\n";
-    ss << "- execute_command: {\"command\": \"<shell>\"}\n";
-    ss << "- read_file: {\"path\": \"<path>\"}\n";
-    ss << "- write_file: {\"path\": \"<path>\", \"content\": \"...\"}\n";
-    ss << "- list_directory: {\"path\": \"<path>\"}\n";
-    ss << "- file_search: {\"query\": \"...\"}\n";
-    ss << "- search_text: {\"query\": \"...\", \"path\": \"<optional>\"}\n\n";
+    static const QwenAdapter qwen;
+    return parse_assistant_actions(text, qwen);
+}
 
-    if (allow_questions)
+string describe_tool(const ChatTool &tool)
+{
+    string text = std::format("- {}: {}\n", tool.name, tool.description);
+    for (const ToolParameter &parameter : tool_parameters(tool))
     {
-        ss << "When several approaches are reasonable and you need the user to choose, ask with:\n";
-        ss << "<question>\nYour question text\n</question>\n";
-        ss << "<answer>Option A</answer>\n";
-        ss << "<answer>Option B</answer>\n";
-        ss << "(Include 2+ <answer> options when choices are clear; omit <answer> for free-form.)\n\n";
-        ss << "Do not invent tool results. Wait for the next user/tool message.\n";
-        ss << "When finished, reply with a clear final answer and no tool_call/question tags.\n";
+        text += std::format("    {}: {}", parameter.name, parameter.type.empty() ? "value" : parameter.type);
+        if (!parameter.required)
+        {
+            text += ", optional";
+        }
+        if (!parameter.description.empty())
+        {
+            text += std::format(" ({})", parameter.description);
+        }
+        text.push_back('\n');
+    }
+    return text;
+}
+
+string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools, std::string_view extra,
+                                   bool allow_questions)
+{
+    string prompt = "You are a coding agent. Solve the user's task carefully.\n\n"
+                    "You cannot run commands yourself. When you need the client to run something, "
+                    "emit one or more tool calls. The client executes them and returns results.\n\n";
+    if (tools.empty())
+    {
+        prompt += "The client did not provide any tools. Answer from the conversation alone.\n\n";
     }
     else
     {
-        ss << "Do not invent tool results. Wait for the next user/tool message.\n";
-        ss << "Do not use <question> or <answer> tags. Prefer a best-effort approach or "
-              "state assumptions instead of asking the user to choose.\n";
-        ss << "When finished, reply with a clear final answer and no tool_call tags.\n";
+        prompt += adapter.example_call(tools);
+        prompt += "Available tools:\n";
+        for (const ChatTool &tool : tools)
+        {
+            prompt += describe_tool(tool);
+        }
+        prompt.push_back('\n');
+    }
+
+    if (allow_questions)
+    {
+        prompt += "When several approaches are reasonable and you need the user to choose, ask with:\n"
+                  "<question>\nYour question text\n</question>\n"
+                  "<answer>Option A</answer>\n"
+                  "<answer>Option B</answer>\n"
+                  "(Include 2+ <answer> options when choices are clear; omit <answer> for free-form.)\n\n"
+                  "Do not invent tool results. Wait for the next user/tool message.\n"
+                  "When finished, reply with a clear final answer and no tool_call/question tags.\n";
+    }
+    else
+    {
+        prompt += "Do not invent tool results. Wait for the next user/tool message.\n"
+                  "Do not use <question> or <answer> tags. Prefer a best-effort approach or "
+                  "state assumptions instead of asking the user to choose.\n"
+                  "When finished, reply with a clear final answer and no tool_call tags.\n";
     }
 
     if (!extra.empty())
     {
-        ss << "\n";
-        ss << extra;
-        ss << "\n";
+        prompt.push_back('\n');
+        prompt.append(extra);
+        prompt.push_back('\n');
     }
 
-    return std::move(ss).str();
+    return prompt;
 }

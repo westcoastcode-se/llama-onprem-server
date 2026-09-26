@@ -4,8 +4,8 @@
 #include "common/protocol.hpp"
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <format>
+#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -123,18 +123,17 @@ inline void print_context_info(int used_ctx, int n_ctx, std::span<const Protocol
     if (pct >= 85.0f) status_color = Color::RED;
     else if (pct >= 70.0f) status_color = Color::YELLOW;
 
-    printf("\n%sContext Usage Overview:%s\n", Color::BOLD, Color::RESET);
-    printf("  Tokens       : %s%d%s / %d (%.1f%%) %s%s%s\n",
-           status_color, used_ctx, Color::RESET, n_ctx, pct,
-           status_color, bar.c_str(), Color::RESET);
-    printf("  Remaining    : %d tokens\n", free_ctx);
-    printf("  Messages     : %zu total (sys: %zu, user: %zu, assistant: %zu, tool: %zu)\n",
-           messages.size(), sys_count, user_count, asst_count, tool_count);
-    printf("  Memory Size  : ~%zu characters\n", total_chars);
+    std::println("\n{}Context Usage Overview:{}", Color::BOLD, Color::RESET);
+    std::println("  Tokens       : {}{}{} / {} ({:.1f}%) {}{}{}", status_color, used_ctx, Color::RESET, n_ctx, pct,
+                 status_color, bar, Color::RESET);
+    std::println("  Remaining    : {} tokens", free_ctx);
+    std::println("  Messages     : {} total (sys: {}, user: {}, assistant: {}, tool: {})", messages.size(), sys_count,
+                 user_count, asst_count, tool_count);
+    std::println("  Memory Size  : ~{} characters", total_chars);
     if (pct >= 75.0f) {
-        printf("  %sRecommendation: Run /compact to compress conversation context.%s\n", Color::YELLOW, Color::RESET);
+        std::println("  {}Recommendation: Run /compact to compress conversation context.{}", Color::YELLOW, Color::RESET);
     }
-    printf("\n");
+    std::println("");
 }
 
 } // namespace Context

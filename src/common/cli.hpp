@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <stdexcept>
 #include "common/agent.hpp"
@@ -42,27 +43,28 @@ inline bool parse_agent_cli_arg(int & i, int argc, char ** argv, AgentSessionCon
         config.allowed_tools.push_back(argv[++i]);
         return true;
     }
-    if (arg.rfind("--allow-tool=", 0) == 0) {
-        config.allowed_tools.push_back(arg.substr(13));
+    if (arg.starts_with("--allow-tool=")) {
+        constexpr std::string_view prefix = "--allow-tool=";
+        config.allowed_tools.emplace_back(arg.substr(prefix.size()));
         return true;
     }
-    if (arg.rfind("--allow=", 0) == 0) {
-        config.allowed_tools.push_back(arg.substr(8));
+    if (arg.starts_with("--allow=")) {
+        constexpr std::string_view prefix = "--allow=";
+        config.allowed_tools.emplace_back(arg.substr(prefix.size()));
         return true;
     }
     if ((arg == "--allow-tools" || arg == "--allowed-tools") && i + 1 < argc) {
-        auto parsed = parse_allowed_tools(argv[++i]);
-        config.allowed_tools.insert(config.allowed_tools.end(), parsed.begin(), parsed.end());
+        config.allowed_tools.append_range(parse_allowed_tools(argv[++i]));
         return true;
     }
-    if (arg.rfind("--allow-tools=", 0) == 0) {
-        auto parsed = parse_allowed_tools(arg.substr(14));
-        config.allowed_tools.insert(config.allowed_tools.end(), parsed.begin(), parsed.end());
+    if (arg.starts_with("--allow-tools=")) {
+        constexpr std::string_view prefix = "--allow-tools=";
+        config.allowed_tools.append_range(parse_allowed_tools(arg.substr(prefix.size())));
         return true;
     }
-    if (arg.rfind("--allowed-tools=", 0) == 0) {
-        auto parsed = parse_allowed_tools(arg.substr(16));
-        config.allowed_tools.insert(config.allowed_tools.end(), parsed.begin(), parsed.end());
+    if (arg.starts_with("--allowed-tools=")) {
+        constexpr std::string_view prefix = "--allowed-tools=";
+        config.allowed_tools.append_range(parse_allowed_tools(arg.substr(prefix.size())));
         return true;
     }
     if (arg == "--sub-agents" || arg == "--subagents" || arg == "--subagent" || arg == "-sa") {

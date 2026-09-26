@@ -3,6 +3,9 @@
 #include "../common/std.hpp"
 #include "errors.hpp"
 
+#include <format>
+#include <utility>
+
 using SessionID = uint64_t;
 using JobKey = uint64_t;
 
@@ -63,7 +66,7 @@ struct SessionState
         case AwaitingQuestion:
             return "awaiting_question";
         default:
-            throw std::runtime_error{"unknown SessionWaitState: " + std::to_string(value)};
+            throw std::runtime_error{std::format("unknown SessionWaitState: {}", std::to_underlying(value))};
         }
     }
 

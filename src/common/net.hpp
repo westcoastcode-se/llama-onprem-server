@@ -1,5 +1,6 @@
 #pragma once
 
+#include <format>
 #include <string>
 #include <string_view>
 #include <span>
@@ -56,8 +57,8 @@ public:
         struct timeval tv{};
         tv.tv_sec = seconds;
         tv.tv_usec = 0;
-        setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
-        setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+        setsockopt(fd_, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
+        setsockopt(fd_, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&tv), sizeof(tv));
         return true;
     }
 
@@ -157,6 +158,16 @@ private:
     std::string read_buf_;
 };
 
+struct AddrinfoDeleter
+{
+    void operator()(addrinfo *info) const noexcept
+    {
+        freeaddrinfo(info);
+    }
+};
+
+using AddrinfoPtr = std::unique_ptr<addrinfo, AddrinfoDeleter>;
+
 class TcpServer {
 public:
     TcpServer() = default;
@@ -178,7 +189,7 @@ public:
         return *this;
     }
 
-    bool listen(const std::string & host, int port, std::string & error) {
+    [[nodiscard]] bool listen(const std::string & host, int port, std::string & error) {
         close();
 
         struct addrinfo hints{};
@@ -186,38 +197,34 @@ public:
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_flags = AI_PASSIVE;
 
-        std::string port_str = std::to_string(port);
+        const std::string port_str = std::to_string(port);
         const char * host_ptr = (host.empty() || host == "0.0.0.0") ? nullptr : host.c_str();
 
-        struct addrinfo * res = nullptr;
-        int status = getaddrinfo(host_ptr, port_str.c_str(), &hints, &res);
-        if (status != 0 || !res) {
-            error = std::string("failed to resolve address: ") + (status != 0 ? gai_strerror(status) : "unknown error");
-            if (res) freeaddrinfo(res);
+        addrinfo *raw = nullptr;
+        const int status = getaddrinfo(host_ptr, port_str.c_str(), &hints, &raw);
+        const AddrinfoPtr resolved(raw);
+        if (status != 0 || !resolved) {
+            error = std::format("failed to resolve address: {}", status != 0 ? gai_strerror(status) : "unknown error");
             return false;
         }
 
-        listen_fd_ = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        listen_fd_ = ::socket(resolved->ai_family, resolved->ai_socktype, resolved->ai_protocol);
         if (listen_fd_ < 0) {
-            error = std::string("socket creation failed: ") + strerror(errno);
-            freeaddrinfo(res);
+            error = std::format("socket creation failed: {}", strerror(errno));
             return false;
         }
 
         int opt = 1;
         setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-        if (::bind(listen_fd_, res->ai_addr, res->ai_addrlen) < 0) {
-            error = std::string("bind failed: ") + strerror(errno);
-            freeaddrinfo(res);
+        if (::bind(listen_fd_, resolved->ai_addr, resolved->ai_addrlen) < 0) {
+            error = std::format("bind failed: {}", strerror(errno));
             close();
             return false;
         }
 
-        freeaddrinfo(res);
-
         if (::listen(listen_fd_, 128) < 0) {
-            error = std::string("listen failed: ") + strerror(errno);
+            error = std::format("listen failed: {}", strerror(errno));
             close();
             return false;
         }
@@ -229,7 +236,7 @@ public:
         if (listen_fd_ < 0) return nullptr;
         struct sockaddr_in client_addr{};
         socklen_t addr_len = sizeof(client_addr);
-        int client_fd = ::accept(listen_fd_, (struct sockaddr *)&client_addr, &addr_len);
+        int client_fd = ::accept(listen_fd_, reinterpret_cast<sockaddr *>(&client_addr), &addr_len);
         if (client_fd < 0) {
             return nullptr;
         }
@@ -260,37 +267,35 @@ private:
 
 class TcpClient {
 public:
-    static std::unique_ptr<TcpSocket> connect(const std::string & host, int port, std::string & error) {
+    [[nodiscard]] static std::unique_ptr<TcpSocket> connect(const std::string & host, int port, std::string & error) {
         struct addrinfo hints{};
         hints.ai_family = AF_INET;
         hints.ai_socktype = SOCK_STREAM;
 
-        std::string port_str = std::to_string(port);
-        struct addrinfo * res = nullptr;
-        int status = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
-        if (status != 0 || !res) {
-            error = std::string("failed to resolve host: ") + (status != 0 ? gai_strerror(status) : "unknown error");
-            if (res) freeaddrinfo(res);
+        const std::string port_str = std::to_string(port);
+        addrinfo *raw = nullptr;
+        const int status = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &raw);
+        const AddrinfoPtr resolved(raw);
+        if (status != 0 || !resolved) {
+            error = std::format("failed to resolve host: {}", status != 0 ? gai_strerror(status) : "unknown error");
             return nullptr;
         }
 
         int fd = -1;
-        for (struct addrinfo * p = res; p != nullptr; p = p->ai_next) {
-            fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        for (const addrinfo *entry = resolved.get(); entry != nullptr; entry = entry->ai_next) {
+            fd = ::socket(entry->ai_family, entry->ai_socktype, entry->ai_protocol);
             if (fd < 0) continue;
 
-            if (::connect(fd, p->ai_addr, p->ai_addrlen) == 0) {
-                break; // connected successfully
+            if (::connect(fd, entry->ai_addr, entry->ai_addrlen) == 0) {
+                break;
             }
 
             ::close(fd);
             fd = -1;
         }
 
-        freeaddrinfo(res);
-
         if (fd < 0) {
-            error = std::string("connect failed: ") + strerror(errno);
+            error = std::format("connect failed: {}", strerror(errno));
             return nullptr;
         }
 

@@ -9,7 +9,7 @@
 class TokenBuffer
 {
   public:
-    void push(string_view piece)
+    void push(string piece)
     {
         {
             std::lock_guard lock(mutex_);
@@ -17,7 +17,7 @@ class TokenBuffer
             {
                 return;
             }
-            pieces_.emplace_back(piece);
+            pieces_.push_back(std::move(piece));
         }
         cv_.notify_all();
     }

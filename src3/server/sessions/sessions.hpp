@@ -6,10 +6,11 @@
 #include "../api/sessions.hpp"
 #include "../jobs/jobs.hpp"
 #include <chrono>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
+#include <ostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -22,6 +23,10 @@
 class Session
 {
   public:
+    explicit Session(const ModelAdapter &adapter) : adapter_(adapter)
+    {
+    }
+
     // Unique ID for this session
     const SessionID id = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     // Timestamp when the session was created
@@ -106,16 +111,9 @@ class Session
     {
         std::lock_guard lock(mutex_);
         questions_enabled_ = req.questions;
-        if (req.system.empty())
-        {
-            system_prompt_ = default_agent_system_prompt("", req.questions);
-        }
-        else
-        {
-            system_prompt_ = std::move(req.system);
-        }
-        messages_ = std::move(req.messages);
         tools_ = std::move(req.tools);
+        system_prompt_ = default_agent_system_prompt(adapter_, tools_, req.system, req.questions);
+        messages_ = std::move(req.messages);
         max_tokens_ = req.max_tokens;
         turn_max_tokens_ = max_tokens_;
         last_active_ = std::chrono::steady_clock::now();
@@ -150,7 +148,7 @@ class Session
         }
 
         messages_.push_back(
-            ChatMessage{.role = ChatMessage::ROLE_USER, .content = format_tool_results(body)});
+            ChatMessage{.role = string(ChatMessage::ROLE_USER), .content = format_tool_results(body)});
         turn_max_tokens_ = max_tokens_;
         clear_pending_unlocked();
         state_ = SessionState::Idle;
@@ -206,7 +204,7 @@ class Session
         }
 
         messages_.push_back(
-            ChatMessage{.role = ChatMessage::ROLE_ASSISTANT, .content = status.content});
+            ChatMessage{.role = string(ChatMessage::ROLE_ASSISTANT), .content = status.content});
 
         auto actions = actions_from_status(status);
         if (!questions_enabled_)
@@ -256,6 +254,7 @@ class Session
     optional<JobKey> active_job_;
     shared_ptr<Task> latest_finished_;
     SessionState state_ = SessionState::Idle;
+    const ModelAdapter &adapter_;
     vector<ParsedToolCall> pending_tool_calls_;
     optional<ParsedQuestion> pending_question_;
     bool questions_enabled_ = true;
@@ -286,43 +285,48 @@ class Session
 
     static string format_tool_results(const SessionToolResultsRequest &body)
     {
-        std::ostringstream combined;
-        for (size_t i = 0; i < body.results.size(); ++i)
+        string combined;
+        for (const auto &r : body.results)
         {
-            const auto &r = body.results[i];
-            if (i > 0)
+            if (!combined.empty())
             {
-                combined << "\n";
+                combined.push_back('\n');
             }
             if (r.denied)
             {
-                combined << "<tool_response>\nerror: tool execution was denied by the user";
                 if (!r.name.empty())
                 {
-                    combined << " for tool '" << r.name << "'";
+                    combined += std::format(
+                        "<tool_response>\nerror: tool execution was denied by the user for tool '{}'.\n</tool_response>",
+                        r.name);
                 }
                 else if (!r.id.empty())
                 {
-                    combined << " for tool id '" << r.id << "'";
+                    combined += std::format(
+                        "<tool_response>\nerror: tool execution was denied by the user for tool id '{}'.\n</tool_response>",
+                        r.id);
                 }
-                combined << ".\n</tool_response>";
+                else
+                {
+                    combined += "<tool_response>\nerror: tool execution was denied by the user.\n</tool_response>";
+                }
             }
             else
             {
-                combined << "<tool_response>\n" << r.content << "\n</tool_response>";
+                combined += std::format("<tool_response>\n{}\n</tool_response>", r.content);
             }
         }
-        return combined.str();
+        return combined;
     }
 
-    static ParsedAssistantActions actions_from_status(const MessageStatusResponse &status)
+    ParsedAssistantActions actions_from_status(const MessageStatusResponse &status) const
     {
         ParsedAssistantActions actions;
         actions.tool_calls = status.tool_calls;
         actions.question = status.question;
         if (actions.tool_calls.empty() && !actions.question && !status.content.empty())
         {
-            actions = parse_assistant_actions(status.content);
+            actions = parse_assistant_actions(status.content, adapter_);
         }
         return actions;
     }
@@ -338,28 +342,29 @@ class Sessions
     static constexpr size_t kMaxSessions = 256;
     static constexpr std::chrono::seconds kIdleTtl{600};
 
-    explicit Sessions(Jobs &jobs);
+    explicit Sessions(Jobs &jobs, const ModelAdapter &adapter);
 
-    shared_ptr<Session> create(CreateSessionRequest req);
-    shared_ptr<Session> get(const SessionID &id);
-    shared_ptr<Session> destroy(const SessionID &id);
+    [[nodiscard]] shared_ptr<Session> create(CreateSessionRequest req);
+    [[nodiscard]] shared_ptr<Session> get(const SessionID &id);
+    [[nodiscard]] shared_ptr<Session> destroy(const SessionID &id);
 
     /**
      * Append a user turn and enqueue a generation job.
      * @return job key
      */
-    optional<JobKey> post_message(const SessionID &id, const SessionMessageRequest &msg);
+    [[nodiscard]] optional<JobKey> post_message(const SessionID &id, const SessionMessageRequest &msg);
 
     /**
      * Client finished running pending tool_calls; append tool results and continue.
      * @return new job key
      */
-    optional<JobKey> post_tool_results(const SessionID &id, const SessionToolResultsRequest &body);
+    [[nodiscard]] optional<JobKey> post_tool_results(const SessionID &id, const SessionToolResultsRequest &body);
 
     void gc();
 
   private:
     Jobs &jobs_;
+    const ModelAdapter &adapter_;
     std::mutex mutex_;
     std::unordered_map<SessionID, shared_ptr<Session>> sessions_;
 

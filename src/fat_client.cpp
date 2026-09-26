@@ -4,9 +4,62 @@
 #include "common/cli.hpp"
 #include "common/color.hpp"
 #include <clocale>
-#include <cstdio>
 #include <curl/curl.h>
+#include <print>
 #include <string>
+
+namespace
+{
+
+struct CurlGlobal
+{
+    CurlGlobal()
+    {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+    }
+    ~CurlGlobal()
+    {
+        curl_global_cleanup();
+    }
+    CurlGlobal(const CurlGlobal &) = delete;
+    CurlGlobal &operator=(const CurlGlobal &) = delete;
+};
+
+void print_fat_client_usage(char **argv)
+{
+    std::print("\n{}Local AI Agent (Fat Client){}\n"
+               "Usage:\n"
+               "    {} -m <model.gguf> [options] [command]\n\n"
+               "Options:\n"
+               "    -m  <path>        Path to GGUF model file (required)\n"
+               "    -c  <int>         Context size (default: 4096)\n"
+               "    -b  <int>         Batch size (default: 2048)\n"
+               "    -ngl <int>        Number of GPU layers (default: 99)\n"
+               "    -t  <float>       Sampling temperature (default: 0.7)\n"
+               "    --chat-template <path>  Jinja template, overrides the GGUF template\n"
+               "    --no-reasoning    Disable enable_thinking in the chat template\n"
+               "    --threads <int>   Generation threads, 0 = default\n"
+               "    --threads-batch <int>  Prompt threads, 0 = default\n"
+               "    --flash-attn auto|on|off\n"
+               "    --cache-type-k <type>  --cache-type-v <type>\n"
+               "    --seed <int>      Sampler seed\n"
+               "    --max-tokens <int>\n"
+               "    -it <int>         Max agent tool iterations per turn (default: 25)\n"
+               "    --command <cmd>   Execute a single command/prompt, print result to stdout, and exit\n"
+               "    -e, --exec <cmd>  Alias for --command\n"
+               "    -q, --quiet, --silent Quiet mode: hide all output except the final result\n"
+               "    --allow-tool <tool> Auto-approve specific tool (e.g. web_fetch) without prompt\n"
+               "    --allow-tools <list> Comma-separated list of tools to auto-approve\n"
+               "    --sub-agents, -sa Enable sub-agent delegation tool (default: enabled)\n"
+               "    --no-sub-agents   Disable sub-agent delegation tool\n"
+               "    -y, --yes, --auto-approve  Auto-approve tool execution without prompt (default: require approval)\n"
+               "    -s  <prompt>      Custom system prompt (optional)\n"
+               "    -h, --help        Show this help message\n",
+               Color::BOLD, Color::RESET, argv[0]);
+    print_slash_commands_help();
+}
+
+} // namespace
 
 class LocalAgentBackend : public IAgentBackend {
 public:
@@ -33,41 +86,10 @@ private:
     LlamaEngine & engine_;
 };
 
-static void print_fat_client_usage(int, char ** argv) {
-    printf("\n%sLocal AI Agent (Fat Client)%s\n", Color::BOLD, Color::RESET);
-    printf("Usage:\n");
-    printf("    %s -m <model.gguf> [options] [command]\n\n", argv[0]);
-    printf("Options:\n");
-    printf("    -m  <path>        Path to GGUF model file (required)\n");
-    printf("    -c  <int>         Context size (default: 4096)\n");
-    printf("    -b  <int>         Batch size (default: 2048)\n");
-    printf("    -ngl <int>        Number of GPU layers (default: 99)\n");
-    printf("    -t  <float>       Sampling temperature (default: 0.7)\n");
-    printf("    --chat-template <path>  Jinja template, overrides the GGUF template\n");
-    printf("    --no-reasoning    Disable enable_thinking in the chat template\n");
-    printf("    --threads <int>   Generation threads, 0 = default\n");
-    printf("    --threads-batch <int>  Prompt threads, 0 = default\n");
-    printf("    --flash-attn auto|on|off\n");
-    printf("    --cache-type-k <type>  --cache-type-v <type>\n");
-    printf("    --seed <int>      Sampler seed\n");
-    printf("    --max-tokens <int>\n");
-    printf("    -it <int>         Max agent tool iterations per turn (default: 25)\n");
-    printf("    --command <cmd>   Execute a single command/prompt, print result to stdout, and exit\n");
-    printf("    -e, --exec <cmd>  Alias for --command\n");
-    printf("    -q, --quiet, --silent Quiet mode: hide all output except the final result\n");
-    printf("    --allow-tool <tool> Auto-approve specific tool (e.g. web_fetch) without prompt\n");
-    printf("    --allow-tools <list> Comma-separated list of tools to auto-approve\n");
-    printf("    --sub-agents, -sa Enable sub-agent delegation tool (default: enabled)\n");
-    printf("    --no-sub-agents   Disable sub-agent delegation tool\n");
-    printf("    -y, --yes, --auto-approve  Auto-approve tool execution without prompt (default: require approval)\n");
-    printf("    -s  <prompt>      Custom system prompt (optional)\n");
-    printf("    -h, --help        Show this help message\n");
-    print_slash_commands_help();
-}
-
-int main(int argc, char ** argv) {
+int main(int argc, char **argv)
+{
     std::setlocale(LC_NUMERIC, "C");
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    const CurlGlobal curl;
 
     LlamaConfig llama_config;
     AgentSessionConfig session_config;
@@ -83,48 +105,45 @@ int main(int argc, char ** argv) {
             if (parse_agent_cli_arg(i, argc, argv, session_config, false /* -c is context size */)) {
                 continue;
             }
-            if (arg == "-h" || arg == "--help") {
-                print_fat_client_usage(argc, argv);
-                curl_global_cleanup();
+            if (arg == "-h" || arg == "--help")
+            {
+                print_fat_client_usage(argv);
                 return 0;
             }
-            fprintf(stderr, "Unknown or incomplete argument: %s\n", argv[i]);
-            print_fat_client_usage(argc, argv);
-            curl_global_cleanup();
+            std::println(stderr, "Unknown or incomplete argument: {}", argv[i]);
+            print_fat_client_usage(argv);
             return 1;
-        } catch (const std::exception & e) {
-            fprintf(stderr, "error parsing CLI options: %s\n", e.what());
-            print_fat_client_usage(argc, argv);
-            curl_global_cleanup();
+        }
+        catch (const std::exception &e)
+        {
+            std::println(stderr, "error parsing CLI options: {}", e.what());
+            print_fat_client_usage(argv);
             return 1;
         }
     }
 
-    if (llama_config.model_path.empty()) {
-        fprintf(stderr, "error: missing required model path (-m)\n");
-        print_fat_client_usage(argc, argv);
-        curl_global_cleanup();
+    if (llama_config.model_path.empty())
+    {
+        std::println(stderr, "error: missing required model path (-m)");
+        print_fat_client_usage(argv);
         return 1;
     }
 
-    if (llama_config.n_ctx <= 0 || llama_config.n_batch <= 0 ||
-        session_config.max_iterations <= 0 || session_config.temperature < 0.0f) {
-        fprintf(stderr, "error: invalid configuration parameters\n");
-        curl_global_cleanup();
+    if (llama_config.n_ctx <= 0 || llama_config.n_batch <= 0 || session_config.max_iterations <= 0 ||
+        session_config.temperature < 0.0f)
+    {
+        std::println(stderr, "error: invalid configuration parameters");
         return 1;
     }
 
     LlamaEngine engine;
     std::string err;
-    if (!engine.init(llama_config, err)) {
-        fprintf(stderr, "%s[agent] Error initializing LLM engine: %s%s\n", Color::RED, err.c_str(), Color::RESET);
-        curl_global_cleanup();
+    if (!engine.init(llama_config, err))
+    {
+        std::println(stderr, "{}[agent] Error initializing LLM engine: {}{}", Color::RED, err, Color::RESET);
         return 1;
     }
 
     LocalAgentBackend backend(engine);
-    int result = run_agent_session(backend, session_config, "Autonomous AI Agent (Fat Client Mode)");
-
-    curl_global_cleanup();
-    return result;
+    return run_agent_session(backend, session_config, "Autonomous AI Agent (Fat Client Mode)");
 }

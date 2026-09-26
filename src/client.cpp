@@ -4,90 +4,118 @@
 #include "common/color.hpp"
 #include "common/net.hpp"
 #include <clocale>
-#include <cstdio>
 #include <curl/curl.h>
+#include <format>
+#include <print>
 #include <string>
 
-static void print_client_usage(int, char ** argv) {
-    printf("\n%sLocal AI Agent (TCP Client)%s\n", Color::BOLD, Color::RESET);
-    printf("Usage:\n");
-    printf("    %s [options] [command]\n\n", argv[0]);
-    printf("Options:\n");
-    printf("    --host <ip/host>  Server host address (default: 127.0.0.1)\n");
-    printf("    -p, --port <int>  Server port (default: 8080)\n");
-    printf("    -t  <float>       Sampling temperature (default: 0.7)\n");
-    printf("    -it <int>         Max agent tool iterations per turn (default: 25)\n");
-    printf("    -c, --command <cmd> Execute a single command/prompt, print result to stdout, and exit\n");
-    printf("    -e, --exec <cmd>  Alias for --command\n");
-    printf("    -q, --quiet, --silent Quiet mode: hide all output except the final result\n");
-    printf("    --allow-tool <tool> Auto-approve specific tool (e.g. web_fetch) without prompt\n");
-    printf("    --allow-tools <list> Comma-separated list of tools to auto-approve\n");
-    printf("    --sub-agents, -sa Enable sub-agent delegation tool (default: enabled)\n");
-    printf("    --no-sub-agents   Disable sub-agent delegation tool\n");
-    printf("    -y, --yes, --auto-approve  Auto-approve tool execution without prompt (default: require approval)\n");
-    printf("    -s  <prompt>      Custom system prompt (optional)\n");
-    printf("    -h, --help        Show this help message\n");
+namespace
+{
+
+struct CurlGlobal
+{
+    CurlGlobal()
+    {
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+    }
+    ~CurlGlobal()
+    {
+        curl_global_cleanup();
+    }
+    CurlGlobal(const CurlGlobal &) = delete;
+    CurlGlobal &operator=(const CurlGlobal &) = delete;
+};
+
+void print_client_usage(char **argv)
+{
+    std::print("\n{}Local AI Agent (TCP Client){}\n"
+               "Usage:\n"
+               "    {} [options] [command]\n\n"
+               "Options:\n"
+               "    --host <ip/host>  Server host address (default: 127.0.0.1)\n"
+               "    -p, --port <int>  Server port (default: 8080)\n"
+               "    -t  <float>       Sampling temperature (default: 0.7)\n"
+               "    -it <int>         Max agent tool iterations per turn (default: 25)\n"
+               "    -c, --command <cmd> Execute a single command/prompt, print result to stdout, and exit\n"
+               "    -e, --exec <cmd>  Alias for --command\n"
+               "    -q, --quiet, --silent Quiet mode: hide all output except the final result\n"
+               "    --allow-tool <tool> Auto-approve specific tool (e.g. web_fetch) without prompt\n"
+               "    --allow-tools <list> Comma-separated list of tools to auto-approve\n"
+               "    --sub-agents, -sa Enable sub-agent delegation tool (default: enabled)\n"
+               "    --no-sub-agents   Disable sub-agent delegation tool\n"
+               "    -y, --yes, --auto-approve  Auto-approve tool execution without prompt (default: require approval)\n"
+               "    -s  <prompt>      Custom system prompt (optional)\n"
+               "    -h, --help        Show this help message\n",
+               Color::BOLD, Color::RESET, argv[0]);
     print_slash_commands_help();
 }
 
-int main(int argc, char ** argv) {
+} // namespace
+
+int main(int argc, char **argv)
+{
     std::setlocale(LC_NUMERIC, "C");
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    const CurlGlobal curl;
 
     std::string host = "127.0.0.1";
     int port = 8080;
     AgentSessionConfig config;
 
-    for (int i = 1; i < argc; i++) {
-        try {
+    for (int i = 1; i < argc; i++)
+    {
+        try
+        {
             std::string arg = argv[i];
-            if (parse_network_cli_arg(i, argc, argv, host, port)) {
+            if (parse_network_cli_arg(i, argc, argv, host, port))
+            {
                 continue;
             }
-            if (parse_agent_cli_arg(i, argc, argv, config, true /* allow -c for command */)) {
+            if (parse_agent_cli_arg(i, argc, argv, config, true /* allow -c for command */))
+            {
                 continue;
             }
-            if (arg == "-h" || arg == "--help") {
-                print_client_usage(argc, argv);
-                curl_global_cleanup();
+            if (arg == "-h" || arg == "--help")
+            {
+                print_client_usage(argv);
                 return 0;
             }
-            fprintf(stderr, "Unknown or incomplete argument: %s\n", argv[i]);
-            print_client_usage(argc, argv);
-            curl_global_cleanup();
+            std::println(stderr, "Unknown or incomplete argument: {}", argv[i]);
+            print_client_usage(argv);
             return 1;
-        } catch (const std::exception & e) {
-            fprintf(stderr, "error parsing CLI options: %s\n", e.what());
-            print_client_usage(argc, argv);
-            curl_global_cleanup();
+        }
+        catch (const std::exception &e)
+        {
+            std::println(stderr, "error parsing CLI options: {}", e.what());
+            print_client_usage(argv);
             return 1;
         }
     }
 
-    if (config.max_iterations <= 0 || config.temperature < 0.0f || port <= 0 || port > 65535) {
-        fprintf(stderr, "error: invalid configuration parameters\n");
-        curl_global_cleanup();
+    if (config.max_iterations <= 0 || config.temperature < 0.0f || port <= 0 || port > 65535)
+    {
+        std::println(stderr, "error: invalid configuration parameters");
         return 1;
     }
 
-    if (!config.quiet && config.single_command.empty()) {
-        printf("%s[agent] Connecting to Local AI Server at %s:%d...%s\n", Color::CYAN, host.c_str(), port, Color::RESET);
+    if (!config.quiet && config.single_command.empty())
+    {
+        std::println("{}[agent] Connecting to Local AI Server at {}:{}...{}", Color::CYAN, host, port, Color::RESET);
     }
 
     std::string conn_err;
     auto sock = TcpClient::connect(host, port, conn_err);
-    if (!sock || !sock->is_valid()) {
-        fprintf(stderr, "%s[agent] Error connecting to server: %s%s\n", Color::RED, conn_err.c_str(), Color::RESET);
-        curl_global_cleanup();
+    if (!sock || !sock->is_valid())
+    {
+        std::println(stderr, "{}[agent] Error connecting to server: {}{}", Color::RED, conn_err, Color::RESET);
         return 1;
     }
 
     // Ping server handshake
     sock->send_json({{"type", "ping"}});
     nlohmann::json pong_resp;
-    if (!sock->read_json(pong_resp) || pong_resp.value("type", "") != "pong") {
-        fprintf(stderr, "%s[agent] Error: unexpected server handshake response%s\n", Color::RED, Color::RESET);
-        curl_global_cleanup();
+    if (!sock->read_json(pong_resp) || pong_resp.value("type", "") != "pong")
+    {
+        std::println(stderr, "{}[agent] Error: unexpected server handshake response{}", Color::RED, Color::RESET);
         return 1;
     }
 
@@ -96,11 +124,10 @@ int main(int argc, char ** argv) {
     int used_ctx = pong_resp.value("used_ctx", 0);
 
     RemoteAgentBackend backend(std::move(sock), model_name, n_ctx, used_ctx);
-    std::string server_info = "Server       : " + host + ":" + std::to_string(port) + " (Model: " + model_name + ")";
+    const std::string server_info = std::format("Server       : {}:{} (Model: {})", host, port, model_name);
 
-    int result = run_agent_session(backend, config, "Autonomous AI Agent (TCP Client Mode)", server_info);
+    const int result = run_agent_session(backend, config, "Autonomous AI Agent (TCP Client Mode)", server_info);
 
     backend.close();
-    curl_global_cleanup();
     return result;
 }

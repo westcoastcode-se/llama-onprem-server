@@ -15,9 +15,11 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 inline JobKey next_job_key()
 {
@@ -38,18 +40,16 @@ struct Task
     std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point finished_at{};
 
-    // Lambda called when reaching an exit state
-    std::function<void(const shared_ptr<Task> &)> on_finished;
+    // Invoked once when the task reaches a terminal state.
+    std::move_only_function<void(const shared_ptr<Task> &)> on_finished;
 
     /**
      * Move out on_finished under lock so the callback can run without holding mutex.
      */
-    std::function<void(const shared_ptr<Task> &)> take_on_finished()
+    [[nodiscard]] std::move_only_function<void(const shared_ptr<Task> &)> take_on_finished()
     {
         std::lock_guard lock(mutex);
-        auto cb = std::move(on_finished);
-        on_finished = nullptr;
-        return cb;
+        return std::exchange(on_finished, nullptr);
     }
 
     mutable std::mutex mutex;
@@ -192,6 +192,8 @@ struct Task
  *
  * REST clients get a key immediately; tokens stream via TokenBuffer.
  */
+class ModelAdapter;
+
 class Jobs
 {
   public:
@@ -199,7 +201,7 @@ class Jobs
     // TODO: Wait to GC until first stream request is called?
     static constexpr std::chrono::seconds kFinishedTtl{300};
 
-    explicit Jobs(LlamaEngine &engine);
+    explicit Jobs(LlamaEngine &engine, const ModelAdapter &adapter);
     ~Jobs();
 
     Jobs(const Jobs &) = delete;
@@ -215,7 +217,7 @@ class Jobs
      * @return The created task (also retained by the job runner until GC).
      */
     shared_ptr<Task> submit(MessagesRequest &&request,
-                            std::function<void(const shared_ptr<Task> &)> on_finished = nullptr);
+                            std::move_only_function<void(const shared_ptr<Task> &)> on_finished = {});
 
     /**
      * Enqueue an already constructed task. Prefer this when the caller must register the job key
@@ -230,7 +232,7 @@ class Jobs
      * @param key The task id
      * @return The task if found
      */
-    shared_ptr<Task> get_task(JobKey key) const;
+    [[nodiscard]] shared_ptr<Task> get_task(JobKey key) const;
 
     /**
      * Try to cancel the supplied task
@@ -250,16 +252,16 @@ class Jobs
 
   private:
     LlamaEngine &engine_;
+    const ModelAdapter &adapter_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::unordered_map<JobKey, std::shared_ptr<Task>> tasks_;
     std::deque<JobKey> queue_;
     std::vector<std::string> pending_session_releases_;
-    std::atomic<bool> stop_{false};
     std::shared_ptr<Task> current_task_;
-    std::thread worker_;
+    std::jthread worker_;
 
-    void worker_loop();
+    void worker_loop(std::stop_token stop);
     void unsafe_gc();
 
     struct NextWork
@@ -272,5 +274,5 @@ class Jobs
      * @return The next queued task, plus session KV releases to apply first.
      *         The task might be cancelled. Empty when shutting down.
      */
-    NextWork wait_next();
+    NextWork wait_next(const std::stop_token &stop);
 };

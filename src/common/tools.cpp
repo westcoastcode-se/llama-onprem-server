@@ -8,6 +8,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -98,70 +99,63 @@ std::string build_system_prompt(std::span<const Tool> tools, std::string_view cu
     std::string cwd = working_dir.empty() || working_dir == "." ? std::filesystem::current_path().string() : std::string(working_dir);
     std::string now_str = get_current_iso_time();
 
-    bool has_subagents = false;
-    for (const auto & tool : tools) {
-        if (tool.name == "sub_agent") {
-            has_subagents = true;
-            break;
-        }
-    }
+    const bool has_subagents = std::ranges::contains(tools, std::string_view("sub_agent"), &Tool::name);
 
-    std::ostringstream ss;
-    ss << "You are an intelligent, autonomous AI agent equipped with tools to solve complex tasks directly on the user's system.\n\n";
-    ss << "## Environment Context:\n";
-    ss << "- Operating System: Linux\n";
-    ss << "- Working Directory: " << cwd << "\n";
-    ss << "- Current Date & Time: " << now_str << "\n\n";
+    std::string prompt = std::format(
+        "You are an intelligent, autonomous AI agent equipped with tools to solve complex tasks directly on the user's system.\n\n"
+        "## Environment Context:\n"
+        "- Operating System: Linux\n"
+        "- Working Directory: {}\n"
+        "- Current Date & Time: {}\n\n",
+        cwd, now_str);
 
-    ss << "## ReAct Agent Loop (Reasoning + Action):\n";
+    prompt += "## ReAct Agent Loop (Reasoning + Action):\n";
     if (has_subagents) {
-        ss << "1. **Thought / Plan (Planning Phase)**: Analyze the user's request. For complex problems, multi-step goals, exploring large codebases, or when working across components (e.g., client, server, fat_client), decompose the problem into distinct, modular tasks during this planning phase. Determine which tasks to delegate to sub-agents to optimize context and keep the main context clean and modular.\n";
+        prompt += "1. **Thought / Plan (Planning Phase)**: Analyze the user's request. For complex problems, multi-step goals, exploring large codebases, or when working across components (e.g., client, server, fat_client), decompose the problem into distinct, modular tasks during this planning phase. Determine which tasks to delegate to sub-agents to optimize context and keep the main context clean and modular.\n";
     } else {
-        ss << "1. **Thought / Plan**: Analyze the user's goal, break it down into logical steps, and determine if an action/tool is needed.\n";
+        prompt += "1. **Thought / Plan**: Analyze the user's goal, break it down into logical steps, and determine if an action/tool is needed.\n";
     }
-    ss << "2. **Action**: Select the appropriate tool and output a tool call wrapped in <tool_call> tags. When planning multiple tasks or actions, emit the required tool calls sequentially.\n";
-    ss << "3. **Observation**: Wait for the tool execution response (<tool_response>). All executed tasks and actions are returned in controlled order.\n";
-    ss << "4. **Iterate**: Repeat Thought -> Action -> Observation until all tasks are resolved.\n";
-    ss << "5. **Final Answer**: Once you have completed the goal or answered the question, present a clear, comprehensive final response directly to the user (without any tool call).\n\n";
+    prompt += "2. **Action**: Select the appropriate tool and output a tool call wrapped in <tool_call> tags. When planning multiple tasks or actions, emit the required tool calls sequentially.\n";
+    prompt += "3. **Observation**: Wait for the tool execution response (<tool_response>). All executed tasks and actions are returned in controlled order.\n";
+    prompt += "4. **Iterate**: Repeat Thought -> Action -> Observation until all tasks are resolved.\n";
+    prompt += "5. **Final Answer**: Once you have completed the goal or answered the question, present a clear, comprehensive final response directly to the user (without any tool call).\n\n";
 
     if (has_subagents) {
-        ss << "## Sub-Agent Task Planning, Context Optimization & Delegation:\n";
-        ss << "Sub-agents are enabled (`sub_agent` tool). In the **planning phase** (Thought/Plan) and execution:\n";
-        ss << "- **Context Optimization & Delegation**: Always use sub-agents whenever needed when working in large projects or across client, server, and fat_client components. Sub-agents run in isolated contexts, preventing heavy file contents, directory listings, or verbose logs from overflowing the main conversation context.\n";
-        ss << "- **Reusing Sub-Agent Results**: Use a sub-agent's summarized output and findings in subsequent steps or other sub-agents so that you can continue effectively without having to re-read large files from scratch.\n";
-        ss << "- **Task Decomposition**: When tackling complex problems or when asked to break down work into tasks, break the problem down into sequential or focused sub-tasks and execute each sub-task by calling `sub_agent` with clear, self-contained instructions. If multiple tasks are passed, they will all be executed in sequential, controlled order.\n";
-        ss << "- **Follow-up Execution**: Every sub-agent's response and findings can also directly result in executing tools (e.g., executing commands, writing/editing files, reading files, searching, or launching subsequent sub-agents/sub-tasks). Act on the sub-agent's findings by running any necessary follow-up tools.\n";
-        ss << "- **Synthesis**: Combine and summarize the final results from all sub-agents in your final answer.\n\n";
+        prompt += "## Sub-Agent Task Planning, Context Optimization & Delegation:\n";
+        prompt += "Sub-agents are enabled (`sub_agent` tool). In the **planning phase** (Thought/Plan) and execution:\n";
+        prompt += "- **Context Optimization & Delegation**: Always use sub-agents whenever needed when working in large projects or across client, server, and fat_client components. Sub-agents run in isolated contexts, preventing heavy file contents, directory listings, or verbose logs from overflowing the main conversation context.\n";
+        prompt += "- **Reusing Sub-Agent Results**: Use a sub-agent's summarized output and findings in subsequent steps or other sub-agents so that you can continue effectively without having to re-read large files from scratch.\n";
+        prompt += "- **Task Decomposition**: When tackling complex problems or when asked to break down work into tasks, break the problem down into sequential or focused sub-tasks and execute each sub-task by calling `sub_agent` with clear, self-contained instructions. If multiple tasks are passed, they will all be executed in sequential, controlled order.\n";
+        prompt += "- **Follow-up Execution**: Every sub-agent's response and findings can also directly result in executing tools (e.g., executing commands, writing/editing files, reading files, searching, or launching subsequent sub-agents/sub-tasks). Act on the sub-agent's findings by running any necessary follow-up tools.\n";
+        prompt += "- **Synthesis**: Combine and summarize the final results from all sub-agents in your final answer.\n\n";
     }
 
-    ss << "## Tool Calling Format:\n";
-    ss << "To invoke a tool, output valid JSON inside a tool_call XML tag exactly:\n";
-    ss << "<tool_call>\n";
-    ss << "{\n";
-    ss << "  \"name\": \"<tool_name>\",\n";
-    ss << "  \"arguments\": {\n";
-    ss << "    \"<param>\": <value>\n";
-    ss << "  }\n";
-    ss << "}\n";
-    ss << "</tool_call>\n\n";
+    prompt += "## Tool Calling Format:\n";
+    prompt += "To invoke a tool, output valid JSON inside a tool_call XML tag exactly:\n";
+    prompt += "<tool_call>\n";
+    prompt += "{\n";
+    prompt += "  \"name\": \"<tool_name>\",\n";
+    prompt += "  \"arguments\": {\n";
+    prompt += "    \"<param>\": <value>\n";
+    prompt += "  }\n";
+    prompt += "}\n";
+    prompt += "</tool_call>\n\n";
 
-    ss << "## Available Tools:\n";
+    prompt += "## Available Tools:\n";
     for (const auto & tool : tools) {
-        ss << "- **" << tool.name << "**:\n";
-        ss << "    description: " << tool.description << "\n";
-        ss << "    " << tool.schema_doc << "\n\n";
+        prompt += std::format("- **{}**:\n    description: {}\n    {}\n\n", tool.name, tool.description, tool.schema_doc);
     }
 
-    std::string project_instructions = load_ai_instructions(working_dir);
+    const std::string project_instructions = load_ai_instructions(working_dir);
     if (!project_instructions.empty()) {
-        ss << "## Project Instructions (AI_INSTRUCTIONS.md):\n" << project_instructions << "\n\n";
+        prompt += std::format("## Project Instructions (AI_INSTRUCTIONS.md):\n{}\n\n", project_instructions);
     }
 
     if (!custom_prompt.empty()) {
-        ss << "## Additional Instructions:\n" << custom_prompt << "\n";
+        prompt += std::format("## Additional Instructions:\n{}\n", custom_prompt);
     }
 
-    return ss.str();
+    return prompt;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +169,7 @@ std::string run_tool(std::span<const Tool> tools, std::string_view name, const n
             try {
                 return tool.execute(arguments);
             } catch (const std::exception & e) {
-                return std::string("error executing tool '") + std::string(name) + "': " + e.what();
+                return std::format("error executing tool '{}': {}", name, e.what());
             }
         }
     }
@@ -186,12 +180,12 @@ std::string run_tool(std::span<const Tool> tools, std::string_view name, const n
                 try {
                     return tool.execute(arguments);
                 } catch (const std::exception & e) {
-                    return std::string("error executing tool '") + std::string(name) + "': " + e.what();
+                    return std::format("error executing tool '{}': {}", name, e.what());
                 }
             }
         }
     }
-    return std::string("error: unknown tool '") + std::string(name) + "'";
+    return std::format("error: unknown tool '{}'", name);
 }
 
 // ---------------------------------------------------------------------------

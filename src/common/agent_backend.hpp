@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -67,7 +68,7 @@ public:
         };
 
         if (!sock_->send_json(chat_req)) {
-            fprintf(stderr, "%s[agent] Connection to server lost.%s\n", Color::RED, Color::RESET);
+            std::println(stderr, "{}[agent] Connection to server lost.{}", Color::RED, Color::RESET);
             return "";
         }
 
@@ -77,7 +78,7 @@ public:
         while (!stream_ended) {
             nlohmann::json stream_msg;
             if (!sock_->read_json(stream_msg)) {
-                fprintf(stderr, "%s\n[agent] Error reading from server%s\n", Color::RED, Color::RESET);
+                std::println(stderr, "{}\n[agent] Error reading from server{}", Color::RED, Color::RESET);
                 break;
             }
 
@@ -102,7 +103,7 @@ public:
                 stream_ended = true;
             } else if (msg_type == "error") {
                 std::string err_msg = stream_msg.value("message", "unknown server error");
-                fprintf(stderr, "%s\n[server error] %s%s\n", Color::RED, err_msg.c_str(), Color::RESET);
+                std::println(stderr, "{}\n[server error] {}{}", Color::RED, err_msg, Color::RESET);
                 stream_ended = true;
             }
         }

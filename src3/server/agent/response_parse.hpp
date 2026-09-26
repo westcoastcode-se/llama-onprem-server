@@ -2,6 +2,9 @@
 
 #include "../../common/std.hpp"
 #include "../../api/models.hpp"
+#include "model_adapter.hpp"
+
+#include <span>
 
 struct ParsedAssistantActions
 {
@@ -38,14 +41,15 @@ struct ParsedAssistantActions
 
 /**
  * Parse LLM output for <tool_call(s)>, <question>, <answer> blocks.
- * Tool execution is intentionally left to the client.
+ * Tool-call syntax comes from the model adapter. Tool execution is left to the client.
+ * The overload without an adapter uses QwenAdapter.
  */
+ParsedAssistantActions parse_assistant_actions(std::string_view text, const ModelAdapter &adapter);
 ParsedAssistantActions parse_assistant_actions(std::string_view text);
 
 /**
- * Default system prompt: tools, and optionally question/answer protocol.
- *
- * @param extra optional user system text appended at the end
- * @param allow_questions when false, omit <question>/<answer> instructions
+ * System prompt for the active model. Tool names and parameters come from the client.
+ * extra is appended as additional instructions.
  */
-string default_agent_system_prompt(std::string_view extra = "", bool allow_questions = true);
+string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools,
+                                   std::string_view extra = "", bool allow_questions = true);

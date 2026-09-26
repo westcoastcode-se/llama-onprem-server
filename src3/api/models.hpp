@@ -3,6 +3,9 @@
 #include "../common/std.hpp"
 #include "sessions.hpp"
 
+#include <format>
+#include <utility>
+
 /**
  * Session state
  */
@@ -10,7 +13,6 @@ struct JobState
 {
     enum Value : int32_t
     {
-        // Unknown
         Unknown = -1,
         Queued,
         Running,
@@ -57,7 +59,7 @@ struct JobState
         case Cancelled:
             return "cancelled";
         default:
-            throw std::runtime_error{"unknown JobState: " + std::to_string(value)};
+            throw std::runtime_error{std::format("unknown JobState: {}", std::to_underlying(value))};
         }
     }
 
@@ -137,10 +139,10 @@ struct ChatTool
 
 struct ChatMessage
 {
-    static constexpr string ROLE_ASSISTANT = "assistant";
-    static constexpr string ROLE_USER = "user";
-    static constexpr string ROLE_SYSTEM = "system";
-    static constexpr string ROLE_TOOL = "tool";
+    static constexpr string_view ROLE_ASSISTANT = "assistant";
+    static constexpr string_view ROLE_USER = "user";
+    static constexpr string_view ROLE_SYSTEM = "system";
+    static constexpr string_view ROLE_TOOL = "tool";
 
     string role;
     string content;
@@ -186,7 +188,7 @@ struct ChatMessage
  */
 struct CreateSessionRequest
 {
-    // System prompt
+    // Extra instructions appended to the system prompt the server builds for the active model.
     string system;
 
     // Chat history, if any exists. This is useful if you want to
@@ -194,17 +196,12 @@ struct CreateSessionRequest
     vector<ChatMessage> messages;
 
     /**
-     * If true (default), allow question protocol: include it in the default system prompt
-     * (when system is empty or lacks tool protocol) and pause on parsed <question> tags.
+     * When true, the server prompt includes the question protocol and a parsed <question> pauses the session.
      * The client replies with a normal POST .../messages turn.
-     * When false, questions are omitted from the prompt and ignored if the model still emits them.
-     * Tools are available whenever the (effective) system prompt describes them.
-     *
-     * @deprecated The system prompt should be moved to the client and thus this property is no longer neccessary
      */
     bool questions = true;
 
-    // OpenAI-style function tools rendered into the chat template.
+    // Model-neutral tools. The server renders them into the system prompt for the loaded model.
     vector<ChatTool> tools;
 
     // < 0 means the server default (no cap unless LlamaConfig sets one).
@@ -310,9 +307,9 @@ struct ParsedQuestion
         if (const auto arr = j.value("answers", json::array()); arr.is_array())
         {
             question.answers.reserve(arr.size());
-            for (const string item : arr)
+            for (const auto &item : arr)
             {
-                question.answers.push_back(item);
+                question.answers.push_back(item.get<string>());
             }
         }
         return question;

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -75,14 +76,16 @@ struct LlamaContextFull : LlamaRuntimeError
 };
 
 // Piece of generated text. Return true to keep going, false to abort the turn.
-using TokenCallback = std::function<bool(std::string &&piece)>;
+// move_only_function::operator() is non-const, so the members below are mutable:
+// a const LlamaRequest can still invoke them.
+using TokenCallback = std::move_only_function<bool(std::string &&piece)>;
 
 // Controls for one generate() or chat() call. Does not change LlamaConfig.
 struct LlamaRequest
 {
-    TokenCallback token_cb{};
+    mutable TokenCallback token_cb{};
     // Polled between prompt batches, so a long prefill can be cancelled before the first token.
-    std::function<bool()> should_stop{};
+    mutable std::move_only_function<bool()> should_stop{};
     // Negative keeps LlamaConfig::temperature.
     float temp_override = -1.0f;
     // Negative keeps LlamaConfig::max_tokens.
@@ -127,10 +130,10 @@ class LlamaEngine
 
     // Tokenize prompt, reuse the matching KV prefix, then sample until EOG, max_tokens, or abort.
     // An aborted or failed turn rolls the cache back to the prefix it started from.
-    std::string generate(std::string_view prompt, const LlamaRequest &request = {});
+    [[nodiscard]] std::string generate(std::string_view prompt, const LlamaRequest &request = {});
 
     // Apply the chat template, then generate. tools and reasoning are template inputs, not sampler state.
-    std::string chat(std::span<const ChatMessage> messages, const LlamaRequest &request = {});
+    [[nodiscard]] std::string chat(std::span<const ChatMessage> messages, const LlamaRequest &request = {});
 
     // Template text only. Does not touch the KV cache.
     [[nodiscard]] std::string apply_template(std::span<const ChatMessage> messages, bool add_assistant = true,
@@ -156,7 +159,23 @@ class LlamaEngine
         std::chrono::steady_clock::time_point used{};
     };
 
-    void destroy() noexcept;
+    struct ModelDeleter
+    {
+        void operator()(llama_model *model) const noexcept;
+    };
+    struct ContextDeleter
+    {
+        void operator()(llama_context *context) const noexcept;
+    };
+    struct SamplerDeleter
+    {
+        void operator()(llama_sampler *sampler) const noexcept;
+    };
+    struct TemplatesDeleter
+    {
+        void operator()(common_chat_templates *templates) const noexcept;
+    };
+
     // New chain each call so a temperature override does not write back into config_.
     void rebuild_sampler(float temperature);
     // Make session_id the sequence in the context, parking the previous one if it differs.
@@ -169,19 +188,19 @@ class LlamaEngine
     // Keep the first n_tokens of the live sequence and drop the rest from both KV and active_tokens_.
     void trim_kv_to(size_t n_tokens);
     // Decode tokens onto the live sequence. Appends each accepted batch to active_tokens_.
-    void decode_tokens(std::span<const int32_t> tokens, const std::function<bool()> &should_stop);
+    void decode_tokens(std::span<const int32_t> tokens, std::move_only_function<bool()> &should_stop);
 
     // Jinja prompt. add_assistant leaves the template on the assistant turn so generation can continue it.
     [[nodiscard]] std::string format_messages(std::span<const ChatMessage> messages, bool add_assistant,
                                               std::span<const ChatTool> tools) const;
 
     LlamaConfig config_;
-    llama_model *model_ = nullptr;
+    std::unique_ptr<llama_model, ModelDeleter> model_;
     const llama_vocab *vocab_ = nullptr;
-    llama_context *ctx_ = nullptr;
-    llama_sampler *smpl_ = nullptr;
+    std::unique_ptr<llama_context, ContextDeleter> ctx_;
+    std::unique_ptr<llama_sampler, SamplerDeleter> smpl_;
     // Parsed Jinja. Owned here; llama.cpp's C chat API does not execute Jinja.
-    common_chat_templates *templates_ = nullptr;
+    std::unique_ptr<common_chat_templates, TemplatesDeleter> templates_;
 
     std::string active_session_id_;
     // Token ids currently stored in KV sequence 0, in order.

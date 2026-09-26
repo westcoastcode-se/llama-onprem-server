@@ -13,6 +13,7 @@
 #include <curl/curl.h>
 #include <iostream>
 #include <optional>
+#include <print>
 #include <ranges>
 #include <string>
 #include <thread>
@@ -80,21 +81,21 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
     auto emit = [](std::string_view s) {
         if (!s.empty())
         {
-            printf("%.*s", static_cast<int>(s.size()), s.data());
+            std::print("{}", s);
         }
     };
 
     auto clear_status = [&]() {
         if (status_line)
         {
-            printf("\r\033[K");
+            std::print("\r\033[K");
             status_line = false;
         }
     };
 
     auto draw_thinking = [&]() {
         static constexpr const char *kFrames = "|/-\\";
-        printf("\r%s%c Thinking… %.1fs%s\033[K", Color::DIM, kFrames[spin & 3], elapsed_s(), Color::RESET);
+        std::print("\r{}{} Thinking… {:.1f}s{}\033[K", Color::DIM, kFrames[spin & 3], elapsed_s(), Color::RESET);
         status_line = true;
         ++spin;
         fflush(stdout);
@@ -110,7 +111,7 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
             clear_status();
             if (think_started && !think_closed && !show_think)
             {
-                printf("%s✓ Thinking  %.1fs%s\n", Color::DIM, elapsed_s(), Color::RESET);
+                std::println("{}✓ Thinking  {:.1f}s{}", Color::DIM, elapsed_s(), Color::RESET);
                 think_closed = true;
             }
             answer_started = true;
@@ -122,8 +123,8 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
 
     g_interrupt.store(false, std::memory_order_relaxed);
     std::atomic<bool> stream_over{false};
-    std::thread watcher([&]() {
-        while (!stream_over.load(std::memory_order_relaxed))
+    std::jthread watcher([&](std::stop_token stop) {
+        while (!stop.stop_requested() && !stream_over.load(std::memory_order_relaxed))
         {
             if (g_interrupt.load(std::memory_order_relaxed))
             {
@@ -184,12 +185,12 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
                     if (!show_think)
                     {
                         clear_status();
-                        printf("%s✓ Thinking  %.1fs%s\n", Color::DIM, elapsed_s(), Color::RESET);
+                        std::println("{}✓ Thinking  {:.1f}s{}", Color::DIM, elapsed_s(), Color::RESET);
                         think_closed = true;
                     }
                     else
                     {
-                        printf("%s", Color::RESET);
+                        std::print("{}", Color::RESET);
                     }
                 }
                 else
@@ -213,7 +214,7 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
                             clear_status();
                             answer_started = true;
                         }
-                        printf("%s", Color::GRAY);
+                        std::print("{}", Color::GRAY);
                     }
                     else
                     {
@@ -239,12 +240,14 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
         if (!cancelled)
         {
             stream_over.store(true, std::memory_order_relaxed);
+            watcher.request_stop();
             watcher.join();
             throw;
         }
     }
 
     stream_over.store(true, std::memory_order_relaxed);
+    watcher.request_stop();
     watcher.join();
 
     if (g_interrupt.load(std::memory_order_relaxed))
@@ -255,17 +258,17 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
     if (cancelled)
     {
         clear_status();
-        printf("%s⚠ cancelled%s\n", Color::YELLOW, Color::RESET);
+        std::println("{}⚠ cancelled{}", Color::YELLOW, Color::RESET);
     }
     else if (!answer_started && think_started && !think_closed && !show_think)
     {
         clear_status();
-        printf("%s✓ Thinking  %.1fs%s\n", Color::DIM, elapsed_s(), Color::RESET);
+        std::println("{}✓ Thinking  {:.1f}s{}", Color::DIM, elapsed_s(), Color::RESET);
     }
     else
     {
         clear_status();
-        printf("%s\n", Color::RESET);
+        std::println("{}", Color::RESET);
     }
     fflush(stdout);
 
@@ -298,20 +301,20 @@ json run_pending_tools(const SessionResponse &session, span<const Tool> tools, C
             if (approval == ToolApproval::ALWAYS)
             {
                 cfg.auto_approve = true;
-                printf("%s[client] auto-approve enabled for remaining tools%s\n", Color::GREEN, Color::RESET);
+                std::println("{}[client] auto-approve enabled for remaining tools{}", Color::GREEN, Color::RESET);
             }
             else if (approval == ToolApproval::DENY)
             {
                 item["denied"] = true;
                 item["content"] = "denied by user";
-                printf("%s❌ tool denied: %s%s\n", Color::RED, name.c_str(), Color::RESET);
+                std::println("{}❌ tool denied: {}{}", Color::RED, name, Color::RESET);
                 results.push_back(std::move(item));
                 continue;
             }
         }
 
-        printf("%s⚙️  [tool: %s%s%s]%s\n", Color::CYAN, Color::BOLD, name.c_str(), Color::CYAN, Color::RESET);
-        printf("%s   args: %s%s\n", Color::GRAY, args.dump().c_str(), Color::RESET);
+        std::println("{}⚙️  [tool: {}{}{}]{}", Color::CYAN, Color::BOLD, name, Color::CYAN, Color::RESET);
+        std::println("{}   args: {}{}", Color::GRAY, args.dump(), Color::RESET);
 
         const std::string out = run_tool(tools, name, args);
         item["content"] = out;
@@ -321,8 +324,8 @@ json run_pending_tools(const SessionResponse &session, span<const Tool> tools, C
         {
             preview = preview.substr(0, 200) + "...";
         }
-        std::replace(preview.begin(), preview.end(), '\n', ' ');
-        printf("%s📋 [%zu chars] %s%s\n", Color::MAGENTA, out.size(), preview.c_str(), Color::RESET);
+        std::ranges::replace(preview, '\n', ' ');
+        std::println("{}📋 [{} chars] {}{}", Color::MAGENTA, out.size(), preview, Color::RESET);
 
         results.push_back(std::move(item));
     }
@@ -340,18 +343,18 @@ std::optional<std::string> prompt_question_answer(const SessionResponse &session
     const std::string text = q.text;
     std::vector<std::string> answers = q.answers;
 
-    printf("\n%s❓ %s%s\n", Color::YELLOW, text.c_str(), Color::RESET);
+    std::println("\n{}❓ {}{}", Color::YELLOW, text, Color::RESET);
     if (!answers.empty())
     {
-        for (size_t i = 0; i < answers.size(); ++i)
+        for (const auto &[i, answer] : std::views::enumerate(answers))
         {
-            printf("  %s[%zu]%s %s\n", Color::CYAN, i, Color::RESET, answers[i].c_str());
+            std::println("  {}[{}]{} {}", Color::CYAN, i, Color::RESET, answer);
         }
-        printf("%sChoose index, or type a free-form answer:%s ", Color::BOLD, Color::RESET);
+        std::print("{}Choose index, or type a free-form answer:{} ", Color::BOLD, Color::RESET);
     }
     else
     {
-        printf("%sYour answer:%s ", Color::BOLD, Color::RESET);
+        std::print("{}Your answer:{} ", Color::BOLD, Color::RESET);
     }
     fflush(stdout);
 
@@ -375,7 +378,8 @@ std::optional<std::string> prompt_question_answer(const SessionResponse &session
     if (!answers.empty())
     {
         // pure integer index?
-        bool all_digit = !line.empty() && std::all_of(line.begin(), line.end(), ::isdigit);
+        const bool all_digit =
+            !line.empty() && std::ranges::all_of(line, [](unsigned char c) { return std::isdigit(c) != 0; });
         if (all_digit)
         {
             int idx = std::stoi(line);
@@ -387,7 +391,7 @@ std::optional<std::string> prompt_question_answer(const SessionResponse &session
     }
     if (line.empty())
     {
-        fprintf(stderr, "%sempty answer%s\n", Color::RED, Color::RESET);
+        std::println(stderr, "{}empty answer{}", Color::RED, Color::RESET);
         return std::nullopt;
     }
     return line;
@@ -421,7 +425,7 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
             auto results = run_pending_tools(session, tools, cfg);
             if (results.empty())
             {
-                fprintf(stderr, "%s[client] awaiting_tools but no tool_calls%s\n", Color::RED, Color::RESET);
+                std::println(stderr, "{}[client] awaiting_tools but no tool_calls{}", Color::RED, Color::RESET);
                 return false;
             }
             auto resp = client.post_tool_results(session_id, results);
@@ -441,13 +445,111 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
                 return false;
             }
             const auto resp =
-                client.post_message(session_id, SessionMessageRequest{.content = *ans, .role = ChatMessage::ROLE_USER});
+                client.post_message(session_id,
+                                    SessionMessageRequest{.content = *ans, .role = string(ChatMessage::ROLE_USER)});
             job_key = resp.key;
             continue;
         }
     }
 
     return false;
+}
+
+std::string_view trim_line(std::string_view text)
+{
+    constexpr std::string_view ws = " \t\r";
+    const auto begin = text.find_first_not_of(ws);
+    if (begin == std::string_view::npos)
+    {
+        return {};
+    }
+    const auto end = text.find_last_not_of(ws);
+    return text.substr(begin, end - begin + 1);
+}
+
+// schema_doc is prose ("name: type (description)"), not a model call format.
+json parameters_schema(std::string_view schema_doc)
+{
+    json properties = json::object();
+    json required = json::array();
+    size_t pos = 0;
+    while (pos < schema_doc.size())
+    {
+        const size_t nl = schema_doc.find('\n', pos);
+        const std::string_view line = trim_line(schema_doc.substr(pos, nl == std::string_view::npos ? std::string_view::npos : nl - pos));
+        pos = nl == std::string_view::npos ? schema_doc.size() : nl + 1;
+        if (line.empty() || line.starts_with("arguments"))
+        {
+            continue;
+        }
+        const size_t colon = line.find(':');
+        if (colon == std::string_view::npos || colon == 0)
+        {
+            continue;
+        }
+        const std::string_view name = trim_line(line.substr(0, colon));
+        if (name.empty() || name.find(' ') != std::string_view::npos)
+        {
+            continue;
+        }
+        const std::string_view rest = trim_line(line.substr(colon + 1));
+        const size_t word_end = rest.find_first_of(" \t");
+        const std::string_view type_word = rest.substr(0, word_end);
+        std::string type = "string";
+        if (type_word.starts_with("bool"))
+        {
+            type = "boolean";
+        }
+        else if (type_word.starts_with("int"))
+        {
+            type = "integer";
+        }
+        else if (type_word.starts_with("number"))
+        {
+            type = "number";
+        }
+        else if (type_word.starts_with("array"))
+        {
+            type = "array";
+        }
+        else if (type_word.starts_with("object"))
+        {
+            type = "object";
+        }
+        json spec = {{"type", type}};
+        const size_t open = rest.find('(');
+        const size_t close = rest.rfind(')');
+        if (open != std::string_view::npos && close != std::string_view::npos && close > open)
+        {
+            spec["description"] = std::string(trim_line(rest.substr(open + 1, close - open - 1)));
+        }
+        properties[std::string(name)] = std::move(spec);
+        if (rest.find("optional") == std::string_view::npos)
+        {
+            required.push_back(std::string(name));
+        }
+    }
+    json schema = {{"type", "object"}, {"properties", std::move(properties)}};
+    if (!required.empty())
+    {
+        schema["required"] = std::move(required);
+    }
+    return schema;
+}
+
+ChatTool to_chat_tool(const Tool &tool)
+{
+    ChatTool spec;
+    spec.name = tool.name;
+    spec.description = tool.description;
+    const json schema = parameters_schema(tool.schema_doc);
+    if (schema["properties"].empty() && !tool.schema_doc.empty())
+    {
+        spec.description.push_back('\n');
+        spec.description += tool.schema_doc;
+    }
+    spec.parameters = schema.dump();
+    return spec;
 }
 
 int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
@@ -459,25 +561,16 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
     created_req.tools.reserve(tools.size());
     for (const auto &tool : tools)
     {
-        ChatTool spec;
-        spec.name = tool.name;
-        spec.description = tool.description;
-        if (!tool.schema_doc.empty())
-        {
-            spec.description.push_back('\n');
-            spec.description += tool.schema_doc;
-        }
-        spec.parameters = R"({"type":"object","properties":{}})";
-        created_req.tools.push_back(std::move(spec));
+        created_req.tools.push_back(to_chat_tool(tool));
     }
     auto created = client.create_session(created_req);
     const SessionID session_id = created.id;
 
-    printf("%s[client] session %lud at %s (questions=%s)%s\n", Color::CYAN, session_id, client.base_url().c_str(),
-           cfg.questions ? "true" : "false", Color::RESET);
+    std::println("{}[client] session {} at {} (questions={}){}", Color::CYAN, session_id, client.base_url(),
+                 cfg.questions ? "true" : "false", Color::RESET);
     defer(client.delete_session(session_id));
 
-    auto handle_user_text = [&](const string_view &view) -> bool {
+    auto handle_user_text = [&](const string_view view) -> bool {
         if (view.empty())
         {
             return true;
@@ -485,34 +578,35 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         try
         {
             const auto resp =
-                client.post_message(session_id, SessionMessageRequest{.content = view, .role = ChatMessage::ROLE_USER});
+                client.post_message(session_id,
+                                    SessionMessageRequest{.content = string(view), .role = string(ChatMessage::ROLE_USER)});
             return drive_session_turn(client, session_id, tools, cfg, resp.key);
         }
         catch (const std::exception &e)
         {
-            fprintf(stderr, "%s[client] %s%s\n", Color::RED, e.what(), Color::RESET);
+            std::println(stderr, "{}[client] {}{}", Color::RED, e.what(), Color::RESET);
             return false;
         }
     };
 
-    printf("%sType a message, or /help. Ctrl-C cancels generation. Ctrl-D or /exit to quit.%s\n\n", Color::DIM,
-           Color::RESET);
+    std::println("{}Type a message, or /help. Ctrl-C cancels generation. Ctrl-D or /exit to quit.{}\n", Color::DIM,
+                 Color::RESET);
 
     string line;
     while (true)
     {
         g_interrupt.store(false, std::memory_order_relaxed);
-        printf("%syou>%s ", Color::BOLD, Color::RESET);
+        std::print("{}you>{} ", Color::BOLD, Color::RESET);
         fflush(stdout);
         if (!std::getline(std::cin, line))
         {
             if (g_interrupt.load(std::memory_order_relaxed))
             {
                 std::cin.clear();
-                printf("\n");
+                std::println("");
                 continue;
             }
-            printf("\n");
+            std::println("");
             break;
         }
 
@@ -544,11 +638,11 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
             try
             {
                 auto s = client.get_session(session_id);
-                printf("%s\n", s.to_json().dump(2).c_str());
+                std::println("{}", s.to_json().dump(2));
             }
             catch (const std::exception &e)
             {
-                fprintf(stderr, "%s\n", e.what());
+                std::println(stderr, "{}", e.what());
             }
             continue;
         }
@@ -556,26 +650,26 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         {
             for (const auto &t : tools)
             {
-                printf("  - %s\n", t.name.c_str());
+                std::println("  - {}", t.name);
             }
             continue;
         }
         if (view == "/approval")
         {
             cfg.auto_approve = !cfg.auto_approve;
-            printf("auto-approve: %s\n", cfg.auto_approve ? "on" : "off");
+            std::println("auto-approve: {}", cfg.auto_approve ? "on" : "off");
             continue;
         }
         if (view == "/think")
         {
             cfg.show_think = !cfg.show_think;
-            printf("show-think: %s\n", cfg.show_think ? "on" : "off");
+            std::println("show-think: {}", cfg.show_think ? "on" : "off");
             continue;
         }
 
         handle_user_text(view);
 
-        printf("\n");
+        std::println("");
     }
     return 0;
 }
@@ -593,7 +687,7 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &e)
     {
-        fprintf(stderr, "cli error: %s\n", e.what());
+        std::println(stderr, "cli error: {}", e.what());
         print_usage(argv[0]);
         curl_global_cleanup();
         return 1;
@@ -601,18 +695,18 @@ int main(int argc, char **argv)
 
     if (cfg.port <= 0 || cfg.port > 65535)
     {
-        fprintf(stderr, "invalid port\n");
+        std::println(stderr, "invalid port");
         curl_global_cleanup();
         return 1;
     }
 
     RestClient client(cfg.host, cfg.port);
 
-    printf("%s[client] checking %s ...%s\n", Color::CYAN, client.base_url().c_str(), Color::RESET);
+    std::println("{}[client] checking {} ...{}", Color::CYAN, client.base_url(), Color::RESET);
     if (!client.health())
     {
-        fprintf(stderr, "%s[client] server not reachable at %s (/health)%s\n", Color::RED, client.base_url().c_str(),
-                Color::RESET);
+        std::println(stderr, "{}[client] server not reachable at {} (/health){}", Color::RED, client.base_url(),
+                     Color::RESET);
         curl_global_cleanup();
         return 1;
     }
@@ -627,12 +721,12 @@ int main(int argc, char **argv)
     }
     catch (const RestClient::ClientError &e)
     {
-        fprintf(stderr, "%s[http %d] %s%s\n", Color::RED, e.status, e.what(), Color::RESET);
+        std::println(stderr, "{}[http {}] {}{}", Color::RED, e.status, e.what(), Color::RESET);
         rc = 1;
     }
     catch (const std::exception &e)
     {
-        fprintf(stderr, "%s[client] %s%s\n", Color::RED, e.what(), Color::RESET);
+        std::println(stderr, "{}[client] {}{}", Color::RED, e.what(), Color::RESET);
         rc = 1;
     }
 

@@ -1,36 +1,32 @@
 #include "../sessions/sessions.hpp"
 #include "../agent/response_parse.hpp"
 #include "../api/errors.hpp"
-#include <cstdio>
-#include <sstream>
 
 #include "common/log.hpp"
 
-Sessions::Sessions(Jobs &jobs) : jobs_(jobs)
+Sessions::Sessions(Jobs &jobs, const ModelAdapter &adapter) : jobs_(jobs), adapter_(adapter)
 {
 }
 
 void Sessions::unsafe_gc()
 {
     const auto now = std::chrono::steady_clock::now();
-    for (auto it = sessions_.begin(); it != sessions_.end();)
-    {
-        auto &s = it->second;
-        if (s->is_gc_idle() && now - s->last_active() > kIdleTtl)
+    std::erase_if(sessions_, [&](const auto &entry) {
+        const auto &session = entry.second;
+        if (!session->is_gc_idle() || now - session->last_active() <= kIdleTtl)
         {
-            jobs_.release_session(std::to_string(it->first));
-            it = sessions_.erase(it);
-            continue;
+            return false;
         }
-        ++it;
-    }
+        jobs_.release_session(std::to_string(entry.first));
+        return true;
+    });
 }
 
 shared_ptr<Session> Sessions::create(CreateSessionRequest req)
 {
     log_info("starting a new session");
 
-    auto session = std::make_shared<Session>();
+    auto session = std::make_shared<Session>(adapter_);
     session->configure(std::move(req));
 
     {

@@ -75,6 +75,7 @@ add_executable(callisto_server
         src3/server/jobs/jobs.cpp
         src3/server/sessions/sessions.cpp
         src3/server/agent/response_parse.cpp
+        src3/server/agent/model_adapter.cpp
         src3/common/log.cpp
         src3/server/llm/llm_engine.cpp)
 configure_localai_target(callisto_server)
@@ -146,6 +147,7 @@ target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 add_executable(callisto_tests
         tests/test_llama_engine.cpp
         src3/server/agent/response_parse.cpp
+        src3/server/agent/model_adapter.cpp
         src3/common/log.cpp)
 configure_localai_target(callisto_tests)
 target_include_directories(callisto_tests BEFORE PRIVATE

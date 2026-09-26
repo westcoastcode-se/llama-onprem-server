@@ -1,4 +1,5 @@
 #include "common/log.hpp"
+#include "server/agent/model_adapter.hpp"
 #include "server/api/errors.hpp"
 #include "server/http/json.hpp"
 #include "server/http/routes.hpp"
@@ -8,9 +9,10 @@
 #include <atomic>
 #include <csignal>
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
+#include <format>
 #include <httplib.h>
+#include <print>
 #include <string>
 
 namespace
@@ -37,33 +39,33 @@ void on_signal(int)
 
 void print_usage(const char *argv0)
 {
-    fprintf(stderr,
-            "Usage: %s -m <model.gguf> [options]\n"
-            "  -m PATH       model path (required)\n"
-            "  -c N          context size (default 4096)\n"
-            "  -b N          batch size (default 2048)\n"
-            "  -ngl N        GPU layers (default 99)\n"
-            "  -t F          temperature (default 1.0)\n"
-            "  --top-p F     nucleus sampling (default 0.95)\n"
-            "  --top-k N     top-k sampling (default 20, 0 = off)\n"
-            "  --min-p F     min-p sampling (default 0, 0 = off)\n"
-            "  --presence-penalty F   (default 0)\n"
-            "  --frequency-penalty F  (default 0)\n"
-            "  --repetition-penalty F (default 1.0 = off)\n"
-            "  --penalty-last-n N     penalty window (default 64)\n"
-            "  --seed N      sampler seed (default random)\n"
-            "  --max-tokens N         cap new tokens, -1 = context (default -1)\n"
-            "  --threads N            generation threads, 0 = default\n"
-            "  --threads-batch N      prompt threads, 0 = default\n"
-            "  --flash-attn auto|on|off (default auto)\n"
-            "  --cache-type-k TYPE    KV cache K type (default f16)\n"
-            "  --cache-type-v TYPE    KV cache V type (default f16)\n"
-            "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
-            "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
-            "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
-            "  --host HOST   bind host (default 0.0.0.0)\n"
-            "  -p/--port N   port (default 8080)\n",
-            argv0);
+    std::println(stderr,
+                 "Usage: {} -m <model.gguf> [options]\n"
+                 "  -m PATH       model path (required)\n"
+                 "  -c N          context size (default 4096)\n"
+                 "  -b N          batch size (default 2048)\n"
+                 "  -ngl N        GPU layers (default 99)\n"
+                 "  -t F          temperature (default 1.0)\n"
+                 "  --top-p F     nucleus sampling (default 0.95)\n"
+                 "  --top-k N     top-k sampling (default 20, 0 = off)\n"
+                 "  --min-p F     min-p sampling (default 0, 0 = off)\n"
+                 "  --presence-penalty F   (default 0)\n"
+                 "  --frequency-penalty F  (default 0)\n"
+                 "  --repetition-penalty F (default 1.0 = off)\n"
+                 "  --penalty-last-n N     penalty window (default 64)\n"
+                 "  --seed N      sampler seed (default random)\n"
+                 "  --max-tokens N         cap new tokens, -1 = context (default -1)\n"
+                 "  --threads N            generation threads, 0 = default\n"
+                 "  --threads-batch N      prompt threads, 0 = default\n"
+                 "  --flash-attn auto|on|off (default auto)\n"
+                 "  --cache-type-k TYPE    KV cache K type (default f16)\n"
+                 "  --cache-type-v TYPE    KV cache V type (default f16)\n"
+                 "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
+                 "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
+                 "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
+                 "  --host HOST   bind host (default 0.0.0.0)\n"
+                 "  -p/--port N   port (default 8080)",
+                 argv0);
 }
 } // namespace
 
@@ -81,7 +83,7 @@ int main(int argc, char **argv)
         auto need = [&](const char *name) -> const char * {
             if (i + 1 >= argc)
             {
-                fprintf(stderr, "missing value for %s\n", name);
+                std::println(stderr, "missing value for {}", name);
                 std::exit(1);
             }
             return argv[++i];
@@ -193,7 +195,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            fprintf(stderr, "unknown argument: %s\n", arg.c_str());
+            std::println(stderr, "unknown argument: {}", arg);
             print_usage(argv[0]);
             return 1;
         }
@@ -216,8 +218,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    Jobs jobs(engine);
-    Sessions sessions(jobs);
+    const auto adapter = make_model_adapter(config.model_path, config.template_path);
+    log_info("[llm] assistant format ", adapter->name());
+    Jobs jobs(engine, *adapter);
+    Sessions sessions(jobs, *adapter);
     httplib::Server svr;
 
     g_server = &svr;
@@ -231,7 +235,7 @@ int main(int argc, char **argv)
     svr.set_keep_alive_timeout(300);
 
     // Add simple request logging
-    svr.set_pre_routing_handler([](const auto& req, auto& resp) {
+    svr.set_pre_routing_handler([](const auto &req, auto &) {
         log_info(req.method, " ", req.path);
         return httplib::Server::HandlerResponse::Unhandled;
     });

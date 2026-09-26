@@ -4,34 +4,42 @@
 #include "common/tools.hpp"
 #include "common/color.hpp"
 
-void print_usage(const char *argv0)
+#include <format>
+#include <print>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+inline void print_usage(const char *argv0)
 {
-    printf("\n%sCallisto REST Client%s\n", Color::BOLD, Color::RESET);
-    printf("Talks to callisto_server over HTTP (/v1/sessions).\n\n");
-    printf("Usage:\n");
-    printf("    %s [options] [prompt...]\n\n", argv0);
-    printf("Options:\n");
-    printf("    --host <host>         Server host (default: 127.0.0.1)\n");
-    printf("    -p, --port <int>      Server port (default: 8080)\n");
-    printf("    -c, -e, --command <s> Single prompt, print result, exit\n");
-    printf("    -s <prompt>           Extra system text (sent on session create)\n");
-    printf("    -q, --quiet           Only print assistant output / final result\n");
-    printf("    -y, --yes             Auto-approve all tool calls\n");
-    printf("    --allow-tool <name>   Auto-approve one tool (repeatable)\n");
-    printf("    --allow-tools <list>  Comma-separated auto-approve list\n");
-    printf("    --no-questions        Create session with questions:false\n");
-    printf("    --questions           Create session with questions:true (default)\n");
-    printf("    --show-think          Print model <think> text (hidden by default)\n");
-    printf("    --oneshot             Temp session: one message, no tools loop, then delete\n");
-    printf("    -it <n>               Max tool/question rounds per user turn (default: 40)\n");
-    printf("    -h, --help            Show help\n\n");
-    printf("Interactive commands (session mode):\n");
-    printf("    /exit, /quit          End session\n");
-    printf("    /state                Print session JSON state\n");
-    printf("    /tools                List local tools\n");
-    printf("    /approval             Toggle auto-approve\n");
-    printf("    /think                Toggle printing <think> text\n");
-    printf("    /help                 This help\n\n");
+    std::print("\n{}Callisto REST Client{}\n"
+               "Talks to callisto_server over HTTP (/v1/sessions).\n\n"
+               "Usage:\n"
+               "    {} [options] [prompt...]\n\n"
+               "Options:\n"
+               "    --host <host>         Server host (default: 127.0.0.1)\n"
+               "    -p, --port <int>      Server port (default: 8080)\n"
+               "    -c, -e, --command <s> Single prompt, print result, exit\n"
+               "    -s <prompt>           Extra system text (sent on session create)\n"
+               "    -q, --quiet           Only print assistant output / final result\n"
+               "    -y, --yes             Auto-approve all tool calls\n"
+               "    --allow-tool <name>   Auto-approve one tool (repeatable)\n"
+               "    --allow-tools <list>  Comma-separated auto-approve list\n"
+               "    --no-questions        Create session with questions:false\n"
+               "    --questions           Create session with questions:true (default)\n"
+               "    --show-think          Print model <think> text (hidden by default)\n"
+               "    --oneshot             Temp session: one message, no tools loop, then delete\n"
+               "    -it <n>               Max tool/question rounds per user turn (default: 40)\n"
+               "    -h, --help            Show help\n\n"
+               "Interactive commands (session mode):\n"
+               "    /exit, /quit          End session\n"
+               "    /state                Print session JSON state\n"
+               "    /tools                List local tools\n"
+               "    /approval             Toggle auto-approve\n"
+               "    /think                Toggle printing <think> text\n"
+               "    /help                 This help\n\n",
+               Color::BOLD, Color::RESET, argv0);
 }
 
 struct CliConfig
@@ -54,7 +62,7 @@ struct CliConfig
             auto need = [&](const char *name) -> const char * {
                 if (i + 1 >= argc)
                 {
-                    throw std::runtime_error(std::string("missing value for ") + name);
+                    throw std::runtime_error(std::format("missing value for {}", name));
                 }
                 return argv[++i];
             };
@@ -79,14 +87,14 @@ struct CliConfig
             {
                 cfg.allowed_tools.push_back(need(arg.c_str()));
             }
-            else if (arg.rfind("--allow-tool=", 0) == 0)
+            else if (arg.starts_with("--allow-tool="))
             {
-                cfg.allowed_tools.push_back(arg.substr(13));
+                constexpr std::string_view prefix = "--allow-tool=";
+                cfg.allowed_tools.emplace_back(arg.substr(prefix.size()));
             }
             else if (arg == "--allow-tools" || arg == "--allowed-tools")
             {
-                auto parsed = parse_allowed_tools(need(arg.c_str()));
-                cfg.allowed_tools.insert(cfg.allowed_tools.end(), parsed.begin(), parsed.end());
+                cfg.allowed_tools.append_range(parse_allowed_tools(need(arg.c_str())));
             }
             else if (arg == "--no-questions")
             {
@@ -111,7 +119,7 @@ struct CliConfig
             }
             else
             {
-                throw std::runtime_error{"unknown argument: " + arg};
+                throw std::runtime_error{std::format("unknown argument: {}", arg)};
             }
         }
         return cfg;

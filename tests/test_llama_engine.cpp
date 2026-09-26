@@ -1,10 +1,12 @@
 #include "common/span_prefix.hpp"
+#include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
 
 #include "chat.h"
 
 #include <fstream>
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <string>
 
@@ -53,6 +55,88 @@ void test_tool_parse()
         CHECK(qwen_actions.tool_calls[0].name == "read_file");
         CHECK(qwen_actions.tool_calls[0].arguments.value("path", "") == "/tmp/a.txt");
     }
+
+    const char *qwen_date =
+        "<tool_call>\n<function=execute_command>\n<parameter=command>\ndate \"+%Y-%m-%d %H:%M %Z\"\n</parameter>\n</function>\n</tool_call>";
+    auto date_actions = parse_assistant_actions(qwen_date);
+    CHECK(date_actions.tool_calls.size() == 1);
+    if (!date_actions.tool_calls.empty())
+    {
+        CHECK(date_actions.tool_calls[0].name == "execute_command");
+        CHECK(date_actions.tool_calls[0].arguments.value("command", "") == "date \"+%Y-%m-%d %H:%M %Z\"");
+    }
+
+    BonsaiAdapter bonsai;
+    auto bonsai_actions = parse_assistant_actions(qwen_date, bonsai);
+    CHECK(bonsai_actions.tool_calls.size() == 1);
+    if (!bonsai_actions.tool_calls.empty())
+    {
+        CHECK(bonsai_actions.tool_calls[0].name == "execute_command");
+    }
+
+    const char *deepseek_call =
+        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>execute_command\n"
+        "```json\n"
+        "{\"command\": \"date\"}\n"
+        "```\n"
+        "<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+    DeepseekAdapter deepseek;
+    auto deepseek_actions = parse_assistant_actions(deepseek_call, deepseek);
+    CHECK(deepseek_actions.tool_calls.size() == 1);
+    if (!deepseek_actions.tool_calls.empty())
+    {
+        CHECK(deepseek_actions.tool_calls[0].name == "execute_command");
+        CHECK(deepseek_actions.tool_calls[0].arguments.value("command", "") == "date");
+    }
+
+    const char *deepseek_v3 =
+        "<｜tool▁call▁begin｜>execute_command<｜tool▁sep｜>{\"command\":\"date\"}<｜tool▁call▁end｜>";
+    auto v3_actions = parse_assistant_actions(deepseek_v3, deepseek);
+    CHECK(v3_actions.tool_calls.size() == 1);
+    if (!v3_actions.tool_calls.empty())
+    {
+        CHECK(v3_actions.tool_calls[0].name == "execute_command");
+        CHECK(v3_actions.tool_calls[0].arguments.value("command", "") == "date");
+    }
+}
+
+void test_system_prompt_uses_client_tools()
+{
+    ChatTool tool;
+    tool.name = "ping";
+    tool.description = "Ping a host";
+    tool.parameters =
+        R"({"type":"object","properties":{"host":{"type":"string","description":"hostname"}},"required":["host"]})";
+    const std::span<const ChatTool> tools(&tool, 1);
+
+    const QwenAdapter qwen;
+    const std::string qwen_prompt = default_agent_system_prompt(qwen, tools, "Be brief", true);
+    CHECK(qwen_prompt.find("<function=ping>") != std::string::npos);
+    CHECK(qwen_prompt.find("<parameter=host>") != std::string::npos);
+    CHECK(qwen_prompt.find("Ping a host") != std::string::npos);
+    CHECK(qwen_prompt.find("Be brief") != std::string::npos);
+    CHECK(qwen_prompt.find("execute_command") == std::string::npos);
+
+    const DeepseekAdapter deepseek;
+    const std::string deepseek_prompt = default_agent_system_prompt(deepseek, tools, "", false);
+    CHECK(deepseek_prompt.find("<｜tool▁sep｜>ping") != std::string::npos);
+    CHECK(deepseek_prompt.find("\"host\"") != std::string::npos);
+    CHECK(deepseek_prompt.find("When several approaches") == std::string::npos);
+}
+
+void test_model_adapter_selection()
+{
+    const auto qwen = make_model_adapter("models/Qwen3.8-27B.gguf", "");
+    CHECK(qwen->name() == "qwen");
+
+    const auto deepseek = make_model_adapter("models/DeepSeek-V3.gguf", "");
+    CHECK(deepseek->name() == "deepseek");
+
+    const auto bonsai = make_model_adapter("models/Qwen3.gguf", "templates/Ternary-Bonsai-2-27B-gguf.jinja");
+    CHECK(bonsai->name() == "bonsai");
+
+    const auto fallback = make_model_adapter("models/unknown.gguf", "");
+    CHECK(fallback->name() == "qwen");
 }
 
 std::string read_file(const std::string &path)
@@ -132,6 +216,8 @@ int main()
 {
     test_prefix();
     test_tool_parse();
+    test_system_prompt_uses_client_tools();
+    test_model_adapter_selection();
     test_qwen_template();
     if (g_fails != 0)
     {

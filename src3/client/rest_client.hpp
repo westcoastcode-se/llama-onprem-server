@@ -4,6 +4,7 @@
 #include "../common/std.hpp"
 #include "common/log.hpp"
 
+#include <format>
 #include <functional>
 #include <httplib.h>
 #include <stdexcept>
@@ -15,7 +16,7 @@
 class RestClient
 {
   public:
-    using TokenCallback = std::function<bool(const string& piece)>;
+    using TokenCallback = std::move_only_function<bool(const string &piece)>;
 
     struct ClientError : std::runtime_error
     {
@@ -38,7 +39,7 @@ class RestClient
 
     [[nodiscard]] std::string base_url() const
     {
-        return "http://" + base_host_ + ":" + std::to_string(port_);
+        return std::format("http://{}:{}", base_host_, port_);
     }
 
     [[nodiscard]] const std::string &host() const
@@ -104,11 +105,11 @@ class RestClient
         auto res = cli_.Delete("/v1/sessions/" + std::to_string(id));
         if (!res)
         {
-            throw ClientError(0, "", "delete session failed: no response from " + base_url());
+            throw ClientError(0, "", std::format("delete session failed: no response from {}", base_url()));
         }
         if (res->status != 200 && res->status != 404)
         {
-            throw ClientError(res->status, res->body, "DELETE /v1/sessions/" + std::to_string(id) + " failed");
+            throw ClientError(res->status, res->body, std::format("DELETE /v1/sessions/{} failed", id));
         }
     }
 
@@ -161,7 +162,7 @@ class RestClient
      * chunked body. Returning false makes cpp-httplib treat the call as
      * Error::Canceled with a null Result (looks like "no response").
      */
-    string stream_tokens(const SessionID session_id, const JobKey key, const TokenCallback &cb = nullptr)
+    string stream_tokens(const SessionID session_id, const JobKey key, TokenCallback cb = {})
     {
         std::string accumulated;
         std::string line_buf;
@@ -197,7 +198,7 @@ class RestClient
                                 json j = json::parse(line, nullptr, false);
                                 if (j.is_discarded())
                                 {
-                                    throw BadRequest{"token stream returned an invalid json: '" + line + "'"};
+                                    throw BadRequest{std::format("token stream returned an invalid json: '{}'", line)};
                                 }
 
                                 // Collect all tokens received from the server
@@ -226,14 +227,13 @@ class RestClient
                 return accumulated;
             }
             const auto err = res.error();
-            throw ClientError(0, "",
-                        "token stream failed: no response for job " + std::to_string(key) + " (httplib error " +
-                            std::to_string(static_cast<int>(err)) + ")");
+            throw ClientError(0, "", std::format("token stream failed: no response for job {} (httplib error {})", key,
+                                                 static_cast<int>(err)));
         }
         if (res->status != 200)
         {
             throw ClientError(res->status, res->body,
-                        "GET /v1/sessions/" + std::to_string(session_id) + "/jobs/" + std::to_string(key) + "/tokens failed");
+                              std::format("GET /v1/sessions/{}/jobs/{}/tokens failed", session_id, key));
         }
         return accumulated;
     }
@@ -247,35 +247,35 @@ class RestClient
     {
         httplib::Result res;
         const std::string payload = body ? body->dump() : "";
-        if (std::string(method) == "GET")
+        const std::string_view verb = method;
+        if (verb == "GET")
         {
             res = cli_.Get(path);
         }
-        else if (std::string(method) == "POST")
+        else if (verb == "POST")
         {
             res = cli_.Post(path, payload, "application/json");
         }
-        else if (std::string(method) == "DELETE")
+        else if (verb == "DELETE")
         {
             res = cli_.Delete(path);
         }
         else
         {
-            throw ClientError(0, "", std::string("unsupported method ") + method);
+            throw ClientError(0, "", std::format("unsupported method {}", method));
         }
 
         if (!res)
         {
-            throw ClientError(0, "", std::string(method) + " " + path + " failed: no response from " + base_url());
+            throw ClientError(0, "", std::format("{} {} failed: no response from {}", method, path, base_url()));
         }
         if (res->status != expect_status)
         {
-            std::string msg = std::string(method) + " " + path + " → HTTP " + std::to_string(res->status);
+            std::string msg = std::format("{} {} → HTTP {}", method, path, res->status);
             try
             {
                 const auto error_resp = ErrorResponse::from_json(json::parse(res->body));
-                msg += ": error_code(" + std::to_string(error_resp.error_code) + ") ";
-                msg += error_resp.message;
+                msg += std::format(": error_code({}) {}", error_resp.error_code, error_resp.message);
             }
             catch (...)
             {

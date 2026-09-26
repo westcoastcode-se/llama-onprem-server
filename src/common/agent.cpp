@@ -5,19 +5,25 @@
 #include "common/utf8.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <format>
 #include <iostream>
+#include <print>
 
-void print_slash_commands_help() {
-    printf("\n%sAvailable Agent Commands:%s\n", Color::BOLD, Color::RESET);
-    printf("  %s/exec <cmd>, /sh <cmd>%s - Run a shell command directly and print result to stdout\n", Color::CYAN, Color::RESET);
-    printf("  %s/tools%s           - List all available tools and their parameter schemas\n", Color::CYAN, Color::RESET);
-    printf("  %s/subagents%s       - Toggle sub-agent tool delegation (enable/disable)\n", Color::CYAN, Color::RESET);
-    printf("  %s/approval%s        - Toggle tool approval mode (Require approval / Auto-approve)\n", Color::CYAN, Color::RESET);
-    printf("  %s/context%s         - Show current context usage and memory statistics\n", Color::CYAN, Color::RESET);
-    printf("  %s/compact%s         - Manually compact conversation context history\n", Color::CYAN, Color::RESET);
-    printf("  %s/clear, /reset%s   - Clear conversation history and reset context memory\n", Color::CYAN, Color::RESET);
-    printf("  %s/system%s          - Show the active agent system prompt\n", Color::CYAN, Color::RESET);
-    printf("  %s/exit, /quit%s     - Terminate session\n\n", Color::CYAN, Color::RESET);
+void print_slash_commands_help()
+{
+    std::print("\n{}Available Agent Commands:{}\n"
+               "  {}/exec <cmd>, /sh <cmd>{} - Run a shell command directly and print result to stdout\n"
+               "  {}/tools{}           - List all available tools and their parameter schemas\n"
+               "  {}/subagents{}       - Toggle sub-agent tool delegation (enable/disable)\n"
+               "  {}/approval{}        - Toggle tool approval mode (Require approval / Auto-approve)\n"
+               "  {}/context{}         - Show current context usage and memory statistics\n"
+               "  {}/compact{}         - Manually compact conversation context history\n"
+               "  {}/clear, /reset{}   - Clear conversation history and reset context memory\n"
+               "  {}/system{}          - Show the active agent system prompt\n"
+               "  {}/exit, /quit{}     - Terminate session\n\n",
+               Color::BOLD, Color::RESET, Color::CYAN, Color::RESET, Color::CYAN, Color::RESET, Color::CYAN,
+               Color::RESET, Color::CYAN, Color::RESET, Color::CYAN, Color::RESET, Color::CYAN, Color::RESET,
+               Color::CYAN, Color::RESET, Color::CYAN, Color::RESET, Color::CYAN, Color::RESET);
 }
 
 bool compact_context(IAgentBackend & backend,
@@ -25,14 +31,14 @@ bool compact_context(IAgentBackend & backend,
                     bool quiet) {
     if (messages.size() <= 2) {
         if (!quiet) {
-            printf("%s[agent] Conversation history is already minimal (no older messages to compact).%s\n\n",
-                   Color::YELLOW, Color::RESET);
+            std::println("{}[agent] Conversation history is already minimal (no older messages to compact).{}\n",
+                         Color::YELLOW, Color::RESET);
         }
         return false;
     }
 
     if (!quiet) {
-        printf("%s[agent] Compacting conversation context...%s\n", Color::CYAN, Color::RESET);
+        std::println("{}[agent] Compacting conversation context...{}", Color::CYAN, Color::RESET);
     }
 
     size_t keep_recent = 2;
@@ -59,8 +65,8 @@ bool compact_context(IAgentBackend & backend,
     backend.reset_context();
 
     if (!quiet) {
-        printf("%s[agent] Context compacted successfully: reduced from %zu to %zu messages.%s\n\n",
-               Color::GREEN, prev_count, messages.size(), Color::RESET);
+        std::println("{}[agent] Context compacted successfully: reduced from {} to {} messages.{}\n", Color::GREEN,
+                     prev_count, messages.size(), Color::RESET);
     }
     return true;
 }
@@ -75,12 +81,14 @@ std::string run_subagent(IAgentBackend & backend,
                          std::span<const std::string> allowed_tools,
                          bool quiet) {
     if (!quiet) {
-        printf("%s\n🤖 [sub-agent started] Task: %.*s%s\n", Color::CYAN, static_cast<int>(task.size()), task.data(), Color::RESET);
+        std::println("{}\n🤖 [sub-agent started] Task: {}{}", Color::CYAN, task, Color::RESET);
     }
 
-    std::string sub_custom_prompt = custom_system_prompt.empty()
-        ? "You are a focused sub-agent tasked with solving a specific sub-task. Use your tools efficiently, execute any necessary tools to accomplish the task, and provide a comprehensive final answer."
-        : std::string(custom_system_prompt) + "\nYou are a focused sub-agent tasked with solving a specific sub-task. Use your tools efficiently, execute any necessary tools to accomplish the task, and provide a comprehensive final answer.";
+    const std::string focused =
+        "You are a focused sub-agent tasked with solving a specific sub-task. Use your tools efficiently, execute any "
+        "necessary tools to accomplish the task, and provide a comprehensive final answer.";
+    const std::string sub_custom_prompt =
+        custom_system_prompt.empty() ? focused : std::format("{}\n{}", custom_system_prompt, focused);
 
     const std::string sub_system_prompt = build_system_prompt(base_tools, sub_custom_prompt);
     std::vector<Protocol::ChatMessage> sub_messages;
@@ -94,10 +102,13 @@ std::string run_subagent(IAgentBackend & backend,
     for (int iter = 0; iter < max_iterations; ++iter) {
         ThinkingStreamFilter stream_filter([quiet](std::string_view piece, bool is_thinking) {
             if (!quiet) {
-                if (is_thinking) {
-                    printf("%s%.*s%s", Color::DIM, static_cast<int>(piece.size()), piece.data(), Color::RESET);
-                } else {
-                    printf("%s%.*s", Color::DIM, static_cast<int>(piece.size()), piece.data());
+                if (is_thinking)
+                {
+                    std::print("{}{}{}", Color::DIM, piece, Color::RESET);
+                }
+                else
+                {
+                    std::print("{}{}", Color::DIM, piece);
                 }
                 fflush(stdout);
             }
@@ -109,7 +120,7 @@ std::string run_subagent(IAgentBackend & backend,
         }, temperature);
         stream_filter.flush();
         if (!quiet) {
-            printf("%s\n", Color::RESET);
+            std::println("{}", Color::RESET);
         }
 
         if (response.empty()) {
@@ -136,7 +147,7 @@ std::string run_subagent(IAgentBackend & backend,
 
             if (duplicate_tool_count >= 3) {
                 if (!quiet) {
-                    printf("%s  [sub-agent loop detected: skipping duplicate tool call]%s\n", Color::RED, Color::RESET);
+                    std::println("{}  [sub-agent loop detected: skipping duplicate tool call]{}", Color::RED, Color::RESET);
                 }
                 std::string loop_warning = "<tool_response>\nerror: repeated identical tool call detected. Please provide your final answer or try a different approach.\n</tool_response>";
                 sub_messages.push_back({"tool", loop_warning});
@@ -151,15 +162,17 @@ std::string run_subagent(IAgentBackend & backend,
                     if (approval == ToolApproval::ALWAYS) {
                         auto_approve = true;
                         if (!quiet) {
-                            printf("%s[sub-agent] Alltid godkänn aktiverat: efterföljande verktygsanrop tillåts automatiskt.%s\n",
-                                   Color::GREEN, Color::RESET);
+                            std::println("{}[sub-agent] Alltid godkänn aktiverat: efterföljande verktygsanrop tillåts automatiskt.{}",
+                                         Color::GREEN, Color::RESET);
                         }
                     } else if (approval == ToolApproval::DENY) {
                         if (!quiet) {
-                            printf("%s❌ [sub-agent verktygskörning nekades av användaren / Tool execution denied by user: %s]%s\n",
-                                   Color::RED, tc.name.c_str(), Color::RESET);
+                            std::println("{}❌ [sub-agent verktygskörning nekades av användaren / Tool execution denied by user: {}]{}",
+                                         Color::RED, tc.name, Color::RESET);
                         }
-                        std::string denial_msg = "<tool_response>\nerror: tool execution was denied by the user for tool '" + tc.name + "'.\n</tool_response>";
+                        const std::string denial_msg = std::format(
+                            "<tool_response>\nerror: tool execution was denied by the user for tool '{}'.\n</tool_response>",
+                            tc.name);
                         sub_messages.push_back({"tool", denial_msg});
                         stop_execution = true;
                         break;
@@ -168,13 +181,13 @@ std::string run_subagent(IAgentBackend & backend,
 
                 if (!quiet) {
                     if (tool_calls.size() > 1) {
-                        printf("%s  ⚙️ [sub-agent action (%zu/%zu): %s%s%s]%s\n",
-                               Color::CYAN, idx + 1, tool_calls.size(), Color::BOLD, tc.name.c_str(), Color::CYAN, Color::RESET);
+                        std::println("{}  ⚙️ [sub-agent action ({}/{}): {}{}{}]{}", Color::CYAN, idx + 1, tool_calls.size(),
+                                     Color::BOLD, tc.name, Color::CYAN, Color::RESET);
                     } else {
-                        printf("%s  ⚙️ [sub-agent action: %s%s%s]%s\n",
-                               Color::CYAN, Color::BOLD, tc.name.c_str(), Color::CYAN, Color::RESET);
+                        std::println("{}  ⚙️ [sub-agent action: {}{}{}]{}", Color::CYAN, Color::BOLD, tc.name, Color::CYAN,
+                                     Color::RESET);
                     }
-                    printf("%s     Args: %s%s\n", Color::GRAY, tc.arguments.dump(2).c_str(), Color::RESET);
+                    std::println("{}     Args: {}{}", Color::GRAY, tc.arguments.dump(2), Color::RESET);
                 }
 
                 const std::string tool_result = run_tool(base_tools, tc.name, tc.arguments);
@@ -184,12 +197,12 @@ std::string run_subagent(IAgentBackend & backend,
                     if (preview.size() > 140) {
                         preview = preview.substr(0, 140) + "...";
                     }
-                    std::replace(preview.begin(), preview.end(), '\n', ' ');
-                    printf("%s  📋 [sub-agent observation (%zu chars): %s]%s\n",
-                           Color::MAGENTA, tool_result.size(), preview.c_str(), Color::RESET);
+                    std::ranges::replace(preview, '\n', ' ');
+                    std::println("{}  📋 [sub-agent observation ({} chars): {}]{}", Color::MAGENTA, tool_result.size(),
+                                 preview, Color::RESET);
                 }
 
-                const std::string tool_message = "<tool_response>\n" + tool_result + "\n</tool_response>";
+                const std::string tool_message = std::format("<tool_response>\n{}\n</tool_response>", tool_result);
                 sub_messages.push_back({"tool", tool_message});
             }
 
@@ -208,7 +221,8 @@ std::string run_subagent(IAgentBackend & backend,
 
             if (duplicate_tool_count >= 3) {
                 if (!quiet) {
-                    printf("%s  [sub-agent loop detected: skipping duplicate invalid tool call]%s\n", Color::RED, Color::RESET);
+                    std::println("{}  [sub-agent loop detected: skipping duplicate invalid tool call]{}", Color::RED,
+                                 Color::RESET);
                 }
                 std::string loop_warning = "<tool_response>\nerror: repeated invalid tool call detected. Please provide your final answer or try a different approach.\n</tool_response>";
                 sub_messages.push_back({"tool", loop_warning});
@@ -216,23 +230,23 @@ std::string run_subagent(IAgentBackend & backend,
             }
 
             if (!quiet) {
-                printf("%s❌ [sub-agent felaktig JSON i verktygsanrop / Invalid JSON in tool call: %s]%s\n",
-                       Color::RED, parse_error.c_str(), Color::RESET);
+                std::println("{}❌ [sub-agent felaktig JSON i verktygsanrop / Invalid JSON in tool call: {}]{}", Color::RED,
+                             parse_error, Color::RESET);
             }
-            const std::string tool_message = "<tool_response>\nerror: " + parse_error + "\n</tool_response>";
+            const std::string tool_message = std::format("<tool_response>\nerror: {}\n</tool_response>", parse_error);
             sub_messages.push_back({"tool", tool_message});
             continue;
         }
 
         final_answer = strip_think_tags(response);
         if (!quiet) {
-            printf("%s🤖 [sub-agent completed task successfully]%s\n", Color::GREEN, Color::RESET);
+            std::println("{}🤖 [sub-agent completed task successfully]{}", Color::GREEN, Color::RESET);
         }
         return final_answer;
     }
 
     if (!quiet) {
-        printf("%s🤖 [sub-agent iteration limit reached]%s\n", Color::YELLOW, Color::RESET);
+        std::println("{}🤖 [sub-agent iteration limit reached]{}", Color::YELLOW, Color::RESET);
     }
     if (!sub_messages.empty() && sub_messages.back().role == "assistant") {
         return strip_think_tags(sub_messages.back().content);
@@ -259,7 +273,7 @@ bool execute_agent_turn(IAgentBackend & backend,
             std::string cmd(cmd_view.substr(first_non));
             nlohmann::json args = {{"command", cmd}};
             std::string res = run_tool(tools, "execute_command", args);
-            printf("%s\n", res.c_str());
+            std::println("{}", res);
             if (out_response) *out_response = res;
         }
         return true;
@@ -272,8 +286,8 @@ bool execute_agent_turn(IAgentBackend & backend,
         if (Context::should_compact(used_ctx, n_ctx) && messages.size() > 2) {
             if (!quiet) {
                 float pct = Context::get_usage_percentage(used_ctx, n_ctx);
-                printf("%s[agent] Context usage high (%d / %d tokens, %.1f%%). Automatically compacting context...%s\n",
-                       Color::YELLOW, used_ctx, n_ctx, pct, Color::RESET);
+                std::println("{}[agent] Context usage high ({} / {} tokens, {:.1f}%). Automatically compacting context...{}",
+                             Color::YELLOW, used_ctx, n_ctx, pct, Color::RESET);
             }
             compact_context(backend, messages, quiet);
         }
@@ -295,8 +309,9 @@ bool execute_agent_turn(IAgentBackend & backend,
             if (Context::should_compact(used_ctx, n_ctx) && messages.size() > 2) {
                 if (!quiet) {
                     float pct = Context::get_usage_percentage(used_ctx, n_ctx);
-                    printf("%s[agent] Context usage high (%d / %d tokens, %.1f%%). Automatically compacting context...%s\n",
-                           Color::YELLOW, used_ctx, n_ctx, pct, Color::RESET);
+                    std::println(
+                        "{}[agent] Context usage high ({} / {} tokens, {:.1f}%). Automatically compacting context...{}",
+                        Color::YELLOW, used_ctx, n_ctx, pct, Color::RESET);
                 }
                 compact_context(backend, messages, quiet);
             }
@@ -304,10 +319,13 @@ bool execute_agent_turn(IAgentBackend & backend,
 
         ThinkingStreamFilter stream_filter([quiet](std::string_view piece, bool is_thinking) {
             if (!quiet) {
-                if (is_thinking) {
-                    printf("%s%.*s%s", Color::DIM, static_cast<int>(piece.size()), piece.data(), Color::RESET);
-                } else {
-                    printf("%s%.*s", Color::YELLOW, static_cast<int>(piece.size()), piece.data());
+                if (is_thinking)
+                {
+                    std::print("{}{}{}", Color::DIM, piece, Color::RESET);
+                }
+                else
+                {
+                    std::print("{}{}", Color::YELLOW, piece);
                 }
                 fflush(stdout);
             }
@@ -319,7 +337,7 @@ bool execute_agent_turn(IAgentBackend & backend,
         }, temperature);
         stream_filter.flush();
         if (!quiet) {
-            printf("%s\n", Color::RESET);
+            std::println("{}", Color::RESET);
         }
 
         if (response.empty()) {
@@ -348,7 +366,7 @@ bool execute_agent_turn(IAgentBackend & backend,
 
             if (duplicate_tool_count >= 3) {
                 if (!quiet) {
-                    printf("%s[agent loop detected: skipping duplicate tool call]%s\n", Color::RED, Color::RESET);
+                    std::println("{}[agent loop detected: skipping duplicate tool call]{}", Color::RED, Color::RESET);
                 }
                 std::string loop_warning = "<tool_response>\nerror: repeated identical tool call detected. Please provide your final answer or try a different approach.\n</tool_response>";
                 messages.push_back({"tool", loop_warning});
@@ -363,15 +381,17 @@ bool execute_agent_turn(IAgentBackend & backend,
                     if (approval == ToolApproval::ALWAYS) {
                         auto_approve = true;
                         if (!quiet) {
-                            printf("%s[agent] Alltid godkänn aktiverat: efterföljande verktygsanrop tillåts automatiskt.%s\n",
-                                   Color::GREEN, Color::RESET);
+                            std::println("{}[agent] Alltid godkänn aktiverat: efterföljande verktygsanrop tillåts automatiskt.{}",
+                                         Color::GREEN, Color::RESET);
                         }
                     } else if (approval == ToolApproval::DENY) {
                         if (!quiet) {
-                            printf("%s❌ [Verktygskörning nekades av användaren / Tool execution denied by user: %s]%s\n",
-                                   Color::RED, tc.name.c_str(), Color::RESET);
+                            std::println("{}❌ [Verktygskörning nekades av användaren / Tool execution denied by user: {}]{}",
+                                         Color::RED, tc.name, Color::RESET);
                         }
-                        std::string denial_msg = "<tool_response>\nerror: tool execution was denied by the user for tool '" + tc.name + "'.\n</tool_response>";
+                        const std::string denial_msg = std::format(
+                            "<tool_response>\nerror: tool execution was denied by the user for tool '{}'.\n</tool_response>",
+                            tc.name);
                         messages.push_back({"tool", denial_msg});
                         stop_execution = true;
                         break;
@@ -380,13 +400,13 @@ bool execute_agent_turn(IAgentBackend & backend,
 
                 if (!quiet) {
                     if (tool_calls.size() > 1) {
-                        printf("%s⚙️  [Agent Action (%zu/%zu): %s%s%s]%s\n",
-                               Color::CYAN, idx + 1, tool_calls.size(), Color::BOLD, tc.name.c_str(), Color::CYAN, Color::RESET);
+                        std::println("{}⚙️  [Agent Action ({}/{}): {}{}{}]{}", Color::CYAN, idx + 1, tool_calls.size(),
+                                     Color::BOLD, tc.name, Color::CYAN, Color::RESET);
                     } else {
-                        printf("%s⚙️  [Agent Action: %s%s%s]%s\n",
-                               Color::CYAN, Color::BOLD, tc.name.c_str(), Color::CYAN, Color::RESET);
+                        std::println("{}⚙️  [Agent Action: {}{}{}]{}", Color::CYAN, Color::BOLD, tc.name, Color::CYAN,
+                                     Color::RESET);
                     }
-                    printf("%s   Args: %s%s\n", Color::GRAY, tc.arguments.dump(2).c_str(), Color::RESET);
+                    std::println("{}   Args: {}{}", Color::GRAY, tc.arguments.dump(2), Color::RESET);
                 }
 
                 const std::string tool_result = run_tool(tools, tc.name, tc.arguments);
@@ -396,12 +416,12 @@ bool execute_agent_turn(IAgentBackend & backend,
                     if (preview.size() > 180) {
                         preview = preview.substr(0, 180) + "...";
                     }
-                    std::replace(preview.begin(), preview.end(), '\n', ' ');
-                    printf("%s📋 [Observation (%zu chars): %s]%s\n",
-                   Color::MAGENTA, tool_result.size(), preview.c_str(), Color::RESET);
+                    std::ranges::replace(preview, '\n', ' ');
+                    std::println("{}📋 [Observation ({} chars): {}]{}", Color::MAGENTA, tool_result.size(), preview,
+                                 Color::RESET);
                 }
 
-                const std::string tool_message = "<tool_response>\n" + tool_result + "\n</tool_response>";
+                const std::string tool_message = std::format("<tool_response>\n{}\n</tool_response>", tool_result);
                 messages.push_back({"tool", tool_message});
             }
 
@@ -420,7 +440,7 @@ bool execute_agent_turn(IAgentBackend & backend,
 
             if (duplicate_tool_count >= 3) {
                 if (!quiet) {
-                    printf("%s[agent loop detected: skipping duplicate invalid tool call]%s\n", Color::RED, Color::RESET);
+                    std::println("{}[agent loop detected: skipping duplicate invalid tool call]{}", Color::RED, Color::RESET);
                 }
                 std::string loop_warning = "<tool_response>\nerror: repeated invalid tool call detected. Please provide your final answer or try a different approach.\n</tool_response>";
                 messages.push_back({"tool", loop_warning});
@@ -428,10 +448,10 @@ bool execute_agent_turn(IAgentBackend & backend,
             }
 
             if (!quiet) {
-                printf("%s❌ [Felaktig JSON i verktygsanrop / Invalid JSON in tool call: %s]%s\n",
-                       Color::RED, parse_error.c_str(), Color::RESET);
+                std::println("{}❌ [Felaktig JSON i verktygsanrop / Invalid JSON in tool call: {}]{}", Color::RED,
+                             parse_error, Color::RESET);
             }
-            const std::string tool_message = "<tool_response>\nerror: " + parse_error + "\n</tool_response>";
+            const std::string tool_message = std::format("<tool_response>\nerror: {}\n</tool_response>", parse_error);
             messages.push_back({"tool", tool_message});
             continue;
         }
@@ -442,15 +462,15 @@ bool execute_agent_turn(IAgentBackend & backend,
 
     if (quiet) {
         std::string cleaned = strip_think_tags(final_turn_response);
-        printf("%s\n", cleaned.c_str());
+        std::println("{}", cleaned);
     } else {
         int used_ctx = backend.get_used_context();
         int n_ctx = backend.get_context_size();
         if (n_ctx > 0 && used_ctx > 0) {
             float pct = Context::get_usage_percentage(used_ctx, n_ctx);
-            printf("%s📊 [Context: %d / %d tokens (%.1f%%)]%s\n", Color::DIM, used_ctx, n_ctx, pct, Color::RESET);
+            std::println("{}📊 [Context: {} / {} tokens ({:.1f}%)]{}", Color::DIM, used_ctx, n_ctx, pct, Color::RESET);
         }
-        printf("\n");
+        std::println("");
     }
 
     if (out_response) *out_response = strip_think_tags(final_turn_response);
@@ -482,21 +502,21 @@ int run_agent_session(IAgentBackend & backend,
         return ok ? 0 : 1;
     }
 
-    printf("%s=======================================================%s\n", Color::CYAN, Color::RESET);
-    printf("%s        %.*s         %s\n", Color::BOLD, static_cast<int>(mode_title.size()), mode_title.data(), Color::RESET);
+    std::println("{}======================================================={}", Color::CYAN, Color::RESET);
+    std::println("{}        {}         {}", Color::BOLD, mode_title, Color::RESET);
     if (!extra_info.empty()) {
-        printf("  %.*s\n", static_cast<int>(extra_info.size()), extra_info.data());
+        std::println("  {}", extra_info);
     }
-    printf("  Tools registered: %zu | Sub-agents: %s | Approval: %s | Context: %d | Temp: %.2f\n",
-           tools.size(), config.enable_subagents ? "ENABLED" : "DISABLED",
-           config.auto_approve ? "AUTO-APPROVE" : "REQUIRE APPROVAL",
-           backend.get_context_size(), config.temperature);
-    printf("  Type %s/help%s for commands, %s/tools%s to list available tools\n",
-           Color::GREEN, Color::RESET, Color::GREEN, Color::RESET);
-    printf("%s=======================================================%s\n\n", Color::CYAN, Color::RESET);
+    std::println("  Tools registered: {} | Sub-agents: {} | Approval: {} | Context: {} | Temp: {:.2f}", tools.size(),
+                 config.enable_subagents ? "ENABLED" : "DISABLED",
+                 config.auto_approve ? "AUTO-APPROVE" : "REQUIRE APPROVAL", backend.get_context_size(),
+                 config.temperature);
+    std::println("  Type {}/help{} for commands, {}/tools{} to list available tools", Color::GREEN, Color::RESET,
+                 Color::GREEN, Color::RESET);
+    std::println("{}======================================================={}\n", Color::CYAN, Color::RESET);
 
     while (true) {
-        printf("%s%sagent> %s", Color::BOLD, Color::GREEN, Color::RESET);
+        std::print("{}{}agent> {}", Color::BOLD, Color::GREEN, Color::RESET);
         std::string user_input;
         if (!std::getline(std::cin, user_input)) {
             break;
@@ -516,7 +536,7 @@ int run_agent_session(IAgentBackend & backend,
 
         // Handle slash commands
         if (user_input == "/exit" || user_input == "/quit") {
-            printf("%sExiting agent session.%s\n", Color::YELLOW, Color::RESET);
+            std::println("{}Exiting agent session.{}", Color::YELLOW, Color::RESET);
             break;
         }
 
@@ -532,15 +552,17 @@ int run_agent_session(IAgentBackend & backend,
             if (!messages.empty()) {
                 messages[0] = {"system", system_prompt};
             }
-            printf("%s[agent] Sub-agents are now %s.%s\n\n",
-                   Color::CYAN, config.enable_subagents ? "ENABLED" : "DISABLED", Color::RESET);
+            std::println("{}[agent] Sub-agents are now {}.{}\n", Color::CYAN,
+                         config.enable_subagents ? "ENABLED" : "DISABLED", Color::RESET);
             continue;
         }
 
         if (user_input == "/approval" || user_input == "/approve" || user_input == "/confirm") {
             config.auto_approve = !config.auto_approve;
-            printf("%s[agent] Tool approval mode: %s%s\n\n",
-                   Color::CYAN, config.auto_approve ? "AUTO-APPROVE (always allow)" : "REQUIRE APPROVAL (prompt ja/nej/alltid ja)", Color::RESET);
+            std::println("{}[agent] Tool approval mode: {}{}\n", Color::CYAN,
+                         config.auto_approve ? "AUTO-APPROVE (always allow)"
+                                             : "REQUIRE APPROVAL (prompt ja/nej/alltid ja)",
+                         Color::RESET);
             continue;
         }
 
@@ -556,18 +578,19 @@ int run_agent_session(IAgentBackend & backend,
         }
 
         if (user_input == "/tools") {
-            printf("\n%sRegistered Agent Tools:%s\n", Color::BOLD, Color::RESET);
+            std::println("\n{}Registered Agent Tools:{}", Color::BOLD, Color::RESET);
             for (const auto & tool : tools) {
-                printf("\n%s• %s%s\n", Color::CYAN, tool.name.c_str(), Color::RESET);
-                printf("  %sDescription:%s %s\n", Color::DIM, Color::RESET, tool.description.c_str());
-                printf("  %sSchema:%s\n    %s\n", Color::DIM, Color::RESET, tool.schema_doc.c_str());
+                std::println("\n{}• {}{}", Color::CYAN, tool.name, Color::RESET);
+                std::println("  {}Description:{} {}", Color::DIM, Color::RESET, tool.description);
+                std::println("  {}Schema:{}\n    {}", Color::DIM, Color::RESET, tool.schema_doc);
             }
-            printf("\n");
+            std::println("");
             continue;
         }
 
         if (user_input == "/system") {
-            printf("\n%sCurrent System Prompt:%s\n%s%s%s\n\n", Color::BOLD, Color::RESET, Color::GRAY, system_prompt.c_str(), Color::RESET);
+            std::println("\n{}Current System Prompt:{}\n{}{}{}\n", Color::BOLD, Color::RESET, Color::GRAY, system_prompt,
+                         Color::RESET);
             continue;
         }
 
@@ -575,7 +598,7 @@ int run_agent_session(IAgentBackend & backend,
             messages.clear();
             messages.push_back({"system", system_prompt});
             backend.reset_context();
-            printf("%s[agent] Conversation history and context memory reset.%s\n\n", Color::GREEN, Color::RESET);
+            std::println("{}[agent] Conversation history and context memory reset.{}\n", Color::GREEN, Color::RESET);
             continue;
         }
 

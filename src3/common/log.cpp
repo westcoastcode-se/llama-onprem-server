@@ -1,38 +1,44 @@
 #include "log.hpp"
-#include <iostream>
+
+#include <print>
+#include <utility>
 
 namespace
 {
-int logger_level = Logger::LEVEL_INFO;
-}
+LogLevel logger_level = LogLevel::Info;
 
-bool Logger::is_level(const int level)
+constexpr std::string_view level_tag(LogLevel level)
 {
-    return level >= logger_level;
+    switch (level)
+    {
+    case LogLevel::Debug:
+        return "DEBUG";
+    case LogLevel::Info:
+        return "INFO";
+    case LogLevel::Error:
+        return "ERROR";
+    case LogLevel::Off:
+        return "";
+    }
+    std::unreachable();
+}
+} // namespace
+
+bool Logger::is_level(const LogLevel level)
+{
+    return std::to_underlying(level) >= std::to_underlying(logger_level);
 }
 
-void Logger::set_level(const int level)
+void Logger::set_level(const LogLevel level)
 {
     logger_level = level;
 }
 
-void Logger::write(const int level, const std::span<char> &s)
+void Logger::write(const LogLevel level, const std::string_view text)
 {
-    if (is_level(level))
+    if (!is_level(level) || level == LogLevel::Off)
     {
-        if (level == LEVEL_DEBUG)
-        {
-            std::cout << "[DEBUG] ";
-        }
-        else if (level == LEVEL_INFO)
-        {
-            std::cout << "[INFO] ";
-        }
-        else if (level == LEVEL_ERROR)
-        {
-            std::cout << "[ERROR] ";
-        }
-        std::cout.write(s.data(), s.size());
-        std::cout << std::endl;
+        return;
     }
+    std::println("[{}] {}", level_tag(level), text);
 }

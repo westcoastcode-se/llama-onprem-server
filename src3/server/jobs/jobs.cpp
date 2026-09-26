@@ -1,10 +1,15 @@
 #include "../jobs/jobs.hpp"
+#include "../agent/model_adapter.hpp"
 #include "../agent/response_parse.hpp"
 #include "common/log.hpp"
 
-Jobs::Jobs(LlamaEngine &engine) : engine_(engine)
+#include <algorithm>
+#include <ranges>
+#include <utility>
+
+Jobs::Jobs(LlamaEngine &engine, const ModelAdapter &adapter) : engine_(engine), adapter_(adapter)
 {
-    worker_ = std::thread([this] { worker_loop(); });
+    worker_ = std::jthread([this](std::stop_token stop) { worker_loop(std::move(stop)); });
 }
 
 Jobs::~Jobs()
@@ -14,7 +19,7 @@ Jobs::~Jobs()
 
 void Jobs::stop()
 {
-    stop_ = true;
+    worker_.request_stop();
     {
         std::lock_guard lock(mutex_);
         if (current_task_)
@@ -32,24 +37,19 @@ void Jobs::stop()
 void Jobs::unsafe_gc()
 {
     const auto now = std::chrono::steady_clock::now();
-    for (auto it = tasks_.begin(); it != tasks_.end();)
-    {
-        const auto st = it->second->get_state();
-        if (st.is_finished())
+    std::erase_if(tasks_, [&](const auto &entry) {
+        const auto &task = entry.second;
+        if (!task->get_state().is_finished())
         {
-            const auto finished_at = it->second->finished_at;
-            if (finished_at.time_since_epoch().count() != 0 && now - finished_at > kFinishedTtl)
-            {
-                it = tasks_.erase(it);
-                continue;
-            }
+            return false;
         }
-        ++it;
-    }
+        const auto finished_at = task->finished_at;
+        return finished_at.time_since_epoch().count() != 0 && now - finished_at > kFinishedTtl;
+    });
 }
 
 shared_ptr<Task> Jobs::submit(MessagesRequest &&request,
-                              std::function<void(const shared_ptr<Task> &)> on_finished)
+                              std::move_only_function<void(const shared_ptr<Task> &)> on_finished)
 {
     const auto task = std::make_shared<Task>();
     task->request = std::move(request);
@@ -125,15 +125,10 @@ shared_ptr<Task> Jobs::cancel(JobKey const id)
         }
         task = it->second;
 
-        // Drop from queue if still waiting
-        for (auto qit = queue_.begin(); qit != queue_.end(); ++qit)
+        if (const auto qit = std::ranges::find(queue_, task->key); qit != queue_.end())
         {
-            if (*qit == task->key)
-            {
-                queue_.erase(qit);
-                notify_immediately = true;
-                break;
-            }
+            queue_.erase(qit);
+            notify_immediately = true;
         }
     }
 
@@ -169,12 +164,13 @@ void Jobs::release_session(const std::string &session_id)
     cv_.notify_one();
 }
 
-Jobs::NextWork Jobs::wait_next()
+Jobs::NextWork Jobs::wait_next(const std::stop_token &stop)
 {
     std::unique_lock lock(mutex_);
-    cv_.wait(lock, [this] { return stop_ || !queue_.empty() || !pending_session_releases_.empty(); });
+    std::stop_callback on_stop(stop, [&] { cv_.notify_all(); });
+    cv_.wait(lock, [&] { return stop.stop_requested() || !queue_.empty() || !pending_session_releases_.empty(); });
     NextWork work;
-    if (stop_)
+    if (stop.stop_requested())
     {
         return work;
     }
@@ -194,12 +190,12 @@ Jobs::NextWork Jobs::wait_next()
     return work;
 }
 
-void Jobs::worker_loop()
+void Jobs::worker_loop(std::stop_token stop)
 {
-    while (!stop_)
+    while (!stop.stop_requested())
     {
-        NextWork work = wait_next();
-        if (stop_)
+        NextWork work = wait_next(stop);
+        if (stop.stop_requested())
         {
             break;
         }
@@ -234,9 +230,9 @@ void Jobs::worker_loop()
         std::vector<ChatMessage> msgs;
         if (!task->request.system.empty())
         {
-            msgs.push_back(ChatMessage{.role = ChatMessage::ROLE_SYSTEM, .content = task->request.system});
+            msgs.push_back(ChatMessage{.role = string(ChatMessage::ROLE_SYSTEM), .content = task->request.system});
         }
-        msgs.insert(msgs.end(), task->request.messages.begin(), task->request.messages.end());
+        msgs.append_range(task->request.messages);
 
         // Start stream the LLM response
         const auto buffer = task->buffer;
@@ -252,7 +248,7 @@ void Jobs::worker_loop()
                 {
                     return false;
                 }
-                buffer->push(piece);
+                buffer->push(std::move(piece));
                 return true;
             };
             std::string response = engine_.chat(msgs, call);
@@ -281,7 +277,7 @@ void Jobs::worker_loop()
             continue;
         }
 
-        auto actions = parse_assistant_actions(full);
+        auto actions = parse_assistant_actions(full, adapter_);
         task->set_result(full, JobState::Done, std::move(actions));
         notify_finished(task);
     }
