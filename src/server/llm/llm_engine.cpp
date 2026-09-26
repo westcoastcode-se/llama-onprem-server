@@ -2,7 +2,7 @@
 
 #include "common/log.hpp"
 #include "common/span_prefix.hpp"
-#include "llm/context_params.hpp"
+#include "context_params.hpp"
 #include "utf8_stream.hpp"
 
 #include "chat.h"

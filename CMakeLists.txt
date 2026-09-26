@@ -53,7 +53,6 @@ endfunction()
 #
 set(COMMON_TOOL_SOURCES
     src/common/tools.cpp
-    src/common/log.cpp
     src/common/tools/web_utils.cpp
     src/common/tools/tool_execute_command.cpp
     src/common/tools/tool_read_file.cpp
@@ -67,91 +66,54 @@ set(COMMON_TOOL_SOURCES
 )
 
 #
-# 2. Callisto Server (src3 REST + jobs)
+# HTTP server. One model, sessions, and a job queue.
 #
 add_executable(callisto_server
-        src3/server.cpp
-        src3/server/http/routes.cpp
-        src3/server/jobs/jobs.cpp
-        src3/server/sessions/sessions.cpp
-        src3/server/agent/response_parse.cpp
-        src3/server/agent/model_adapter.cpp
-        src3/common/log.cpp
-        src3/server/llm/llm_engine.cpp)
+        src/server.cpp
+        src/server/http/routes.cpp
+        src/server/jobs/jobs.cpp
+        src/server/sessions/sessions.cpp
+        src/server/agent/response_parse.cpp
+        src/server/agent/model_adapter.cpp
+        src/common/log.cpp
+        src/server/llm/llm_engine.cpp)
 configure_localai_target(callisto_server)
-# Prefer src3 headers over src/ (same relative paths like llm/llm_engine.hpp)
 target_include_directories(callisto_server BEFORE PRIVATE
-        ${CMAKE_SOURCE_DIR}/src3
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
 target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# 2b. Callisto REST Client (HTTP agent CLI)
+# HTTP agent client. Tools run here; the server only generates.
 #
 add_executable(callisto_client
-        src3/client.cpp
-        src3/common/log.cpp
+        src/client.cpp
+        src/common/log.cpp
         ${COMMON_TOOL_SOURCES})
 configure_localai_target(callisto_client)
 target_include_directories(callisto_client BEFORE PRIVATE
-        ${CMAKE_SOURCE_DIR}/src3
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
 target_link_libraries(callisto_client PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# 1. Server
-#
-add_executable(server
-    src/server.cpp
-    src/llm/llm_engine.cpp)
-configure_localai_target(server)
-target_link_libraries(server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
-
-#
-# 2. Client (TCP Client)
-#
-add_executable(client
-    src/client.cpp
-    ${COMMON_TOOL_SOURCES}
-    src/common/agent.cpp)
-configure_localai_target(client)
-target_link_libraries(client PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
-
-#
-# 3. Fat Client
-#
-add_executable(fat_client
-    src/fat_client.cpp
-    src/llm/llm_engine.cpp
-    ${COMMON_TOOL_SOURCES}
-    src/common/agent.cpp)
-configure_localai_target(fat_client)
-target_link_libraries(fat_client PRIVATE llama-common llama CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
-
-#
-# 4. Tests
+# Tool tests. No model required.
 #
 add_executable(tests
     tests/tests.cpp
     tests/common/test_tools.cpp
     tests/common/tools/test_tool_execute_command.cpp
-    tests/test_components.cpp
-    ${COMMON_TOOL_SOURCES}
-    src/common/agent.cpp)
+    ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
 target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# Callisto engine tests (template, tool parse, token prefix). No model required.
+# Engine tests: template, tool parse, token prefix. No model required.
 #
 add_executable(callisto_tests
         tests/test_llama_engine.cpp
-        src3/server/agent/response_parse.cpp
-        src3/server/agent/model_adapter.cpp
-        src3/common/log.cpp)
+        src/server/agent/response_parse.cpp
+        src/server/agent/model_adapter.cpp
+        src/common/log.cpp)
 configure_localai_target(callisto_tests)
-target_include_directories(callisto_tests BEFORE PRIVATE
-        ${CMAKE_SOURCE_DIR}/src3)
 target_compile_definitions(callisto_tests PRIVATE
-        LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src3/templates/Qwen3.8-27B.jinja")
+        LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src/templates/Qwen3.8-27B.jinja")
 target_link_libraries(callisto_tests PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})

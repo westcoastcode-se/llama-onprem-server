@@ -1,17 +1,17 @@
 # LlamaEngine
 
-Plan för `src3/server/llm/llm_engine.cpp`, plus motsvarande tokenprefix och återställning i `src/llm`. Varje punkt är det som ska vara sant i koden.
+Plan för `src/server/llm/llm_engine.cpp`. Varje punkt är det som ska vara sant i koden.
 
 ## 1. Jinja-mall
 
-`llama_chat_apply_template` kör inte Jinja. En mall som innehåller `<|im_start|>` blir inbyggd ChatML, så `<think>`, `enable_thinking` och verktyg från `src3/templates/` aldrig når modellen.
+`llama_chat_apply_template` kör inte Jinja. En mall som innehåller `<|im_start|>` blir inbyggd ChatML, så `<think>`, `enable_thinking` och verktyg från `src/templates/` aldrig når modellen.
 
 - Länka `llama-common`.
 - Formatera med `common_chat_templates_apply` (`use_jinja = true`). Om mallens parser inte går att bygga används `force_pure_content`, så prompttexten ändå blir Jinja-resultatet.
 - `template_path` vinner över mallen som ligger i GGUF. Tom sökväg läser GGUF-mallen.
 - `LlamaConfig::reasoning` (ersätter den oanvända `resoning`) sätter `enable_thinking`.
 - Verktyg på sessionen skickas in i mallen som OpenAI-formade funktioner (`name`, `description`, `parameters`).
-- Ta bort oanvända `src3/server/llm/template.hpp`.
+- Ta bort oanvända `src/server/llm/template.hpp`.
 - Qwen-mallen ber modellen svara med `<function=…><parameter=…>`. `parse_assistant_actions` ska förstå både det formatet och det befintliga JSON-inuti-`<tool_call>`.
 
 ## 2. Prefix i tokens
@@ -60,12 +60,8 @@ En processgemensam cache gör varje sessionsbyte till en full omprefill.
 - Temperatur per anrop bygger om samplern utan att skriva tillbaka i `LlamaConfig`.
 - `create()` kastar och låter destruktorn frigöra modell, kontext och mall.
 
-## 7. `src/llm`
-
-`server` och `fat_client` använder den äldre motorn. Där gäller samma tokenprefix, återställning vid fel eller avbrott, Jinja-mall, kontextparametrar och `max_tokens`. Den har inga sessioner, så en enda tokenföljd räcker. Fel returnerar fortfarande tom sträng så att de befintliga anropen beter sig som förut.
-
 ## CLI
 
-`callisto_server` och den delade `parse_llama_cli_arg`:
+`callisto_server`:
 
 `--chat-template`, `--reasoning` / `--no-reasoning`, `--threads`, `--threads-batch`, `--flash-attn`, `--cache-type-k`, `--cache-type-v`, `--seed`, `--penalty-last-n`, `--frequency-penalty`, `--max-tokens`, `--kv-sessions` (bara callisto).

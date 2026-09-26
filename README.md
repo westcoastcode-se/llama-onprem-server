@@ -129,7 +129,7 @@ python llama.cpp/convert_hf_to_gguf.py ./Phi-3-mini-128k-instruct --outfile Phi-
 
 ## Building Devcontainer
 
-You can build a devcontainer where the local AI client is available. Both the client and the fat_client will be part of the docker image:
+You can build a devcontainer where the HTTP server and the agent client are available:
 
 ```bash
 docker build . -t local_ai:latest
@@ -146,44 +146,28 @@ docker compose up -d
 
 # Autonomous AI Agent & Architecture
 
-The application is modularly split into standalone components:
+The application is split into two programs:
 
-1. **`server`** — Dedicated LLM inference server listening on TCP (default port `8080`). Loads GGUF models via `llama.cpp` and serves token generation and chat completion requests over TCP.
-2. **`client`** — Lightweight agent client that connects to the `server` over TCP. It manages the interactive agent CLI, runs the ReAct reasoning loop, and executes tools locally on the client host.
-3. **`fat_client`** — Standalone all-in-one agent binary embedding both the local `llama.cpp` inference engine and tool execution in a single process.
-4. **`web`** (Standalone Web UI) — Standalone web interface and bridge that connects web browsers to the `server` over TCP, offering real-time SSE streaming, live context meter visualization, chat management, and temperature/system prompt configuration.
+1. **`callisto_server`** — HTTP server. Loads one GGUF model, keeps chat sessions, and generates text. It does not run tools.
+2. **`callisto_client`** — Agent CLI. Talks to the server over HTTP and runs tools on the machine where the client runs.
+3. **`web`** — Browser UI. It still expects the older TCP protocol and is not wired to this server.
 
-### Running the Server and Client (Client-Server Mode)
+### Running the Server and Client
 
-Start the TCP server:
+Start the server:
 ```bash
-./build/server -m <path-to-model.gguf> -c 32768 -ngl 99 --host 0.0.0.0 -p 8080
+./cmake-build-debug/callisto_server -m <path-to-model.gguf> -c 32768 -ngl 99 --host 0.0.0.0 -p 8080
 ```
 
-Start the client (connecting to the server over TCP, optionally enabling sub-agents and auto-approval):
+Start the client:
 ```bash
-./build/client --host 127.0.0.1 -p 8080 --sub-agents
+./cmake-build-debug/callisto_client --host 127.0.0.1 -p 8080
 ```
 
-#### Running Single Commands / Prompts directly (stdout output):
-
-You can execute a command or prompt directly from the terminal and have the response printed to stdout without entering interactive mode:
+The client is interactive. `-y` approves every tool, and `--allow-tools` approves a list without asking:
 
 ```bash
-# Run a single prompt and print the response to stdout
-./build/client -c "Summarize the contents of README.md"
-
-# Run with --command or --exec flag
-./build/client --command "List files in the working directory and explain their purpose" -y
-
-# Quiet mode (-q / --quiet / --silent): suppresses reasoning steps, tool statuses, and prints only the final answer
-./build/client -q -c "Fetch and summarize https://example.com" --allow-tool web_fetch
-
-# Allow specific tools automatically via --allow-tool or --allow-tools (comma-separated list)
-./build/client -q -c "What is on https://example.com?" --allow-tools web_fetch,read_file
-
-# Execute a direct shell command via /exec and print the output to stdout
-./build/client -c "/exec ls -la src/"
+./cmake-build-debug/callisto_client --host 127.0.0.1 -p 8080 -y --allow-tools web_fetch,read_file
 ```
 
 ### Running the Web Interface
@@ -200,12 +184,6 @@ Features:
 - Real-time visualization of server context usage.
 - Server status, context resetting (`/reset`), custom system prompt, and temperature adjustments.
 - Configuration modal to dynamically change connected server address/port.
-
-### Running the Fat Client (Standalone Mode)
-
-```bash
-./build/fat_client -m <path-to-model.gguf> -c 4096 -ngl 99 --sub-agents
-```
 
 ### Custom Project Instructions (`AI_INSTRUCTIONS.md`)
 
