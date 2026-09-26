@@ -100,6 +100,11 @@ FetchContent_MakeAvailable(ftxui)
 add_executable(callisto_cli
         src/cli/main.cpp
         src/cli/agent.cpp
+        src/cli/agent_session.cpp
+        src/cli/reply_stream.cpp
+        src/cli/session_store.cpp
+        src/cli/tool_runner.cpp
+        src/cli/tool_schema.cpp
         src/cli/tui.cpp
         src/common/log.cpp
         ${COMMON_TOOL_SOURCES})
