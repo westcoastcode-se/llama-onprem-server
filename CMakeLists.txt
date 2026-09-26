@@ -95,6 +95,20 @@ target_include_directories(callisto_client BEFORE PRIVATE
 target_link_libraries(callisto_client PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
+# Coding-agent CLI. CLI11 parses the command line. Tools run locally.
+#
+add_executable(callisto_cli
+        src/cli/main.cpp
+        src/cli/agent.cpp
+        src/common/log.cpp
+        ${COMMON_TOOL_SOURCES})
+configure_localai_target(callisto_cli)
+target_include_directories(callisto_cli BEFORE PRIVATE
+        ${CMAKE_SOURCE_DIR}/vendors/httplib
+        ${CMAKE_SOURCE_DIR}/vendors/cli11)
+target_link_libraries(callisto_cli PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+
+#
 # Tool tests. No model required.
 #
 add_executable(tests
