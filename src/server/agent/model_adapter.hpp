@@ -35,6 +35,11 @@ struct ToolParameter
 
 [[nodiscard]] std::vector<ToolParameter> tool_parameters(const ChatTool &tool);
 
+// XML parameters are stored as raw text. This turns integer/boolean/array/object
+// fields into JSON when the tool schema says so, and turns a non-string back into
+// text when the schema says string. Unknown tools are left as parsed.
+void coerce_tool_arguments(std::vector<ParsedToolCall> &calls, std::span<const ChatTool> tools);
+
 // <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
 class QwenAdapter final : public ModelAdapter
 {

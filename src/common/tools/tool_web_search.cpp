@@ -47,7 +47,9 @@ std::string web_search(const nlohmann::json & args) {
     std::string body;
     std::string error;
     long status = 0;
-    if (!WebUtils::http_get(url, body, status, error)) {
+    WebUtils::HttpGetOptions options;
+    options.allow_private = true;
+    if (!WebUtils::http_get(url, body, status, error, options)) {
         return "error: search request failed: " + error + " (url: " + url + ")";
     }
 
@@ -145,7 +147,7 @@ Tool create_web_search_tool() {
     return {
         "web_search",
         "Search the internet for queries, web pages, and information.",
-        "arguments:\n      query: string (search keywords or question)\n      limit: integer (optional maximum results to return, default 5)",
+        "arguments:\n      query: string (search keywords or question)\n      limit: integer (optional maximum results to return, default 5)\n      categories: string (optional SearXNG categories such as general, science, it)\n      language: string (optional language code such as sv or en)\n      time_range: string (optional day, week, month, or year)",
         web_search,
         {"searxng_search", "searx_search", "internet_search", "search"}
     };

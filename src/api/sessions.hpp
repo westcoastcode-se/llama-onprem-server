@@ -174,17 +174,31 @@ struct MessageTokensResponse
 {
     string tokens;
     bool done = false;
+    // Present on the terminal line. "done", "error", or "cancelled".
+    string state;
+    string error;
 
     [[nodiscard]] json to_json() const
     {
-        return {{"tokens", tokens}, {"done", done}};
+        json j{{"tokens", tokens}, {"done", done}};
+        if (!state.empty())
+        {
+            j["state"] = state;
+        }
+        if (!error.empty())
+        {
+            j["error"] = error;
+        }
+        return j;
     }
 
     static MessageTokensResponse from_json(json &j)
     {
-        return MessageTokensResponse{
-            .tokens = j.value("tokens", string()),
-            .done = j.value("done", false),
-        };
+        MessageTokensResponse response;
+        response.tokens = j.value("tokens", string());
+        response.done = j.value("done", false);
+        response.state = j.value("state", string());
+        response.error = j.value("error", string());
+        return response;
     }
 };

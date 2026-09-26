@@ -101,6 +101,8 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
         fflush(stdout);
     };
 
+    bool think_header = false;
+
     auto emit_answer = [&](std::string_view s) {
         if (s.empty())
         {
@@ -109,12 +111,45 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
         if (!answer_started)
         {
             clear_status();
-            if (think_started && !think_closed && !show_think)
+            if (think_header)
+            {
+                std::println("{}", Color::RESET);
+                think_closed = true;
+            }
+            else if (think_started && !think_closed && !show_think)
             {
                 std::println("{}✓ Thinking  {:.1f}s{}", Color::DIM, elapsed_s(), Color::RESET);
                 think_closed = true;
             }
             answer_started = true;
+        }
+        emit(s);
+    };
+
+    auto emit_think = [&](std::string_view s) {
+        think_started = true;
+        if (!show_think)
+        {
+            draw_thinking();
+            return;
+        }
+        if (!s.empty() && !think_header)
+        {
+            while (!s.empty() && (s.front() == '\n' || s.front() == '\r'))
+            {
+                s.remove_prefix(1);
+            }
+        }
+        if (s.empty())
+        {
+            return;
+        }
+        if (!think_header)
+        {
+            clear_status();
+            std::println("{}thinking{}", Color::DIM, Color::RESET);
+            std::print("{}", Color::GRAY);
+            think_header = true;
         }
         emit(s);
     };
@@ -163,23 +198,11 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
                     if (idx == std::string::npos)
                     {
                         const size_t keep = std::min(pending.size(), kClose.size() - 1);
-                        const auto vis = std::string_view(pending).substr(0, pending.size() - keep);
-                        if (show_think)
-                        {
-                            emit_answer(vis);
-                        }
-                        else
-                        {
-                            think_started = true;
-                            draw_thinking();
-                        }
+                        emit_think(std::string_view(pending).substr(0, pending.size() - keep));
                         pending.erase(0, pending.size() - keep);
                         break;
                     }
-                    if (show_think)
-                    {
-                        emit_answer(std::string_view(pending).substr(0, idx));
-                    }
+                    emit_think(std::string_view(pending).substr(0, idx));
                     pending.erase(0, idx + kClose.size());
                     thinking = false;
                     if (!show_think)
@@ -188,9 +211,11 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
                         std::println("{}✓ Thinking  {:.1f}s{}", Color::DIM, elapsed_s(), Color::RESET);
                         think_closed = true;
                     }
-                    else
+                    else if (think_header)
                     {
-                        std::print("{}", Color::RESET);
+                        std::println("{}", Color::RESET);
+                        think_header = false;
+                        think_closed = true;
                     }
                 }
                 else
@@ -207,16 +232,7 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
                     pending.erase(0, idx + kOpen.size());
                     thinking = true;
                     think_started = true;
-                    if (show_think)
-                    {
-                        if (!answer_started)
-                        {
-                            clear_status();
-                            answer_started = true;
-                        }
-                        std::print("{}", Color::GRAY);
-                    }
-                    else
+                    if (!show_think)
                     {
                         draw_thinking();
                     }
@@ -229,9 +245,15 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
         {
             emit_answer(pending);
         }
-        else if (!pending.empty() && show_think)
+        else if (!pending.empty() && thinking)
         {
-            emit_answer(pending);
+            emit_think(pending);
+        }
+        if (think_header)
+        {
+            std::println("{}", Color::RESET);
+            think_header = false;
+            think_closed = true;
         }
     }
     catch (const RestClient::ClientError &)
@@ -275,7 +297,7 @@ StreamResult stream_job(RestClient &client, const SessionID &session_id, const J
     return StreamResult{wait_session_ready(client, session_id), cancelled};
 }
 
-json run_pending_tools(const SessionResponse &session, span<const Tool> tools, CliConfig &cfg)
+std::optional<json> run_pending_tools(const SessionResponse &session, span<const Tool> tools, CliConfig &cfg)
 {
     json results = json::array();
     if (session.pending_tool_calls.empty())
@@ -310,6 +332,10 @@ json run_pending_tools(const SessionResponse &session, span<const Tool> tools, C
                 std::println("{}❌ tool denied: {}{}", Color::RED, name, Color::RESET);
                 results.push_back(std::move(item));
                 continue;
+            }
+            else if (approval == ToolApproval::CLOSED)
+            {
+                return std::nullopt;
             }
         }
 
@@ -425,12 +451,16 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
         {
             // Run tools and send back the result
             auto results = run_pending_tools(session, tools, cfg);
-            if (results.empty())
+            if (!results)
+            {
+                return false;
+            }
+            if (results->empty())
             {
                 std::println(stderr, "{}[client] awaiting_tools but no tool_calls{}", Color::RED, Color::RESET);
                 return false;
             }
-            auto resp = client.post_tool_results(session_id, results);
+            auto resp = client.post_tool_results(session_id, *results);
             job_key = resp.value("key", JobKey());
             if (job_key == 0)
             {
@@ -479,7 +509,7 @@ std::string run_subagent(RestClient &client, const SessionID parent, const std::
     std::println("{}[sub-agent] snapshot of session {} — {}{}", Color::CYAN, parent, task, Color::RESET);
 
     const SessionResponse snap = client.snapshot_session(parent);
-    defer(client.delete_session(snap.id));
+    defer(try { client.delete_session(snap.id); } catch (const std::exception &) {});
 
     const std::string assignment = std::format(
         "You are a sub-agent. The messages above are a snapshot of the parent agent's context. "
@@ -639,7 +669,7 @@ int run_session_mode(RestClient &client, CliConfig &cfg)
 
     std::println("{}[client] session {} at {} (questions={}){}", Color::CYAN, session_id, client.base_url(),
                  cfg.questions ? "true" : "false", Color::RESET);
-    defer(client.delete_session(session_id));
+    defer(try { client.delete_session(session_id); } catch (const std::exception &) {});
 
     auto handle_user_text = [&](const string_view view) -> bool {
         if (view.empty())
@@ -767,6 +797,12 @@ int main(int argc, char **argv)
     if (cfg.port <= 0 || cfg.port > 65535)
     {
         std::println(stderr, "invalid port");
+        curl_global_cleanup();
+        return 1;
+    }
+    if (cfg.max_tool_rounds < 1)
+    {
+        std::println(stderr, "-it must be at least 1");
         curl_global_cleanup();
         return 1;
     }

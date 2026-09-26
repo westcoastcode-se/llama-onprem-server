@@ -20,6 +20,33 @@ std::string_view trim_sv(std::string_view text)
     return text.substr(begin, end - begin + 1);
 }
 
+// The template writes a newline after <parameter=name> and before </parameter>.
+// Anything between those newlines is the value, including spaces the model meant to keep.
+std::string_view unwrap_parameter_value(std::string_view value)
+{
+    if (value.starts_with("\r\n"))
+    {
+        value.remove_prefix(2);
+    }
+    else if (value.starts_with('\n'))
+    {
+        value.remove_prefix(1);
+    }
+    if (value.ends_with("\r\n"))
+    {
+        value.remove_suffix(2);
+    }
+    else if (value.ends_with('\n'))
+    {
+        value.remove_suffix(1);
+        if (value.ends_with('\r'))
+        {
+            value.remove_suffix(1);
+        }
+    }
+    return value;
+}
+
 std::string lower_copy(std::string_view text)
 {
     std::string out(text);
@@ -87,19 +114,20 @@ void append_function_parameter_calls(std::string_view text, std::vector<ParsedTo
                 break;
             }
             const auto pname = std::string(trim_sv(body.substr(nb, ne - nb)));
-            const auto value = trim_sv(body.substr(ne + 1, pe - (ne + 1)));
+            const auto value = unwrap_parameter_value(body.substr(ne + 1, pe - (ne + 1)));
             if (!pname.empty())
             {
-                try
-                {
-                    call.arguments[pname] = nlohmann::json::parse(value);
-                }
-                catch (...)
-                {
-                    call.arguments[pname] = std::string(value);
-                }
+                call.arguments[pname] = std::string(value);
             }
             param = pe + kParameterEnd.size();
+        }
+        if (call.arguments.empty())
+        {
+            const auto parsed = nlohmann::json::parse(trim_sv(body), nullptr, false);
+            if (parsed.is_object())
+            {
+                call.arguments = parsed;
+            }
         }
         if (!call.name.empty())
         {
@@ -209,8 +237,33 @@ std::vector<ToolParameter> tool_parameters(const ChatTool &tool)
         parameter.name = it.key();
         if (it->is_object())
         {
-            parameter.type = it->value("type", "string");
-            parameter.description = it->value("description", "");
+            if (const auto type = it->find("type"); type != it->end())
+            {
+                if (type->is_string())
+                {
+                    parameter.type = type->get<std::string>();
+                }
+                else if (type->is_array())
+                {
+                    for (const auto &part : *type)
+                    {
+                        if (part.is_string() && part.get<std::string>() != "null")
+                        {
+                            parameter.type = part.get<std::string>();
+                            break;
+                        }
+                    }
+                }
+            }
+            if (parameter.type.empty())
+            {
+                parameter.type = "string";
+            }
+            if (const auto description = it->find("description");
+                description != it->end() && description->is_string())
+            {
+                parameter.description = description->get<std::string>();
+            }
         }
         if (required.is_array())
         {
@@ -363,10 +416,20 @@ void BonsaiAdapter::parse_tool_calls(std::string_view text, std::vector<ParsedTo
     append_function_parameter_calls(text, out);
 }
 
+std::string_view path_filename(std::string_view path)
+{
+    const auto slash = path.find_last_of("/\\");
+    if (slash == std::string_view::npos)
+    {
+        return path;
+    }
+    return path.substr(slash + 1);
+}
+
 std::unique_ptr<ModelAdapter> make_model_adapter(std::string_view model_path, std::string_view template_path)
 {
     const auto pick = [](std::string_view hint) -> std::unique_ptr<ModelAdapter> {
-        const std::string text = lower_copy(hint);
+        const std::string text = lower_copy(path_filename(hint));
         if (contains(text, "deepseek"))
         {
             return std::make_unique<DeepseekAdapter>();
@@ -391,4 +454,96 @@ std::unique_ptr<ModelAdapter> make_model_adapter(std::string_view model_path, st
         return from_model;
     }
     return std::make_unique<QwenAdapter>();
+}
+
+namespace
+{
+const ChatTool *find_tool(std::span<const ChatTool> tools, std::string_view name)
+{
+    for (const ChatTool &tool : tools)
+    {
+        if (tool.name == name)
+        {
+            return &tool;
+        }
+    }
+    return nullptr;
+}
+
+void coerce_value(nlohmann::json &value, std::string_view type)
+{
+    const bool textual = type.empty() || type == "string";
+    if (textual)
+    {
+        if (value.is_string() || value.is_null())
+        {
+            if (value.is_null())
+            {
+                value = "";
+            }
+            return;
+        }
+        value = value.dump();
+        return;
+    }
+    if (!value.is_string())
+    {
+        return;
+    }
+    const auto parsed = nlohmann::json::parse(value.get<std::string>(), nullptr, false);
+    if (parsed.is_discarded())
+    {
+        return;
+    }
+    if ((type == "integer" || type == "number") && parsed.is_number())
+    {
+        value = parsed;
+    }
+    else if (type == "boolean" && parsed.is_boolean())
+    {
+        value = parsed;
+    }
+    else if (type == "array" && parsed.is_array())
+    {
+        value = parsed;
+    }
+    else if (type == "object" && parsed.is_object())
+    {
+        value = parsed;
+    }
+}
+} // namespace
+
+void coerce_tool_arguments(std::vector<ParsedToolCall> &calls, std::span<const ChatTool> tools)
+{
+    for (ParsedToolCall &call : calls)
+    {
+        if (call.arguments.is_string())
+        {
+            const auto parsed = nlohmann::json::parse(call.arguments.get<std::string>(), nullptr, false);
+            if (parsed.is_object())
+            {
+                call.arguments = parsed;
+            }
+        }
+        if (!call.arguments.is_object())
+        {
+            call.arguments = nlohmann::json::object();
+            continue;
+        }
+        const ChatTool *spec = find_tool(tools, call.name);
+        if (spec == nullptr)
+        {
+            continue;
+        }
+        for (const ToolParameter &param : tool_parameters(*spec))
+        {
+            const auto it = call.arguments.find(param.name);
+            if (it == call.arguments.end())
+            {
+                continue;
+            }
+            coerce_value(*it, param.type);
+        }
+    }
 }

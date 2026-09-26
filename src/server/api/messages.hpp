@@ -24,6 +24,7 @@ struct MessageStatusResponse
     bool done = false;
     string content;
     string error;
+    string reasoning;
     vector<ParsedToolCall> tool_calls;
     optional<ParsedQuestion> question;
 
@@ -44,6 +45,10 @@ struct MessageStatusResponse
         if (!error.empty())
         {
             j["error"] = error;
+        }
+        if (!reasoning.empty())
+        {
+            j["reasoning_content"] = reasoning;
         }
         if (!tool_calls.empty())
         {

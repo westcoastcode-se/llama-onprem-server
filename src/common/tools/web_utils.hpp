@@ -27,7 +27,15 @@ std::string url_encode(std::string_view value);
  * @param[out] error Error message from curl if request fails completely.
  * @return true if the HTTP request completed technically, false otherwise.
  */
-bool http_get(const std::string & url, std::string & body, long & status_code, std::string & error);
+struct HttpGetOptions {
+    // web_search talks to a local SearXNG. web_fetch leaves this false and rejects
+    // loopback, private, and link-local addresses, including after a redirect.
+    bool allow_private = false;
+    size_t max_bytes = 1024 * 1024;
+};
+
+bool http_get(const std::string & url, std::string & body, long & status_code, std::string & error,
+              HttpGetOptions options = {});
 
 /**
  * @brief Converts raw HTML into readable plain text.

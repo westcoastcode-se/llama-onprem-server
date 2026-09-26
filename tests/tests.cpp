@@ -2,12 +2,18 @@
 // Created by per on 8/30/26.
 //
 
-extern void test_tools();
-extern void test_tool_execute_command();
+extern int test_tools();
+extern int test_tool_execute_command();
 
 int main()
 {
-    test_tools();
-    test_tool_execute_command();
+    if (const int rc = test_tools())
+    {
+        return rc;
+    }
+    if (const int rc = test_tool_execute_command())
+    {
+        return rc;
+    }
     return 0;
 }

@@ -15,7 +15,7 @@ void send_job_token_stream(const httplib::Request &, httplib::Response &res, con
     auto connection_closed = std::make_shared<std::atomic<bool>>(false);
     res.set_chunked_content_provider(
         "application/x-ndjson",
-        [buffer, connection_closed](size_t /*offset*/, httplib::DataSink &sink) {
+        [buffer, connection_closed, task](size_t /*offset*/, httplib::DataSink &sink) {
             if (connection_closed->load(std::memory_order_relaxed))
             {
                 sink.done();
@@ -25,7 +25,11 @@ void send_job_token_stream(const httplib::Request &, httplib::Response &res, con
             auto piece = buffer->wait_pull();
             if (!piece)
             {
-                MessageTokensResponse mm{.tokens = {}, .done = true};
+                const auto status = task->to_status();
+                MessageTokensResponse mm;
+                mm.done = true;
+                mm.state = status.state.to_string();
+                mm.error = status.error;
                 auto line = mm.to_json().dump() + "\n";
                 if (!sink.write(line.data(), line.size()))
                 {
@@ -36,7 +40,7 @@ void send_job_token_stream(const httplib::Request &, httplib::Response &res, con
                 return true;
             }
 
-            MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false};
+            MessageTokensResponse mm{.tokens = {std::move(*piece)}, .done = false, .state = {}, .error = {}};
             auto line = mm.to_json().dump() + "\n";
             if (!sink.write(line.data(), line.size()))
             {

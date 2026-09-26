@@ -20,7 +20,14 @@
 #include <iostream>
 #include <thread>
 
-#define RUN_TEST(test) std::cout << "[TEST] Running " #test << "..." << std::endl; test()
+#define RUN_TEST(test)                                                                                                 \
+    do {                                                                                                               \
+        std::cout << "[TEST] Running " #test << "..." << std::endl;                                                   \
+        if (const int _rc = (test)()) {                                                                                \
+            std::cerr << "[TEST] " #test " failed" << std::endl;                                                       \
+            return _rc;                                                                                                \
+        }                                                                                                              \
+    } while (0)
 
 #define assertEquals(expected, actual)                                                                                             \
     if ((expected) != (actual)) {                                                                                                  \

@@ -19,19 +19,37 @@ Jobs::~Jobs()
 
 void Jobs::stop()
 {
-    worker_.request_stop();
-    {
-        std::lock_guard lock(mutex_);
-        if (current_task_)
-        {
-            current_task_->request_cancel();
-        }
-    }
-    cv_.notify_all();
+    request_shutdown();
     if (worker_.joinable())
     {
         worker_.join();
     }
+}
+
+void Jobs::request_shutdown()
+{
+    worker_.request_stop();
+    std::vector<std::shared_ptr<Task>> tasks;
+    {
+        std::lock_guard lock(mutex_);
+        if (current_task_)
+        {
+            tasks.push_back(current_task_);
+        }
+        tasks.reserve(tasks.size() + tasks_.size());
+        for (const auto &entry : tasks_)
+        {
+            tasks.push_back(entry.second);
+        }
+    }
+    for (const auto &task : tasks)
+    {
+        if (task)
+        {
+            task->request_cancel();
+        }
+    }
+    cv_.notify_all();
 }
 
 void Jobs::unsafe_gc()
@@ -245,16 +263,36 @@ void Jobs::worker_loop(std::stop_token stop)
         }
         task->set_running();
 
-        // Build message list: optional system + messages
+        // One leading system message. Later system roles are folded in, because the
+        // Qwen and Bonsai templates reject a system message that is not first.
+        std::string system = task->request.system;
         std::vector<ChatMessage> msgs;
-        if (!task->request.system.empty())
+        msgs.reserve(task->request.messages.size() + 1);
+        for (const ChatMessage &message : task->request.messages)
         {
-            msgs.push_back(ChatMessage{.role = string(ChatMessage::ROLE_SYSTEM), .content = task->request.system});
+            if (message.role == ChatMessage::ROLE_SYSTEM)
+            {
+                if (!message.content.empty())
+                {
+                    if (!system.empty())
+                    {
+                        system.push_back('\n');
+                    }
+                    system += message.content;
+                }
+                continue;
+            }
+            msgs.push_back(message);
         }
-        msgs.append_range(task->request.messages);
+        if (!system.empty())
+        {
+            msgs.insert(msgs.begin(),
+                        ChatMessage{.role = string(ChatMessage::ROLE_SYSTEM), .content = std::move(system), .reasoning_content = {}});
+        }
 
         // Start stream the LLM response
         const auto buffer = task->buffer;
+        const bool prompt_opened_think = engine_.get_config().reasoning;
         try
         {
             LlamaRequest call;
@@ -262,10 +300,18 @@ void Jobs::worker_loop(std::stop_token stop)
             call.max_tokens = task->request.max_tokens;
             call.session_id = task->request.session_id;
             call.tools = task->request.tools;
-            call.token_cb = [task, buffer](std::string &&piece) {
+            bool think_prefix_sent = false;
+            call.token_cb = [task, buffer, prompt_opened_think, &think_prefix_sent](std::string &&piece) {
                 if (task->is_cancel_requested())
                 {
                     return false;
+                }
+                // The template already opened <think> in the prompt, so the sample does not
+                // repeat it. The client only hides thinking when it sees that opener.
+                if (prompt_opened_think && !think_prefix_sent)
+                {
+                    think_prefix_sent = true;
+                    buffer->push("<think>\n");
                 }
                 buffer->push(std::move(piece));
                 return true;
@@ -296,8 +342,15 @@ void Jobs::worker_loop(std::stop_token stop)
             continue;
         }
 
-        auto actions = parse_assistant_actions(full, adapter_);
-        task->set_result(full, JobState::Done, std::move(actions));
+        const ThinkingSplit split = split_thinking_channel(full, engine_.get_config().reasoning);
+        ParsedAssistantActions actions;
+        if (split.closed)
+        {
+            actions = parse_assistant_actions(split.visible, adapter_);
+            coerce_tool_arguments(actions.tool_calls, task->request.tools);
+        }
+        actions.reasoning = split.reasoning;
+        task->set_result(split.visible, JobState::Done, std::move(actions));
         notify_finished(task);
     }
 }

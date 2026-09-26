@@ -56,6 +56,7 @@ struct Task
     JobState state = JobState::Queued;
     string error;
     string result;
+    string reasoning;
     std::atomic<bool> cancel_requested{false};
 
     // Parsed after successful generation (client-side tools / questions).
@@ -92,6 +93,7 @@ struct Task
     {
         std::lock_guard lock(mutex);
         result = std::move(text);
+        reasoning = std::move(actions.reasoning);
         state = new_state;
         tool_calls = std::move(actions.tool_calls);
         question = std::move(actions.question);
@@ -146,6 +148,7 @@ struct Task
         r.done = state.is_finished();
         r.content = result;
         r.error = error;
+        r.reasoning = reasoning;
         r.tool_calls = tool_calls;
         r.question = question;
         return r;
@@ -160,6 +163,7 @@ struct Task
         r.done = state.is_finished();
         r.content = result;
         r.error = error;
+        r.reasoning = reasoning;
         r.tool_calls = tool_calls;
         r.question = question;
         return r;
@@ -172,6 +176,7 @@ struct Task
     {
         std::lock_guard lock(mutex);
         state = JobState::Cancelled;
+        finished_at = std::chrono::steady_clock::now();
         buffer->cancel();
     }
 
@@ -197,8 +202,6 @@ class ModelAdapter;
 class Jobs
 {
   public:
-    // TODO: Consider adding support for forcefully stopping long-running LLM requests
-    // TODO: Wait to GC until first stream request is called?
     static constexpr std::chrono::seconds kFinishedTtl{300};
 
     explicit Jobs(LlamaEngine &engine, const ModelAdapter &adapter);
@@ -208,6 +211,9 @@ class Jobs
     Jobs &operator=(const Jobs &) = delete;
 
     void stop();
+
+    // Cancel queued and running tasks and wake token streams. Does not join the worker.
+    void request_shutdown();
 
     /**
      * Enqueue a chat job.

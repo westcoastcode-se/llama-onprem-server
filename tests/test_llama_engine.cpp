@@ -98,6 +98,94 @@ void test_tool_parse()
         CHECK(v3_actions.tool_calls[0].name == "execute_command");
         CHECK(v3_actions.tool_calls[0].arguments.value("command", "") == "date");
     }
+
+    const char *true_cmd =
+        "<tool_call>\n<function=execute_command>\n<parameter=command>\ntrue\n</parameter>\n</function>\n</tool_call>";
+    auto true_actions = parse_assistant_actions(true_cmd);
+    CHECK(true_actions.tool_calls.size() == 1);
+    if (!true_actions.tool_calls.empty())
+    {
+        CHECK(true_actions.tool_calls[0].arguments.at("command").is_string());
+        CHECK(true_actions.tool_calls[0].arguments.at("command").get<std::string>() == "true");
+    }
+
+    const char *spaced =
+        "<tool_call>\n<function=write_file>\n<parameter=content>\n  hello  \n</parameter>\n</function>\n</tool_call>";
+    auto spaced_actions = parse_assistant_actions(spaced);
+    CHECK(spaced_actions.tool_calls.size() == 1);
+    if (!spaced_actions.tool_calls.empty())
+    {
+        CHECK(spaced_actions.tool_calls[0].arguments.at("content").get<std::string>() == "  hello  ");
+    }
+
+    const char *hybrid = "<tool_call>\n<function=read_file>{\"path\":\"/tmp/a.txt\"}</function>\n</tool_call>";
+    auto hybrid_actions = parse_assistant_actions(hybrid);
+    CHECK(hybrid_actions.tool_calls.size() == 1);
+    if (!hybrid_actions.tool_calls.empty())
+    {
+        CHECK(hybrid_actions.tool_calls[0].arguments.value("path", "") == "/tmp/a.txt");
+    }
+
+    const char *stringified =
+        "<tool_call>\n{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/a.txt\\\"}\"}\n</tool_call>";
+    auto stringified_actions = parse_assistant_actions(stringified);
+    CHECK(stringified_actions.tool_calls.size() == 1);
+    if (!stringified_actions.tool_calls.empty())
+    {
+        CHECK(stringified_actions.tool_calls[0].arguments.value("path", "") == "/tmp/a.txt");
+    }
+
+    const ThinkingSplit open_think = split_thinking_channel("plan <tool_call>nope</tool_call>", true);
+    CHECK(!open_think.closed);
+    CHECK(open_think.visible.empty());
+    CHECK(parse_assistant_actions(open_think.visible).tool_calls.empty());
+
+    const ThinkingSplit closed_think = split_thinking_channel(
+        "plan</think>\n\n<tool_call>\n<function=read_file>\n<parameter=path>\n/tmp/a.txt\n</parameter>\n</function>\n</tool_call>",
+        true);
+    CHECK(closed_think.closed);
+    CHECK(closed_think.reasoning == "plan");
+    auto after_think = parse_assistant_actions(closed_think.visible);
+    CHECK(after_think.tool_calls.size() == 1);
+
+    const char *inside =
+        "<think>draft <tool_call><function=execute_command><parameter=command>rm</parameter></function></tool_call></think>"
+        "<tool_call>\n<function=read_file>\n<parameter=path>\n/tmp/a.txt\n</parameter>\n</function>\n</tool_call>";
+    const ThinkingSplit explicit_think = split_thinking_channel(inside, false);
+    CHECK(explicit_think.closed);
+    auto explicit_actions = parse_assistant_actions(explicit_think.visible);
+    CHECK(explicit_actions.tool_calls.size() == 1);
+    if (!explicit_actions.tool_calls.empty())
+    {
+        CHECK(explicit_actions.tool_calls[0].name == "read_file");
+    }
+
+    ChatTool offset_tool;
+    offset_tool.name = "read_file";
+    offset_tool.parameters =
+        R"({"type":"object","properties":{"offset":{"type":"integer"},"path":{"type":"string"}}})";
+    const char *offset_call =
+        "<tool_call>\n<function=read_file>\n<parameter=path>\n/tmp/a.txt\n</parameter>\n<parameter=offset>\n10\n</parameter>\n</function>\n</tool_call>";
+    auto offset_actions = parse_assistant_actions(offset_call);
+    coerce_tool_arguments(offset_actions.tool_calls, std::span<const ChatTool>(&offset_tool, 1));
+    CHECK(offset_actions.tool_calls.size() == 1);
+    if (!offset_actions.tool_calls.empty())
+    {
+        CHECK(offset_actions.tool_calls[0].arguments.at("offset") == 10);
+        CHECK(offset_actions.tool_calls[0].arguments.at("path").is_string());
+    }
+
+    ChatTool union_tool;
+    union_tool.name = "ping";
+    union_tool.parameters =
+        R"({"type":"object","properties":{"host":{"type":["string","null"],"description":"hostname"}}})";
+    const auto union_params = tool_parameters(union_tool);
+    CHECK(union_params.size() == 1);
+    if (!union_params.empty())
+    {
+        CHECK(union_params[0].type == "string");
+        CHECK(union_params[0].description == "hostname");
+    }
 }
 
 void test_system_prompt_uses_client_tools()
@@ -137,6 +225,9 @@ void test_model_adapter_selection()
 
     const auto fallback = make_model_adapter("models/unknown.gguf", "");
     CHECK(fallback->name() == "qwen");
+
+    const auto qwen_in_deepseek_dir = make_model_adapter("models/Qwen3.gguf", "/opt/deepseek/Qwen3.8-27B.jinja");
+    CHECK(qwen_in_deepseek_dir->name() == "qwen");
 }
 
 std::string read_file(const std::string &path)

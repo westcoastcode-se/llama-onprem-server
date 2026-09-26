@@ -143,6 +143,18 @@ bool extract_single_tool(const nlohmann::json &j, ParsedToolCall &tc)
             tc.arguments[it.key()] = it.value();
         }
     }
+    if (tc.arguments.is_string())
+    {
+        const auto parsed = nlohmann::json::parse(tc.arguments.get<std::string>(), nullptr, false);
+        if (parsed.is_object())
+        {
+            tc.arguments = parsed;
+        }
+    }
+    if (!tc.arguments.is_object())
+    {
+        tc.arguments = nlohmann::json::object();
+    }
     if (j.contains("id") && j["id"].is_string())
     {
         tc.id = j["id"].get<std::string>();
@@ -264,7 +276,139 @@ std::string strip_special_blocks(std::string_view text)
     return std::string(trim_sv(out));
 }
 
+bool starts_ieq(std::string_view text, size_t pos, std::string_view lit)
+{
+    if (lit.empty() || pos > text.size() || text.size() - pos < lit.size())
+    {
+        return false;
+    }
+    for (size_t i = 0; i < lit.size(); ++i)
+    {
+        const auto a = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(text[pos + i])));
+        const auto b = static_cast<unsigned char>(std::tolower(static_cast<unsigned char>(lit[i])));
+        if (a != b)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+size_t find_ieq(std::string_view text, size_t from, std::string_view lit)
+{
+    if (lit.empty() || from > text.size())
+    {
+        return std::string_view::npos;
+    }
+    for (size_t i = from; i + lit.size() <= text.size(); ++i)
+    {
+        if (starts_ieq(text, i, lit))
+        {
+            return i;
+        }
+    }
+    return std::string_view::npos;
+}
+
+constexpr std::string_view kThinkNames[] = {"think", "thinking", "thought", "reasoning"};
+
+bool match_open_think(std::string_view text, size_t i, std::string_view &name, size_t &open_end)
+{
+    if (i >= text.size() || text[i] != '<')
+    {
+        return false;
+    }
+    for (const std::string_view n : kThinkNames)
+    {
+        if (!starts_ieq(text, i + 1, n))
+        {
+            continue;
+        }
+        const size_t after = i + 1 + n.size();
+        if (after >= text.size())
+        {
+            return false;
+        }
+        const char next = text[after];
+        if (next != '>' && next != ' ' && next != '\t' && next != '/')
+        {
+            continue;
+        }
+        const auto gt = text.find('>', after);
+        if (gt == std::string_view::npos)
+        {
+            return false;
+        }
+        name = n;
+        open_end = gt + 1;
+        return true;
+    }
+    return false;
+}
+
 } // namespace
+
+ThinkingSplit split_thinking_channel(std::string_view text, bool prompt_opened_think)
+{
+    ThinkingSplit out;
+    std::string_view rest = text;
+    if (prompt_opened_think)
+    {
+        constexpr std::string_view kClose = "</think>";
+        const auto at = find_ieq(text, 0, kClose);
+        if (at == std::string_view::npos)
+        {
+            out.reasoning.assign(text.begin(), text.end());
+            out.closed = false;
+            return out;
+        }
+        out.reasoning.assign(text.begin(), text.begin() + static_cast<std::ptrdiff_t>(at));
+        rest = text.substr(at + kClose.size());
+    }
+
+    std::string visible;
+    visible.reserve(rest.size());
+    size_t i = 0;
+    while (i < rest.size())
+    {
+        std::string_view name;
+        size_t open_end = 0;
+        if (!match_open_think(rest, i, name, open_end))
+        {
+            visible.push_back(rest[i]);
+            ++i;
+            continue;
+        }
+        if (open_end >= 2 && rest[open_end - 2] == '/')
+        {
+            i = open_end;
+            continue;
+        }
+        std::string closer = "</";
+        closer.append(name);
+        closer.push_back('>');
+        const auto close_at = find_ieq(rest, open_end, closer);
+        if (close_at == std::string_view::npos)
+        {
+            if (!out.reasoning.empty())
+            {
+                out.reasoning.push_back('\n');
+            }
+            out.reasoning.append(rest.substr(open_end));
+            out.visible = std::move(visible);
+            out.closed = false;
+            return out;
+        }
+        if (!out.reasoning.empty())
+        {
+            out.reasoning.push_back('\n');
+        }
+        out.reasoning.append(rest.substr(open_end, close_at - open_end));
+        i = close_at + closer.size();
+    }
+    out.visible = std::move(visible);
+    return out;
+}
 
 ParsedAssistantActions parse_assistant_actions(std::string_view text, const ModelAdapter &adapter)
 {

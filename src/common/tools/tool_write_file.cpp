@@ -21,11 +21,21 @@ std::string write_file(const nlohmann::json & args) {
         if (p.has_parent_path()) {
             std::filesystem::create_directories(p.parent_path());
         }
-        std::ofstream out(path, std::ios::trunc);
-        if (!out.is_open()) {
-            return "error: failed to open file for writing: " + path;
+        const std::filesystem::path tmp = p.string() + ".callisto-tmp";
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (!out.is_open()) {
+                return "error: failed to open file for writing: " + path;
+            }
+            out.write(content.data(), static_cast<std::streamsize>(content.size()));
+            out.flush();
+            if (!out) {
+                out.close();
+                std::filesystem::remove(tmp);
+                return "error: failed to write file: " + path;
+            }
         }
-        out << content;
+        std::filesystem::rename(tmp, p);
         return "success: wrote " + std::to_string(content.size()) + " bytes to " + path;
     } catch (const std::exception & e) {
         return std::string("error writing file: ") + e.what();

@@ -647,15 +647,6 @@ bool parse_tool_call(std::string_view response, std::string & name, nlohmann::js
     return false;
 }
 
-// ---------------------------------------------------------------------------
-// Tool Approval Handling
-// -------------------------------------------------------------{
-//  "name": "execute_command",
-//  "arguments": {
-//    "command": "cd /workspaces/llama-onprem-server && for f in src/llm/llm_engine.cpp src/common/agent.cpp src/common/tools.cpp src/common/context.hpp src/common/agent_backend.hpp src/client.cpp src/server.cpp src/fat_client.cpp; do\n  perl -pi -e 's/Color::(RESET|BOLD|DIM|RED|GREEN|YELLOW|BLUE|MAGENTA|CYAN|WHITE|GRAY)\\b/Color::code(Color::\$1)/g' \"$f\"\ndone\necho \"=== remaining bare Color:: usages (should be empty) ===\"\ngrep -rn \"Color::\" src/ | grep -v \"Color::code(\" | grep -v \"override_enabled\" | grep -v \"code(const char\" | grep -v \"is_enabled\"\necho \"=== DONE ===\"\ngrep -rc \"Color::code(\" src/ | grep -v ':0'"
-//  }
-//}              --------------
-
 ToolApprovalParseResult parse_tool_approval_input(std::string_view raw_input) {
     size_t first = raw_input.find_first_not_of(" \t\r\n");
     if (first == std::string_view::npos) {
@@ -695,7 +686,7 @@ ToolApproval prompt_tool_approval(std::string_view tool_name, const nlohmann::js
         std::string line;
         if (!std::getline(in, line)) {
             out << "\n";
-            return ToolApproval::DENY;
+            return ToolApproval::CLOSED;
         }
 
         auto res = parse_tool_approval_input(line);
@@ -815,7 +806,7 @@ std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thi
         // <think>lorem ipsum<
         if (end + 1 >= text.size()) {
             thinking = string_view_trim(text.substr(pos + 1, end - pos - 1));
-            return end + 1;
+            return std::string_view::npos;
         }
 
         // Is this an end tag?
@@ -828,7 +819,7 @@ std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thi
         // <think>lorem ipsum</thi
         if (text.length() - seek_pos < tag.size()) {
             thinking = string_view_trim(text.substr(pos + 1, end - pos - 1));
-            return end + 1;
+            return std::string_view::npos;
         }
 
         end = text.find_first_of('>', seek_pos + 1);
@@ -849,8 +840,12 @@ std::string_view::size_type ResponseBlocks::extract_string(std::string_view& thi
     }
 
     // <think>lorem ipsum
-    thinking = string_view_trim(text.substr(pos, end - pos));
-    return end;
+    if (pos + 1 <= end && pos + 1 <= text.size()) {
+        thinking = string_view_trim(text.substr(pos + 1, end - (pos + 1)));
+    } else {
+        thinking = {};
+    }
+    return std::string_view::npos;
 }
 
 ResponseBlocks ResponseBlocks::from_text(const std::string_view text) {
@@ -879,9 +874,10 @@ ResponseBlocks ResponseBlocks::from_text(const std::string_view text) {
             if (tag == "think" || tag == "thinking" || tag == "reasoning" || tag == "thought") {
                 blocks.flags |= thinking_bit;
                 pos = extract_string(blocks.thinking, text, tag, end);
-                if (pos != std::string_view::npos) {
-                    blocks.flags |= thinking_done_bit;
+                if (pos == std::string_view::npos) {
+                    break;
                 }
+                blocks.flags |= thinking_done_bit;
                 continue;
             }
 
@@ -889,6 +885,10 @@ ResponseBlocks ResponseBlocks::from_text(const std::string_view text) {
             if (tag == "tool_call" || tag == "tool_calls") {
                 std::string_view value;
                 pos = extract_string(value, text, tag, end);
+                if (pos == std::string_view::npos) {
+                    blocks.tool_calls.emplace_back(value, false);
+                    break;
+                }
                 blocks.tool_calls.emplace_back(value, true);
                 continue;
             }

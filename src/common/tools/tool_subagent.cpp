@@ -8,7 +8,7 @@ Tool create_subagent_tool(SubagentRunner runner) {
     return {
         "sub_agent",
         "Delegate a task or multiple sub-tasks to an isolated sub-agent. The sub-agent runs in an independent context with full tool access (read/write files, execute commands, search code, web search, etc.) and returns only its final result. Supports executing a single task or multiple tasks in a controlled sequential order. Always use sub-agents when exploring large codebases, inspecting multiple or large files, or investigating complex components (e.g. client, server, fat_client) to optimize context usage. The sub-agent's findings and synthesized results can be directly utilized by the main agent or subsequent sub-agents without needing to re-read large files into the conversation history.",
-        "arguments:\n      task: string or array (the specific sub-task or list of sub-tasks for the sub-agent to accomplish)\n      tasks: array of strings/objects (optional list of tasks to execute in controlled order)",
+        "arguments:\n      task: string (one sub-task, or a JSON array of sub-tasks)\n      tasks: array (optional list of tasks to execute in order)",
         [runner](const nlohmann::json & args) -> std::string {
             if (!runner) {
                 return "error: sub-agent runner not configured";

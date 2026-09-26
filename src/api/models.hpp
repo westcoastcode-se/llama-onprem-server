@@ -146,40 +146,38 @@ struct ChatMessage
 
     string role;
     string content;
+    // Think body kept apart from content so the next turn can round-trip the template.
+    string reasoning_content;
 
     /**
-     * Validate required properties
+     * Validate required properties. Assistant content may be empty when the turn
+     * was only reasoning, or the model stopped before writing an answer.
      */
     void validate() const
     {
         if (role.empty())
             throw BadRequest{"property 'role' is required"};
-        if (content.empty())
-            throw BadRequest{"property 'content' is required"};
     }
 
     static ChatMessage from_json(const nlohmann::json &j)
     {
-        // clang-format off
-        return ChatMessage
-        {
-            .role = j.value("role", "user"),
-            .content = j.value("content", ""),
-        };
-        // clang-format on
+        ChatMessage message;
+        message.role = j.value("role", "user");
+        message.content = j.value("content", "");
+        message.reasoning_content = j.value("reasoning_content", "");
+        message.validate();
+        return message;
     }
 
     [[nodiscard]] nlohmann::json to_json() const
     {
         validate();
-
-        // clang-format off
-        return json
+        json j{{"role", role}, {"content", content}};
+        if (!reasoning_content.empty())
         {
-            {"role", role},
-            {"content", content}
-        };
-        // clang-format on
+            j["reasoning_content"] = reasoning_content;
+        }
+        return j;
     }
 };
 
@@ -342,6 +340,9 @@ struct SessionResponse
     // TODO: This should be part of the client and not the server
     bool questions = true;
 
+    // Set when the latest generation failed. Empty after a successful turn.
+    string error;
+
     /**
      * Validate required properties
      */
@@ -371,6 +372,11 @@ struct SessionResponse
             {"questions", questions}
         };
         // clang-format on
+
+        if (!error.empty())
+        {
+            j["error"] = error;
+        }
 
         if (active_job_key)
         {
@@ -432,6 +438,7 @@ struct SessionResponse
         }
 
         req.questions = j.value("questions", true);
+        req.error = j.value("error", string());
 
         return req;
     }

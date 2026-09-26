@@ -46,7 +46,8 @@ static bool icontains(std::string_view haystack, std::string_view needle_lower) 
     auto it = std::search(haystack.begin(), haystack.end(),
                           needle_lower.begin(), needle_lower.end(),
                           [](char ch1, char ch2) {
-                              return std::tolower(static_cast<unsigned char>(ch1)) == ch2;
+                              return std::tolower(static_cast<unsigned char>(ch1)) ==
+                                     std::tolower(static_cast<unsigned char>(ch2));
                           });
     return it != haystack.end();
 }

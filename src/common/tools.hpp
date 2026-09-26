@@ -26,7 +26,8 @@
 enum class ToolApproval {
     ALLOW,   ///< Allow tool execution this time
     DENY,    ///< Deny execution
-    ALWAYS   ///< Always allow tool execution during this session
+    ALWAYS,  ///< Always allow tool execution during this session
+    CLOSED   ///< stdin hit EOF; stop the turn instead of denying and continuing
 };
 
 /**

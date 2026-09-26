@@ -176,55 +176,70 @@ class RestClient
     {
         std::string accumulated;
         std::string line_buf;
+        std::string stream_error;
         bool is_done = false;
         bool client_cancel = false;
 
-        // ContentReceiver returns true as long as it download it's content from the server. The
-        // server itself will send a json blob with the property "done" = "true" when
-        // the thinking process is finished.
-        //
-        // The CLI is configured with "has_payload_max_length_ = false" so we don't have to
-        // care about receiving partial json from the server
+        auto handle_line = [&](std::string_view line) -> bool {
+            if (!line.empty() && line.back() == '\r')
+            {
+                line.remove_suffix(1);
+            }
+            if (line.empty())
+            {
+                return true;
+            }
+            json parsed = json::parse(line, nullptr, false);
+            if (parsed.is_discarded())
+            {
+                stream_error = "token stream returned invalid json";
+                return false;
+            }
+            const auto t = MessageTokensResponse::from_json(parsed);
+            accumulated += t.tokens;
+            if (cb && !t.tokens.empty() && !cb(t.tokens))
+            {
+                client_cancel = true;
+                return false;
+            }
+            if (t.done)
+            {
+                is_done = true;
+                if (t.state == "error")
+                {
+                    stream_error = t.error.empty() ? "generation failed" : t.error;
+                }
+                return false;
+            }
+            return true;
+        };
+
+        // Chunks are not NDJSON lines. Buffer until '\n' before parsing.
         auto res = cli_.Get("/v1/sessions/" + std::to_string(session_id) + "/jobs/" +
             std::to_string(key) + "/tokens",
                             [&](const char * const data, const size_t len) {
-                                if (client_cancel)
+                                if (client_cancel || is_done)
                                 {
-                                    log_info("Client cancelled request");
-                                    // Forcefully stop the draining and close the connection when cancelled
                                     return false;
                                 }
-
-                                // Drain any trailing bytes after the terminal NDJSON line if we've
-                                // received the done flag
-                                if (is_done)
+                                line_buf.append(data, len);
+                                size_t start = 0;
+                                while (true)
                                 {
-                                    log_info("Done");
-                                    return true;
+                                    const auto nl = line_buf.find('\n', start);
+                                    if (nl == std::string::npos)
+                                    {
+                                        line_buf.erase(0, start);
+                                        return true;
+                                    }
+                                    const bool keep_going = handle_line(std::string_view(line_buf).substr(start, nl - start));
+                                    start = nl + 1;
+                                    if (!keep_going)
+                                    {
+                                        line_buf.clear();
+                                        return false;
+                                    }
                                 }
-
-                                const string_view line(data, len);
-                                // Parse the json - ignore it if it's invalid
-                                json j = json::parse(line, nullptr, false);
-                                if (j.is_discarded())
-                                {
-                                    throw BadRequest{std::format("token stream returned an invalid json: '{}'", line)};
-                                }
-
-                                // Collect all tokens received from the server
-                                const auto t = MessageTokensResponse::from_json(j);
-                                accumulated += t.tokens;
-                                if (cb && !cb(t.tokens))
-                                {
-                                    client_cancel = true;
-                                    return false; // intentional cancel from callback
-                                }
-                                if (t.done)
-                                {
-                                    is_done = true;
-                                    return false;
-                                }
-                                return true;
                             });
 
         if (!res)
@@ -232,9 +247,13 @@ class RestClient
             // Successful end-of-stream via ContentReceiver cancel is not used; real
             // connection failures still surface here. If we already saw done=true,
             // treat as success (defensive for older httplib edge cases).
-            if (is_done && !client_cancel)
+            if (is_done && !client_cancel && stream_error.empty())
             {
                 return accumulated;
+            }
+            if (!stream_error.empty() && !client_cancel)
+            {
+                throw ClientError(0, stream_error, stream_error);
             }
             const auto err = res.error();
             throw ClientError(0, "", std::format("token stream failed: no response for job {} (httplib error {})", key,
@@ -243,7 +262,11 @@ class RestClient
         if (res->status != 200)
         {
             throw ClientError(res->status, res->body,
-                              std::format("GET /v1/sessions/{}/jobs/{}/tokens failed", session_id, key));
+                              std::format("GET /v1/sessions/{}/jobs/{}/tokens failed: {}", session_id, key, res->body));
+        }
+        if (!stream_error.empty() && !client_cancel)
+        {
+            throw ClientError(0, stream_error, stream_error);
         }
         return accumulated;
     }

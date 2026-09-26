@@ -123,7 +123,7 @@ int test_strip_response_stream_think_and_multiple_tool_call_multi_line() {
 /**
  * Run all generic tools functions tests
  */
-void test_tools() {
+int test_tools() {
     RUN_TEST(test_strip_response_stream_think_one_line);
     RUN_TEST(test_strip_response_stream_think_multiline_line);
     RUN_TEST(test_strip_response_stream_think_broken_end);
@@ -134,4 +134,5 @@ void test_tools() {
     RUN_TEST(test_strip_response_stream_think_and_tool_call_multi_line);
     RUN_TEST(test_strip_response_stream_think_and_multiple_tool_call_one_line);
     RUN_TEST(test_strip_response_stream_think_and_multiple_tool_call_multi_line);
+    return EXIT_SUCCESS;
 }

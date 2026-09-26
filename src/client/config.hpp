@@ -16,20 +16,18 @@ inline void print_usage(const char *argv0)
     std::print("\n{}Callisto REST Client{}\n"
                "Talks to callisto_server over HTTP (/v1/sessions).\n\n"
                "Usage:\n"
-               "    {} [options] [prompt...]\n\n"
+               "    {} [options]\n\n"
                "Options:\n"
                "    --host <host>         Server host (default: 127.0.0.1)\n"
                "    -p, --port <int>      Server port (default: 8080)\n"
-               "    -c, -e, --command <s> Single prompt, print result, exit\n"
                "    -s <prompt>           Extra system text (sent on session create)\n"
-               "    -q, --quiet           Only print assistant output / final result\n"
                "    -y, --yes             Auto-approve all tool calls\n"
                "    --allow-tool <name>   Auto-approve one tool (repeatable)\n"
-               "    --allow-tools <list>  Comma-separated auto-approve list\n"
+               "    --allow-tools <list>  Comma-separated tool names. all and * approve every tool\n"
                "    --no-questions        Create session with questions:false\n"
                "    --questions           Create session with questions:true (default)\n"
-               "    --show-think          Print model <think> text (hidden by default)\n"
-               "    --oneshot             Temp session: one message, no tools loop, then delete\n"
+               "    --show-think          Print the thinking block (default)\n"
+               "    --hide-think          Hide thinking text; show only a timer\n"
                "    --sub-agents          Allow the sub_agent tool (default)\n"
                "    --no-sub-agents       Do not offer sub_agent\n"
                "    -it <n>               Max tool/question rounds per user turn (default: 40)\n"
@@ -53,7 +51,7 @@ struct CliConfig
     std::string system_prompt;
     std::vector<std::string> allowed_tools;
     int max_tool_rounds = 40;
-    bool show_think = false;
+    bool show_think = true;
     bool subagents = true;
 
     static CliConfig from_args(int argc, char **argv)
@@ -111,6 +109,10 @@ struct CliConfig
             {
                 cfg.show_think = true;
             }
+            else if (arg == "--hide-think")
+            {
+                cfg.show_think = false;
+            }
             else if (arg == "--sub-agents" || arg == "--subagents" || arg == "-sa")
             {
                 cfg.subagents = true;
@@ -119,7 +121,7 @@ struct CliConfig
             {
                 cfg.subagents = false;
             }
-            else if (arg == "-it" && i + 1 < argc)
+            else if (arg == "-it")
             {
                 cfg.max_tool_rounds = std::stoi(need("-it"));
             }

@@ -438,6 +438,7 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
         common_chat_msg msg;
         msg.role = message.role;
         msg.content = message.content;
+        msg.reasoning_content = message.reasoning_content;
         inputs.messages.push_back(std::move(msg));
     }
     inputs.tools.reserve(tools.size());

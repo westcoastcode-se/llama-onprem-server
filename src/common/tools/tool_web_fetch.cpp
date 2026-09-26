@@ -44,7 +44,7 @@ Tool create_web_fetch_tool() {
     return {
         "web_fetch",
         "Fetch the readable text or html content of a web page via HTTP(S).",
-        "arguments:\n      url: string (absolute http/https url)\n      type: 'text' or 'html' (optional, defaults to 'text')",
+        "arguments:\n      url: string (absolute http/https url)\n      type: string (optional, text or html, defaults to text)",
         web_fetch
     };
 }

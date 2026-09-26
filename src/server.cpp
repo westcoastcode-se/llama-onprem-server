@@ -12,28 +12,29 @@
 #include <cstdlib>
 #include <format>
 #include <httplib.h>
+#include <poll.h>
 #include <print>
 #include <string>
+#include <thread>
+#include <unistd.h>
 
 namespace
 {
-httplib::Server *g_server = nullptr;
-Jobs *g_jobs = nullptr;
-std::atomic<bool> g_stopping{false};
+int g_wake_fd = -1;
+volatile sig_atomic_t g_stop_flag = 0;
 
 void on_signal(int)
 {
-    if (g_stopping.exchange(true))
+    if (g_stop_flag)
     {
         return;
     }
-    if (g_server)
+    g_stop_flag = 1;
+    if (g_wake_fd >= 0)
     {
-        g_server->stop();
-    }
-    if (g_jobs)
-    {
-        g_jobs->stop();
+        const char byte = 1;
+        const ssize_t n = ::write(g_wake_fd, &byte, 1);
+        (void)n;
     }
 }
 
@@ -63,7 +64,7 @@ void print_usage(const char *argv0)
                  "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
                  "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
                  "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
-                 "  --host HOST   bind host (default 0.0.0.0)\n"
+                 "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)",
                  argv0);
 }
@@ -224,8 +225,29 @@ int main(int argc, char **argv)
     Sessions sessions(jobs, *adapter);
     httplib::Server svr;
 
-    g_server = &svr;
-    g_jobs = &jobs;
+    int wake[2] = {-1, -1};
+    if (::pipe(wake) != 0)
+    {
+        log_error("failed to create shutdown pipe");
+        return 1;
+    }
+    g_wake_fd = wake[1];
+    std::jthread stopper([&svr, &jobs, read_fd = wake[0]](std::stop_token stop) {
+        while (!stop.stop_requested())
+        {
+            pollfd pfd{};
+            pfd.fd = read_fd;
+            pfd.events = POLLIN;
+            const int rc = ::poll(&pfd, 1, 200);
+            if (rc > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+            {
+                jobs.request_shutdown();
+                svr.stop();
+                return;
+            }
+        }
+    });
+
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
@@ -251,25 +273,33 @@ int main(int argc, char **argv)
         }
         catch (const NotFound &e)
         {
-            send_json(res, 404, ErrorResponse{404, "not found"});
+            send_json(res, 404, ErrorResponse{404, e.what()});
         }
         catch (const Busy &e)
         {
-            send_json(res, 503, ErrorResponse{503, "busy"});
+            send_json(res, 503, ErrorResponse{503, e.what()});
         }
         catch (const BadRequest &e)
         {
-            send_json(res, 400, ErrorResponse{400, "Bad Request"});
+            send_json(res, 400, ErrorResponse{400, e.what()});
         }
         catch (const json::exception &e)
         {
             log_error("unhandled JSON exception: ", e.what());
-            send_json(res, 400, ErrorResponse{400, "Bad Request"});
+            send_json(res, 400, ErrorResponse{400, e.what()});
+        }
+        catch (const std::invalid_argument &)
+        {
+            send_json(res, 400, ErrorResponse{400, "invalid id"});
+        }
+        catch (const std::out_of_range &)
+        {
+            send_json(res, 400, ErrorResponse{400, "invalid id"});
         }
         catch (const std::exception &e)
         {
             log_error("unhandled exception: ", e.what());
-            send_json(res, 500, ErrorResponse{500, "Internal Server Error"});
+            send_json(res, 500, ErrorResponse{500, e.what()});
         }
     });
 
@@ -284,7 +314,10 @@ int main(int argc, char **argv)
     }
 
     jobs.stop();
-    g_server = nullptr;
-    g_jobs = nullptr;
+    stopper.request_stop();
+    stopper.join();
+    g_wake_fd = -1;
+    ::close(wake[0]);
+    ::close(wake[1]);
     return 0;
 }

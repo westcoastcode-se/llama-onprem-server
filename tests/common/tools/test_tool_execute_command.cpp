@@ -52,9 +52,10 @@ static int test_tool_execute_command_error_invalid_command() {
 /**
  * Run all execute command tests
  */
-void test_tool_execute_command() {
+int test_tool_execute_command() {
     RUN_TEST(test_tool_execute_command_echo);
     RUN_TEST(test_tool_execute_command_echo_exitcode_1);
     RUN_TEST(test_tool_execute_command_error_missing_command);
     RUN_TEST(test_tool_execute_command_error_invalid_command);
+    return EXIT_SUCCESS;
 }

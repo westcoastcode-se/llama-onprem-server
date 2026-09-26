@@ -99,14 +99,15 @@ class Session
         r.pending_tool_calls = pending_tool_calls_;
         r.pending_question = pending_question_;
         r.questions = questions_enabled_;
+        r.error = last_error_;
         return r;
     }
 
-    /** Idle and no active job — candidate for GC. */
+    /** No generation in flight. Awaiting a tool result still expires after kIdleTtl. */
     [[nodiscard]] bool is_gc_idle() const
     {
         std::lock_guard lock(mutex_);
-        return !active_job_ && state_ == SessionState::Idle;
+        return !active_job_ && state_ != SessionState::Generating;
     }
 
     // Copy of the conversation a sub-agent can continue from. The system prompt is kept as-is.
@@ -172,7 +173,7 @@ class Session
         ensure_no_active_generation_unlocked();
         clear_pending_unlocked();
         state_ = SessionState::Idle;
-        messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content});
+        messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content, .reasoning_content = {}});
         turn_max_tokens_ = msg.max_tokens >= 0 ? msg.max_tokens : max_tokens_;
         last_active_ = std::chrono::steady_clock::now();
     }
@@ -191,7 +192,7 @@ class Session
         }
 
         messages_.push_back(
-            ChatMessage{.role = string(ChatMessage::ROLE_USER), .content = format_tool_results(body)});
+            ChatMessage{.role = string(ChatMessage::ROLE_USER), .content = format_tool_results(body), .reasoning_content = {}});
         turn_max_tokens_ = max_tokens_;
         clear_pending_unlocked();
         state_ = SessionState::Idle;
@@ -239,15 +240,30 @@ class Session
         last_active_ = std::chrono::steady_clock::now();
         latest_finished_ = std::move(task);
 
+        if (status.state == JobState::Error)
+        {
+            last_error_ = status.error.empty() ? "generation failed" : status.error;
+            state_ = SessionState::Idle;
+            clear_pending_unlocked();
+            return;
+        }
         if (status.state != JobState::Done)
         {
+            last_error_.clear();
             state_ = SessionState::Idle;
             clear_pending_unlocked();
             return;
         }
 
-        messages_.push_back(
-            ChatMessage{.role = string(ChatMessage::ROLE_ASSISTANT), .content = status.content});
+        last_error_.clear();
+        ChatMessage assistant;
+        assistant.role = string(ChatMessage::ROLE_ASSISTANT);
+        assistant.content = status.content;
+        assistant.reasoning_content = status.reasoning;
+        if (!assistant.content.empty() || !assistant.reasoning_content.empty())
+        {
+            messages_.push_back(std::move(assistant));
+        }
 
         auto actions = actions_from_status(status);
         if (!questions_enabled_)
@@ -297,6 +313,7 @@ class Session
     optional<JobKey> active_job_;
     shared_ptr<Task> latest_finished_;
     SessionState state_ = SessionState::Idle;
+    string last_error_;
     const ModelAdapter &adapter_;
     vector<ParsedToolCall> pending_tool_calls_;
     optional<ParsedQuestion> pending_question_;
