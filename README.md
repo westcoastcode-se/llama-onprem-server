@@ -1,232 +1,146 @@
-**DISCLAIMER: Use this project and executing any code from this project at your own risk.**
+**DISCLAIMER: Use this project and any code it runs at your own risk.**
 
-Most of the code in this project is vibe-coded. Keep that in mind when considering things like security flaws. The 
-server itself is only running the actual AI. It won't run any tasks outside running the AI model itself.
+Most of the code is vibe-coded. The server only loads a GGUF model and generates text. The client runs tools on the machine where it is started, including shell commands and file writes. Run the client in a virtual machine or container if you want that kept away from the rest of the system.
 
-The client, however, has support for lots of tasks that can be considered insecure. Examples are: running arbitrary
-commands on the computer.
+# Callisto
 
-You can increase the security somewhat by running the client itself in a virtual machine or container using devcontainers.
+Callisto is a local coding agent. Two programs share the work:
 
-# Introduction
+1. **`callisto_server`** keeps chat sessions and generates text. It does not run tools.
+2. **`callisto_cli`** is the agent. It talks to the server over HTTP and runs tools locally.
 
-This project is basically a way for me to improve my understanding on how AI models and agents work. Most of the code is
-vibe-coded.
+llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.
 
-Complex tasks are delegated to subagents as a way to lower the complexity of the main agent context.
+## The client
 
-Experiment yourself how much context you allow the server to give the client. If you have a Nvidia 4090 GTX with 64GB 
-RAM, you can use at least `-c 100000`. You can also use `Qwen3.8-27B-UD-Q4_K_XL.gguf` as a model, which is really 
-good for that kind of hardware.
+With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. Thinking stays on one line until you open it. A tool call is one line, and opens while you answer the approval question. The assistant reply sits in a box. The context meter is in the upper right.
 
-# Setup Dev
+![Callisto client](example.gif)
 
-Install the necessary tools needed for the project to work — C++ development tools with CMake and Python.
-Optionally with CUDA as well. Replace `pacman` with `apt` if you are building on a Debian system.
+`exec` runs one task as plain text and then exits, for scripts. `health`, `session`, `send`, `job`, and `tools` talk to the HTTP API directly.
+
+# Compile
+
+You need CMake 4.1 or newer, a C++23 compiler, libcurl, and git. Ninja is optional. CUDA is optional and only needed for GPU inference.
+
+Arch:
 
 ```bash
-sudo pacman -S --needed base-devel git cmake ninja python curl cuda
+sudo pacman -S --needed base-devel git cmake ninja curl
 ```
 
-Models can be found on https://huggingface.co, for example: https://huggingface.co/unsloth/Qwen3.8-27B-GGUF
+Debian or Ubuntu: install the same packages with `apt` (`build-essential`, `cmake`, `ninja-build`, `libcurl4-openssl-dev`, `git`). Add the CUDA toolkit when you want GPU layers.
 
-## Checking out and building llama.cpp outside this project
-
-Here is an example on how to build llama.cpp from scratch. You don't need to do this beforehand if you don't want to.
+From the repository root:
 
 ```bash
-# Clone llama.cpp
-git clone https://github.com/ggml-org/llama.cpp.git
-cd llama.cpp
-
-# Add cuda to PATH
-export PATH=/opt/cuda/bin:$PATH
-export LD_LIBRARY_PATH=/opt/cuda/lib64:$LD_LIBRARY_PATH
-
-# Compile llama.cpp including tools with CUDA support.
-# You might have to replace the CMAKE_CUDA_ARCHITECTURE to whatever your system has access to.
-# Use: "nvidia-smi --query-gpu=name,compute_cap --format=csv" to find out
-cmake -B build \
-  -DGGML_CUDA=ON \
-  -DCMAKE_CUDA_ARCHITECTURES="80;86;89" \
-  -DLLAMA_BUILD_SERVER=ON \
-  -DCMAKE_BUILD_TYPE=Release \
-  -G Ninja
-cmake --build build --config Release -j$(nproc)
-
-# Setup Python tools
-python -m venv venv
-source venv/bin/activate
-pip install .
-
-# Download Qwen3.8-27B-UD-Q4_K_XL
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
-EOF
-
-# Download prism-ml/Ternary-Bonsai-2-27B-gguf
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="prism-ml/Ternary-Bonsai-2-27B-gguf", allow_patterns=["*Ternary-Bonsai-2-27B-PQ2_0.gguf"], local_dir="Ternary-Bonsai-2-27B")
-EOF
+cmake -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build cmake-build-debug -j$(nproc)
 ```
 
-After building the project, you can start llama.cpp locally by:
+That produces:
+
+- `cmake-build-debug/callisto_server`
+- `cmake-build-debug/callisto_cli`
+- `cmake-build-debug/callisto_tests`
+- `cmake-build-debug/tests`
+
+A Release build is the one to run a model with:
 
 ```bash
-# Start llama.cpp server
-./build/bin/llama-server -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf -ngl 99 --host 0.0.0.0 --port 8080
-
-# Or run one of the example applications with 32k tokens
-./build/bin/llama-simple-chat -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf -c 32768 -ngl 99
+cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build cmake-build-release --target callisto_server callisto_cli -j$(nproc)
 ```
 
-## Building this project
-
-Check out this project:
+GPU layers need CUDA turned on. `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints the architecture number. An RTX 40-series card is `89`.
 
 ```bash
-git clone <this-repo> --recurse-submodules
+cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build cmake-build-release --target callisto_server callisto_cli -j$(nproc)
 ```
 
-Open the project and build it with your favorite IDE (e.g. CLion) or directly via CMake:
+The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages the binaries already built in `cmake-build-debug`. Build those first.
+
+# Run
+
+Download a GGUF model. This tree ships chat templates for Qwen3.8-27B and Ternary-Bonsai-2-27B under `src/templates/`. Pass `--chat-template` when the file inside the GGUF is not the one you want.
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="89"
-cmake --build build -j$(nproc)
-```
-
-## Build this project inside devcontainer
-
-The devcontainer doesn't have access to CUDA. So build without it
-
-## Download Qwen3.8
-
-This project uses Qwen3.8 by default. Support for other models can also be used:
-
-```bash
+pip install huggingface_hub
 python <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
 EOF
 ```
 
-Replace `Qwen3.8-27B-UD-Q4_K_XL.gguf` with the model you want to use. Check Hugging Face for the system requirements for each model.
-
-## Download other models
-
-Use the same script as for Qwen3.8. The application requires GGUF format, so you might need to convert the model with:
+Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`.
 
 ```bash
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id="microsoft/Phi-3-mini-128k-instruct", local_dir="Phi-3-mini-128k-instruct")
-EOF
-
-python llama.cpp/convert_hf_to_gguf.py ./Phi-3-mini-128k-instruct --outfile Phi-3-mini-128k-instruct.gguf --outtype q8_0
+./cmake-build-release/callisto_server \
+  -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf \
+  -c 32768 -ngl 99
 ```
 
-## Building Devcontainer
-
-You can build a devcontainer where the HTTP server and the agent client are available:
+Start the client in the project you want it to edit:
 
 ```bash
-docker build . -t local_ai:latest
+./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
-## Before Running
+One task from a script:
 
-If you want to have support for searching the internet for information, then start the attached docker-compose.yml file
-to start SearXNG. Makes the AI's web-integration much more powerful:
+```bash
+./cmake-build-release/callisto_cli exec "Summarize the README"
+```
+
+`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.callisto/last-session` for this directory and server. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
+
+`web_search` calls a local SearXNG on port 4488. Start it with:
 
 ```bash
 docker compose up -d
 ```
 
-# Autonomous AI Agent & Architecture
+# Using the session
 
-The application is split into two programs:
+Reads run without a prompt. A write, a shell command, or a network tool asks first. The list is:
 
-1. **`callisto_server`** — HTTP server. Loads one GGUF model, keeps chat sessions, and generates text. It does not run tools.
-2. **`callisto_cli`** — Coding agent. Talks to the server over HTTP and runs tools on the machine where the client runs.
-3. **`web`** — Browser UI. It still expects the older TCP protocol and is not wired to this server.
-
-### Running the Server and Client
-
-Start the server:
-```bash
-./cmake-build-debug/callisto_server -m <path-to-model.gguf> -c 32768 -ngl 99 --host 0.0.0.0 -p 8080
-```
-
-Start the client in the project directory:
-```bash
-./cmake-build-debug/callisto_cli --host 127.0.0.1 -p 8080
-```
-
-`--approval` is `read-only` by default. `auto` writes inside the working directory without asking. `full` runs tools without asking.
-
-### Running the Web Interface
-
-Start the standalone web interface (default port `3000`, connects to AI server on `127.0.0.1:8080`):
-```bash
-python3 web/server.py --port 3000 --server-host 127.0.0.1 --server-port 8080
-```
-Then open your browser at `http://localhost:3000`.
-
-Features:
-- Chat interface with Markdown rendering and syntax-highlighted code blocks (with copy buttons).
-- Real-time token streaming via Server-Sent Events (SSE).
-- Real-time visualization of server context usage.
-- Server status, context resetting (`/reset`), custom system prompt, and temperature adjustments.
-- Configuration modal to dynamically change connected server address/port.
-
-### Custom Project Instructions (`AI_INSTRUCTIONS.md`)
-
-If a file named `AI_INSTRUCTIONS.md` (or alternatives such as `copilot_instructions.md` / `.github/copilot-instructions.md`) is found in the project root/working directory, it is automatically loaded and appended to the agent's system prompt under `## Project Instructions (AI_INSTRUCTIONS.md):`.
-This allows project-specific rules, coding conventions, and architectural guidelines to be consistently followed by the agent.
-
-### Tool Approval & Security Control
-
-`--approval read-only` asks before writes, shell commands, and network tools. Reads run without a prompt. `auto` also allows writes inside the working directory. `full` asks for nothing.
-
-When a tool needs approval, the client shows a list:
 - **Yes, this once** (`y`)
 - **No** (`n`)
 - **Always this tool** (`a`)
 - **Full access** (`f`)
 
-`/approval` switches the mode during the session.
+Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D` or `/exit` leaves.
 
-### Available Agent Tools
+| Command | What it does |
+|---|---|
+| `/help` | Show the commands |
+| `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
+| `/status` | Session id, approval mode, and server |
+| `/diff` | `git diff --stat` for the working directory |
+| `/compact` | Summarize the chat into a new session |
+| `/clear` | Start a new session |
+| `/exit` | Leave |
 
-When solving tasks, the agent iteratively reasons, invokes tools via `<tool_call>` blocks, receives observations via `<tool_response>`, and continues reasoning until the task is complete.
+If `AI_INSTRUCTIONS.md` or `.github/copilot-instructions.md` is in the working directory, that text is added to the system prompt.
 
-```xml
-<tool_call>
-{
-  "name": "read_file",
-  "arguments": {"path": "src/cli/main.cpp", "offset": 1, "limit": 50}
-}
-</tool_call>
-```
+Tools the client can run: `read_file`, `write_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`.
 
-- **`execute_command`** — Executes bash/shell commands on the local system, returning stdout/stderr and exit codes.
-- **`read_file`** — Reads local file contents with line numbering, offset, and limit support.
-- **`write_file`** — Writes/creates files (with automatic directory creation).
-- **`list_directory`** — Lists files and directories with sizes and file types.
-- **`file_search`** — Recursively searches for files/directories matching patterns.
-- **`search_text`** — Recursively searches for text or regular expressions across project files.
-- **`web_fetch`** — Downloads and parses readable text from HTTP(S) URLs via `libcurl`.
-- **`web_search`** — Searches the web via local SearXNG instance.
-- **`sub_agent`** — Delegates a sub-task or complex task to an isolated sub-agent. When sub-agents are enabled, the agent breaks down complex problems into modular tasks during the planning phase (Thought/Plan) and runs each task sequentially via sub-agents. The sub-agent runs with its own context and tools, keeping the main conversation context compact and avoiding context pollution, returning only its final result. Each sub-agent's response can also directly trigger follow-up tool executions (such as file operations, commands, or further sub-agent tasks).
+# Credits
 
-### Interactive Slash Commands
+Callisto sits on other people's work. Thank you.
 
-- `/help` — Show the commands.
-- `/approval [mode]` — Show or set `read-only`, `auto`, or `full`.
-- `/status` — Session id, approval mode, and server.
-- `/diff` — `git diff --stat` for the working directory.
-- `/compact` — Summarize the chat into a new session.
-- `/clear` — Start a new session.
-- `/exit` — Leave. Ctrl-C cancels the current generation.
+| Project | Role | License |
+|---|---|---|
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) and ggml | Model runtime in `callisto_server` | MIT, © 2023-2026 The ggml authors |
+| [nlohmann/json](https://github.com/nlohmann/json) | JSON, both programs | MIT, © 2013-2025 Niels Lohmann |
+| [cpp-httplib](https://github.com/yhirose/cpp-httplib) | HTTP, both programs | MIT, © Yuji Hirose |
+| [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | Fullscreen client | MIT, © 2019 Arthur Sonzogni |
+| [CLI11](https://github.com/CLIUtils/CLI11) | Command-line parsing | BSD-3-Clause, © 2017-2025 University of Cincinnati, Henry Schreiner |
+| [subprocess.h](https://github.com/sheredom/subprocess.h) | Process helper inside llama.cpp | The Unlicense |
+| [libcurl](https://curl.se) | HTTP fetch in the client | curl license, system library |
+
+The license texts those projects require for a binary build are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Source copies keep their own `LICENSE` files. CLI11's BSD-3-Clause terms forbid using the University of Cincinnati or the contributors' names to endorse a product. The thanks above is attribution, not an endorsement.
+
+SearXNG (AGPL-3.0) and Valkey (BSD-3-Clause) are optional separate services started by `docker-compose.yml`. They are not part of the Callisto binaries.
