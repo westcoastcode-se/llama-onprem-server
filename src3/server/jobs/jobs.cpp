@@ -164,16 +164,31 @@ void Jobs::release_session(const std::string &session_id)
     cv_.notify_one();
 }
 
+void Jobs::clone_session(const std::string &from, const std::string &to)
+{
+    if (from.empty() || to.empty() || from == to)
+    {
+        return;
+    }
+    std::lock_guard lock(mutex_);
+    pending_session_clones_.emplace_back(from, to);
+    cv_.notify_one();
+}
+
 Jobs::NextWork Jobs::wait_next(const std::stop_token &stop)
 {
     std::unique_lock lock(mutex_);
     std::stop_callback on_stop(stop, [&] { cv_.notify_all(); });
-    cv_.wait(lock, [&] { return stop.stop_requested() || !queue_.empty() || !pending_session_releases_.empty(); });
+    cv_.wait(lock, [&] {
+        return stop.stop_requested() || !queue_.empty() || !pending_session_releases_.empty() ||
+               !pending_session_clones_.empty();
+    });
     NextWork work;
     if (stop.stop_requested())
     {
         return work;
     }
+    work.clones.swap(pending_session_clones_);
     work.releases.swap(pending_session_releases_);
     while (!queue_.empty())
     {
@@ -198,6 +213,10 @@ void Jobs::worker_loop(std::stop_token stop)
         if (stop.stop_requested())
         {
             break;
+        }
+        for (const auto &[from, to] : work.clones)
+        {
+            engine_.clone_session(from, to);
         }
         for (const auto &session_id : work.releases)
         {

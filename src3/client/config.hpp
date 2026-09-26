@@ -30,6 +30,8 @@ inline void print_usage(const char *argv0)
                "    --questions           Create session with questions:true (default)\n"
                "    --show-think          Print model <think> text (hidden by default)\n"
                "    --oneshot             Temp session: one message, no tools loop, then delete\n"
+               "    --sub-agents          Allow the sub_agent tool (default)\n"
+               "    --no-sub-agents       Do not offer sub_agent\n"
                "    -it <n>               Max tool/question rounds per user turn (default: 40)\n"
                "    -h, --help            Show help\n\n"
                "Interactive commands (session mode):\n"
@@ -52,6 +54,7 @@ struct CliConfig
     std::vector<std::string> allowed_tools;
     int max_tool_rounds = 40;
     bool show_think = false;
+    bool subagents = true;
 
     static CliConfig from_args(int argc, char **argv)
     {
@@ -107,6 +110,14 @@ struct CliConfig
             else if (arg == "--show-think")
             {
                 cfg.show_think = true;
+            }
+            else if (arg == "--sub-agents" || arg == "--subagents" || arg == "-sa")
+            {
+                cfg.subagents = true;
+            }
+            else if (arg == "--no-sub-agents" || arg == "--no-subagents")
+            {
+                cfg.subagents = false;
             }
             else if (arg == "-it" && i + 1 < argc)
             {

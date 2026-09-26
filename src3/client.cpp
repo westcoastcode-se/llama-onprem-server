@@ -404,7 +404,8 @@ std::optional<std::string> prompt_question_answer(const SessionResponse &session
 bool drive_session_turn(RestClient &client, const SessionID &session_id, std::span<const Tool> tools, CliConfig &cfg,
                         JobKey job_key)
 {
-    while (true)
+    bool idle = false;
+    for (int round = 0; round < cfg.max_tool_rounds; ++round)
     {
         // Stream session until done. If idle then no more turns.
         auto streamed = stream_job(client, session_id, job_key, cfg.show_think);
@@ -415,6 +416,7 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
         auto session = std::move(streamed.session);
         if (session.state == SessionState::Idle)
         {
+            idle = true;
             break;
         }
 
@@ -452,7 +454,65 @@ bool drive_session_turn(RestClient &client, const SessionID &session_id, std::sp
         }
     }
 
+    if (!idle)
+    {
+        std::println("{}[client] stopped after {} tool rounds{}", Color::YELLOW, cfg.max_tool_rounds, Color::RESET);
+    }
     return false;
+}
+
+std::string last_assistant_text(const SessionResponse &session)
+{
+    for (auto it = session.messages.rbegin(); it != session.messages.rend(); ++it)
+    {
+        if (it->role == ChatMessage::ROLE_ASSISTANT && !it->content.empty())
+        {
+            return it->content;
+        }
+    }
+    return {};
+}
+
+std::string run_subagent(RestClient &client, const SessionID parent, const std::string_view task,
+                         const std::span<const Tool> tools, CliConfig &cfg)
+{
+    std::println("{}[sub-agent] snapshot of session {} — {}{}", Color::CYAN, parent, task, Color::RESET);
+
+    const SessionResponse snap = client.snapshot_session(parent);
+    defer(client.delete_session(snap.id));
+
+    const std::string assignment = std::format(
+        "You are a sub-agent. The messages above are a snapshot of the parent agent's context. "
+        "Work only on the task below. Do not try to start another sub-agent.\n\n"
+        "Task:\n{}\n\n"
+        "Use tools when you need to inspect or change something. "
+        "When the task is finished, answer directly and stop calling tools.",
+        task);
+    const auto started = client.post_message(
+        snap.id, SessionMessageRequest{.content = assignment, .role = string(ChatMessage::ROLE_USER)});
+    if (drive_session_turn(client, snap.id, tools, cfg, started.key))
+    {
+        return "sub-agent cancelled";
+    }
+
+    const auto summary_job = client.post_message(
+        snap.id, SessionMessageRequest{
+                     .content = "Summarize the result for the parent agent. Include what you found and what changed. "
+                                "Be concrete enough that the parent can continue without repeating your work. "
+                                "Do not call tools.",
+                     .role = string(ChatMessage::ROLE_USER)});
+    if (drive_session_turn(client, snap.id, tools, cfg, summary_job.key))
+    {
+        return "sub-agent cancelled";
+    }
+
+    const std::string summary = last_assistant_text(client.get_session(snap.id));
+    if (summary.empty())
+    {
+        return "sub-agent produced no summary";
+    }
+    std::println("{}[sub-agent] finished{}", Color::GREEN, Color::RESET);
+    return summary;
 }
 
 std::string_view trim_line(std::string_view text)
@@ -552,9 +612,20 @@ ChatTool to_chat_tool(const Tool &tool)
     return spec;
 }
 
-int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> tools)
+int run_session_mode(RestClient &client, CliConfig &cfg)
 {
     install_sigint();
+    const std::vector<Tool> base_tools = get_registered_tools(false, nullptr);
+    SessionID session_id = 0;
+    const auto run_child = [&](const std::string_view task) {
+        return run_subagent(client, session_id, task, base_tools, cfg);
+    };
+    std::vector<Tool> tools = base_tools;
+    if (cfg.subagents)
+    {
+        tools.push_back(Tools::create_subagent_tool(run_child));
+    }
+
     CreateSessionRequest created_req;
     created_req.system = cfg.system_prompt;
     created_req.questions = cfg.questions;
@@ -564,7 +635,7 @@ int run_session_mode(RestClient &client, CliConfig &cfg, std::span<const Tool> t
         created_req.tools.push_back(to_chat_tool(tool));
     }
     auto created = client.create_session(created_req);
-    const SessionID session_id = created.id;
+    session_id = created.id;
 
     std::println("{}[client] session {} at {} (questions={}){}", Color::CYAN, session_id, client.base_url(),
                  cfg.questions ? "true" : "false", Color::RESET);
@@ -711,13 +782,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Local tools only (server does not execute them). No nested sub-agent backend for now.
-    auto tools = get_registered_tools(false, nullptr);
-
     int rc = 0;
     try
     {
-        rc = run_session_mode(client, cfg, tools);
+        rc = run_session_mode(client, cfg);
     }
     catch (const RestClient::ClientError &e)
     {

@@ -231,6 +231,76 @@ void LlamaEngine::erase_stored(const std::string &session_id)
     std::erase_if(stored_sessions_, [&](const SessionKv &slot) { return slot.id == session_id; });
 }
 
+void LlamaEngine::clone_session(const std::string &from, const std::string &to)
+{
+    if (from.empty() || to.empty() || from == to)
+    {
+        return;
+    }
+
+    SessionKv copy;
+    copy.id = to;
+    copy.used = std::chrono::steady_clock::now();
+    if (from == active_session_id_)
+    {
+        if (!ctx_ || active_tokens_.empty())
+        {
+            return;
+        }
+        const size_t bytes = llama_state_seq_get_size(ctx_.get(), 0);
+        if (bytes == 0)
+        {
+            return;
+        }
+        copy.state.resize(bytes);
+        const size_t written = llama_state_seq_get_data(ctx_.get(), copy.state.data(), copy.state.size(), 0);
+        if (written == 0)
+        {
+            log_error("[llm] session ", from, " kv clone failed");
+            return;
+        }
+        copy.state.resize(written);
+        copy.tokens = active_tokens_;
+    }
+    else
+    {
+        const auto it = std::ranges::find(stored_sessions_, from, &SessionKv::id);
+        if (it == stored_sessions_.end())
+        {
+            return;
+        }
+        copy.tokens = it->tokens;
+        copy.state = it->state;
+    }
+
+    erase_stored(to);
+    const size_t cloned_tokens = copy.tokens.size();
+    stored_sessions_.push_back(std::move(copy));
+    const int keep = std::max(0, config_.kv_sessions - 1);
+    while (static_cast<int>(stored_sessions_.size()) > keep)
+    {
+        auto victim = stored_sessions_.end();
+        for (auto it = stored_sessions_.begin(); it != stored_sessions_.end(); ++it)
+        {
+            if (it->id == to)
+            {
+                continue;
+            }
+            if (victim == stored_sessions_.end() || it->used < victim->used)
+            {
+                victim = it;
+            }
+        }
+        if (victim == stored_sessions_.end())
+        {
+            break;
+        }
+        log_info("[llm] session ", victim->id, " kv evicted");
+        stored_sessions_.erase(victim);
+    }
+    log_info("[llm] session ", from, " kv cloned to ", to, " (", cloned_tokens, " tokens)");
+}
+
 void LlamaEngine::release_session(std::string_view session_id)
 {
     const std::string id(session_id);

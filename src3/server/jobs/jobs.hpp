@@ -250,6 +250,11 @@ class Jobs
      */
     void release_session(const std::string &session_id);
 
+    /**
+     * Copy KV from one session id onto another. Applied on the worker thread.
+     */
+    void clone_session(const std::string &from, const std::string &to);
+
   private:
     LlamaEngine &engine_;
     const ModelAdapter &adapter_;
@@ -258,6 +263,7 @@ class Jobs
     std::unordered_map<JobKey, std::shared_ptr<Task>> tasks_;
     std::deque<JobKey> queue_;
     std::vector<std::string> pending_session_releases_;
+    std::vector<std::pair<std::string, std::string>> pending_session_clones_;
     std::shared_ptr<Task> current_task_;
     std::jthread worker_;
 
@@ -267,6 +273,7 @@ class Jobs
     struct NextWork
     {
         std::vector<std::string> releases;
+        std::vector<std::pair<std::string, std::string>> clones;
         shared_ptr<Task> task;
     };
 

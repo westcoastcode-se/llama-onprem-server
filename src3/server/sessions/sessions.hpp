@@ -5,12 +5,14 @@
 #include "../api/messages.hpp"
 #include "../api/sessions.hpp"
 #include "../jobs/jobs.hpp"
+#include <algorithm>
 #include <chrono>
 #include <format>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <ostream>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -105,6 +107,47 @@ class Session
     {
         std::lock_guard lock(mutex_);
         return !active_job_ && state_ == SessionState::Idle;
+    }
+
+    // Copy of the conversation a sub-agent can continue from. The system prompt is kept as-is.
+    struct Clone
+    {
+        string system_prompt;
+        vector<ChatMessage> messages;
+        vector<ChatTool> tools;
+        bool questions = true;
+        int max_tokens = -1;
+    };
+
+    [[nodiscard]] Clone capture(std::span<const std::string_view> omit_tools) const
+    {
+        std::lock_guard lock(mutex_);
+        Clone clone;
+        clone.system_prompt = system_prompt_;
+        clone.messages = messages_;
+        clone.tools.reserve(tools_.size());
+        for (const ChatTool &tool : tools_)
+        {
+            if (std::ranges::find(omit_tools, std::string_view(tool.name)) == omit_tools.end())
+            {
+                clone.tools.push_back(tool);
+            }
+        }
+        clone.questions = questions_enabled_;
+        clone.max_tokens = max_tokens_;
+        return clone;
+    }
+
+    void load_clone(Clone clone)
+    {
+        std::lock_guard lock(mutex_);
+        system_prompt_ = std::move(clone.system_prompt);
+        messages_ = std::move(clone.messages);
+        tools_ = std::move(clone.tools);
+        questions_enabled_ = clone.questions;
+        max_tokens_ = clone.max_tokens;
+        turn_max_tokens_ = max_tokens_;
+        last_active_ = std::chrono::steady_clock::now();
     }
 
     void configure(CreateSessionRequest req)
@@ -345,6 +388,13 @@ class Sessions
     explicit Sessions(Jobs &jobs, const ModelAdapter &adapter);
 
     [[nodiscard]] shared_ptr<Session> create(CreateSessionRequest req);
+
+    /**
+     * Child session with this session's messages, prompt, and tools.
+     * sub_agent is omitted so the child cannot snapshot again.
+     * KV is cloned on the worker so the child can reuse the parent's prefix.
+     */
+    [[nodiscard]] shared_ptr<Session> snapshot(const SessionID &id);
     [[nodiscard]] shared_ptr<Session> get(const SessionID &id);
     [[nodiscard]] shared_ptr<Session> destroy(const SessionID &id);
 

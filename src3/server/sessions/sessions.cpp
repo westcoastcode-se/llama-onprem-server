@@ -41,6 +41,38 @@ shared_ptr<Session> Sessions::create(CreateSessionRequest req)
     return session;
 }
 
+shared_ptr<Session> Sessions::snapshot(const SessionID &id)
+{
+    auto parent = get(id);
+    if (!parent)
+    {
+        throw NotFound("session not found");
+    }
+    if (parent->active_job())
+    {
+        throw Busy("session is generating");
+    }
+
+    static constexpr std::string_view omit[] = {"sub_agent"};
+    auto clone = parent->capture(omit);
+    auto child = std::make_shared<Session>(adapter_);
+    child->load_clone(std::move(clone));
+
+    {
+        std::lock_guard lock(mutex_);
+        unsafe_gc();
+        if (sessions_.size() >= kMaxSessions)
+        {
+            throw Busy("too many sessions");
+        }
+        sessions_[child->id] = child;
+    }
+
+    jobs_.clone_session(std::to_string(parent->id), std::to_string(child->id));
+    log_info("session ", parent->id, " snapshotted as ", child->id);
+    return child;
+}
+
 shared_ptr<Session> Sessions::get(const SessionID &id)
 {
     std::lock_guard lock(mutex_);

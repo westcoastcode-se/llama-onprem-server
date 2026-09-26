@@ -128,6 +128,10 @@ class LlamaEngine
     // Call from the worker thread, never during llama_decode.
     void release_session(std::string_view session_id);
 
+    // Copy one session's KV and token ids under a new id. The source session stays as it is.
+    // Call from the worker thread, never during llama_decode.
+    void clone_session(const std::string &from, const std::string &to);
+
     // Tokenize prompt, reuse the matching KV prefix, then sample until EOG, max_tokens, or abort.
     // An aborted or failed turn rolls the cache back to the prefix it started from.
     [[nodiscard]] std::string generate(std::string_view prompt, const LlamaRequest &request = {});

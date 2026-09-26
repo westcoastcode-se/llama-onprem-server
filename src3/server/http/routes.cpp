@@ -81,6 +81,14 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         res.set_content(R"({"deleted":true})", "application/json");
     });
 
+    // Copy the session's conversation into a new session for a sub-agent.
+    s.Post("/v1/sessions/:id/snapshots", [&state](const httplib::Request &req, httplib::Response &res) {
+        const SessionID id = std::stoll(req.path_params.at("id"));
+        const auto child = state.sessions.snapshot(id);
+        log_info(req.remote_addr, ":", req.remote_port, " snapshotted ", id, " as ", child->id);
+        send_json(res, 201, child->to_response());
+    });
+
     // Post a message to a session
     s.Post("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
         const auto session_id = static_cast<SessionID>(std::stoll(req.path_params.at("id")));

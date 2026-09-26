@@ -89,6 +89,16 @@ class RestClient
      * @param id The unique session id
      * @return Information on the session
      */
+    /**
+     * Copy the session's messages and prompt into a new session.
+     * The child does not receive the sub_agent tool.
+     */
+    SessionResponse snapshot_session(const SessionID &id)
+    {
+        return SessionResponse::from_json(
+            request_json("POST", "/v1/sessions/" + std::to_string(id) + "/snapshots", json::object(), 201));
+    }
+
     SessionResponse get_session(const SessionID &id)
     {
         return SessionResponse::from_json(request_json("GET", "/v1/sessions/" + std::to_string(id), std::nullopt, 200));
