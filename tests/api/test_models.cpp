@@ -122,9 +122,17 @@ static int test_create_session_request_json() {
     const auto back = CreateSessionRequest::from_json(req.to_json());
     assertEquals("Be brief", back.system);
     assertTrue(!back.questions);
+    assertTrue(back.compress_tools);
     assertEquals(32, back.max_tokens);
     assertEquals(1, static_cast<int>(back.messages.size()));
     assertEquals("hello", back.messages[0].content);
+
+    CreateSessionRequest off;
+    off.compress_tools = false;
+    const auto off_back = CreateSessionRequest::from_json(off.to_json());
+    assertTrue(!off_back.compress_tools);
+    const auto omitted = CreateSessionRequest::from_json(json::object());
+    assertTrue(omitted.compress_tools);
     return EXIT_SUCCESS;
 }
 

@@ -313,6 +313,7 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
 {
     CreateSessionRequest request;
     request.questions = config.questions;
+    request.compress_tools = config.compress_tools;
     std::string extra;
     const std::string instructions = load_ai_instructions(state_.cwd.string());
     if (!instructions.empty())

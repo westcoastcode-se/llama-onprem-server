@@ -22,6 +22,8 @@ struct AgentConfig
     bool show_think = true;
     bool debug = false;
     bool questions = true;
+    // New sessions shorten finished tool results. A resumed session keeps its own setting.
+    bool compress_tools = true;
     bool exec = false;
     bool resume = false;
     SessionID session = 0;

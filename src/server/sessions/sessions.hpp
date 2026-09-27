@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../common/std.hpp"
+#include "../../common/tool_history.hpp"
 #include "../../api/errors.hpp"
 #include "../agent/response_parse.hpp"
 #include "../api/messages.hpp"
@@ -101,6 +102,7 @@ class Session
         r.pending_tool_calls = pending_tool_calls_;
         r.pending_question = pending_question_;
         r.questions = questions_enabled_;
+        r.compress_tools = compress_tools_;
         r.error = last_error_;
         r.error_code = error_code_;
         r.context_used = context_used_;
@@ -145,6 +147,7 @@ class Session
         vector<ChatMessage> messages;
         vector<ChatTool> tools;
         bool questions = true;
+        bool compress_tools = true;
         int max_tokens = -1;
     };
 
@@ -163,6 +166,7 @@ class Session
             }
         }
         clone.questions = questions_enabled_;
+        clone.compress_tools = compress_tools_;
         clone.max_tokens = max_tokens_;
         return clone;
     }
@@ -174,6 +178,7 @@ class Session
         messages_ = std::move(clone.messages);
         tools_ = std::move(clone.tools);
         questions_enabled_ = clone.questions;
+        compress_tools_ = clone.compress_tools;
         max_tokens_ = clone.max_tokens;
         turn_max_tokens_ = max_tokens_;
         last_active_ = std::chrono::steady_clock::now();
@@ -183,8 +188,9 @@ class Session
     {
         std::lock_guard lock(mutex_);
         questions_enabled_ = req.questions;
+        compress_tools_ = req.compress_tools;
         tools_ = std::move(req.tools);
-        system_prompt_ = default_agent_system_prompt(adapter_, tools_, req.system, req.questions);
+        system_prompt_ = default_agent_system_prompt(adapter_, tools_, req.system, req.questions, req.compress_tools);
         messages_ = std::move(req.messages);
         max_tokens_ = req.max_tokens;
         turn_max_tokens_ = max_tokens_;
@@ -199,9 +205,19 @@ class Session
     {
         std::lock_guard lock(mutex_);
         ensure_no_active_generation_unlocked();
+        // A question is still this turn: the model needs the tool results to continue.
+        // Once the turn is idle, those results have been used and can leave the window.
+        const bool turn_finished = state_ == SessionState::Idle;
         arm_rollback_unlocked();
         clear_pending_unlocked();
         state_ = SessionState::Idle;
+        if (compress_tools_ && turn_finished)
+        {
+            for (ChatMessage &message : messages_)
+            {
+                message.content = shrink_tool_responses(message.content);
+            }
+        }
         messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content, .reasoning_content = {}});
         turn_max_tokens_ = msg.max_tokens >= 0 ? msg.max_tokens : max_tokens_;
         last_active_ = std::chrono::steady_clock::now();
@@ -221,8 +237,9 @@ class Session
         }
 
         arm_rollback_unlocked();
-        messages_.push_back(
-            ChatMessage{.role = string(ChatMessage::ROLE_USER), .content = format_tool_results(body), .reasoning_content = {}});
+        messages_.push_back(ChatMessage{.role = string(ChatMessage::ROLE_USER),
+                                        .content = format_tool_results(body, compress_tools_),
+                                        .reasoning_content = {}});
         turn_max_tokens_ = max_tokens_;
         clear_pending_unlocked();
         state_ = SessionState::Idle;
@@ -375,6 +392,7 @@ class Session
     vector<ParsedToolCall> pending_tool_calls_;
     optional<ParsedQuestion> pending_question_;
     bool questions_enabled_ = true;
+    bool compress_tools_ = true;
     std::chrono::steady_clock::time_point last_active_ = std::chrono::steady_clock::now();
 
     [[nodiscard]] bool tracks_job_unlocked(JobKey job_key) const
@@ -400,7 +418,7 @@ class Session
         }
     }
 
-    static string format_tool_results(const SessionToolResultsRequest &body)
+    static string format_tool_results(const SessionToolResultsRequest &body, bool annotate)
     {
         string combined;
         for (const auto &r : body.results)
@@ -409,28 +427,27 @@ class Session
             {
                 combined.push_back('\n');
             }
+            const string open = annotate ? tool_response_open(r.name, r.detail) : "<tool_response>";
             if (r.denied)
             {
                 if (!r.name.empty())
                 {
-                    combined += std::format(
-                        "<tool_response>\nerror: tool execution was denied by the user for tool '{}'.\n</tool_response>",
-                        r.name);
+                    combined += std::format("{}\nerror: tool execution was denied by the user for tool '{}'.\n</tool_response>",
+                                            open, r.name);
                 }
                 else if (!r.id.empty())
                 {
                     combined += std::format(
-                        "<tool_response>\nerror: tool execution was denied by the user for tool id '{}'.\n</tool_response>",
-                        r.id);
+                        "{}\nerror: tool execution was denied by the user for tool id '{}'.\n</tool_response>", open, r.id);
                 }
                 else
                 {
-                    combined += "<tool_response>\nerror: tool execution was denied by the user.\n</tool_response>";
+                    combined += open + "\nerror: tool execution was denied by the user.\n</tool_response>";
                 }
             }
             else
             {
-                combined += std::format("<tool_response>\n{}\n</tool_response>", r.content);
+                combined += std::format("{}\n{}\n</tool_response>", open, r.content);
             }
         }
         return combined;

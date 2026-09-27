@@ -53,6 +53,7 @@ paths:
               $ref: "#/components/schemas/CreateSessionRequest"
             example:
               questions: true
+              compress_tools: true
               system: ""
               messages: []
               tools: []
@@ -559,6 +560,14 @@ components:
           type: boolean
           default: true
           description: When true, a parsed `<question>` pauses the session in `awaiting_question`.
+        compress_tools:
+          type: boolean
+          default: true
+          description: |
+            When true, tool results stay complete while the turn that uses them is in progress,
+            including a follow-up answer to a question. The next user message after that turn
+            is idle replaces each long tool result with one line naming the tool and its target.
+            Short results stay. A resumed session keeps the value it was created with.
         tools:
           type: array
           default: []
@@ -597,6 +606,13 @@ components:
         content:
           type: string
           description: Tool output. `result` is accepted as an alias on input.
+        detail:
+          type: string
+          default: ""
+          description: |
+            Target of the call, such as a path, command, query, or URL. Kept on the stored
+            tag so a later one-line record can name it. Ignored when the session's
+            `compress_tools` is false.
         result:
           type: string
           writeOnly: true
@@ -675,6 +691,9 @@ components:
           $ref: "#/components/schemas/SessionState"
         questions:
           type: boolean
+        compress_tools:
+          type: boolean
+          description: Whether finished tool results are shortened before the next user message.
         active_job_key:
           type: integer
           format: int64

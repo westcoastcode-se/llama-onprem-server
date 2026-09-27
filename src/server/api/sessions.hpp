@@ -10,6 +10,8 @@ struct ToolResultItem
     string id;
     string name;
     string content;
+    // Path, command, query, or URL. Stored on the tool tag so a later one-line record can name the target.
+    string detail;
     bool denied = false;
 
     static ToolResultItem from_json(const json &j)
@@ -18,6 +20,7 @@ struct ToolResultItem
         item.id = j.value("id", "");
         item.name = j.value("name", "");
         item.content = j.value("content", j.value("result", ""));
+        item.detail = j.value("detail", "");
         item.denied = j.value("denied", false);
         return item;
     }

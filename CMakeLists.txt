@@ -77,7 +77,8 @@ add_executable(callisto_server
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp
-        src/server/llm/llm_engine.cpp)
+        src/server/llm/llm_engine.cpp
+        src/common/tool_history.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
@@ -156,9 +157,11 @@ add_executable(callisto_tests
         tests/test_llama_engine.cpp
         tests/server/test_context_params.cpp
         tests/server/test_session_gc.cpp
+        tests/server/test_tool_history.cpp
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
-        src/common/log.cpp)
+        src/common/log.cpp
+        src/common/tool_history.cpp)
 configure_localai_target(callisto_tests)
 target_compile_definitions(callisto_tests PRIVATE
         LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src/templates/Qwen3.8-27B.jinja")
