@@ -86,7 +86,7 @@ Start the client in the project you want it to edit:
 ./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
-Several models means several servers. Pass them at startup, or keep the list in `~/.config/callisto/servers.json`. The client connects to every server and uses the first one that answers. `/model` opens a dialog to switch. Each server keeps its own session, so switching back continues that conversation.
+Several models means several servers. Pass them at startup, or keep the list in `~/.config/callisto/servers.json`. The client connects to every server and uses the first one that answers. `/model` opens a dialog to switch. Switching starts a new session on that server and copies the conversation so far, so the next turn continues there.
 
 ```bash
 ./cmake-build-release/callisto_cli \

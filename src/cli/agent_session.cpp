@@ -286,6 +286,23 @@ SessionID AgentSession::open(const AgentConfig &config)
     return created.id;
 }
 
+SessionID AgentSession::open_with_history(std::vector<ChatMessage> history)
+{
+    AgentConfig fresh = config_;
+    fresh.session = 0;
+    fresh.resume = false;
+    CreateSessionRequest request = make_request(fresh);
+    request.tools.reserve(tools_.size());
+    for (const Tool &tool : tools_)
+    {
+        request.tools.push_back(ToolSchema::chat_tool(tool));
+    }
+    request.messages = std::move(history);
+    const SessionResponse created = state_.client->create_session(request);
+    SessionStore{}.remember(endpoint_config(fresh), created.id, state_.cwd);
+    return created.id;
+}
+
 void AgentSession::refresh_status()
 {
     if (state_.session == 0 || state_.client == nullptr)
@@ -561,36 +578,17 @@ void AgentSession::use_model(std::size_t index)
     const std::size_t previous = state_.active;
     RestClient *previous_client = state_.client;
     const SessionID previous_session = state_.session;
+    std::vector<ChatMessage> history;
+    if (previous_session != 0 && previous_client != nullptr)
+    {
+        history = previous_client->get_session(previous_session).messages;
+    }
+    const std::size_t carried = history.size();
     state_.active = index;
     state_.client = next.client;
     try
     {
-        if (next.session == 0)
-        {
-            AgentConfig fresh = config_;
-            fresh.session = 0;
-            fresh.resume = false;
-            if (config_.resume)
-            {
-                const AgentConfig stored = endpoint_config(fresh);
-                if (const auto saved = SessionStore{}.recall(stored, state_.cwd))
-                {
-                    try
-                    {
-                        state_.client->get_session(*saved);
-                        next.session = *saved;
-                    }
-                    catch (const std::exception &)
-                    {
-                        next.session = 0;
-                    }
-                }
-            }
-            if (next.session == 0)
-            {
-                next.session = open(fresh);
-            }
-        }
+        next.session = open_with_history(std::move(history));
         bind_session(next.session);
     }
     catch (...)
@@ -605,7 +603,14 @@ void AgentSession::use_model(std::size_t index)
         throw;
     }
     refresh_status();
-    state_.ui->note(std::format("using {}  {}", next.target.label(), next.target.url()));
+    if (carried == 0)
+    {
+        state_.ui->note(std::format("using {}  {}", next.target.label(), next.target.url()));
+    }
+    else
+    {
+        state_.ui->note(std::format("using {}  {}  ({} messages)", next.target.label(), next.target.url(), carried));
+    }
 }
 
 std::string AgentSession::offline_message() const

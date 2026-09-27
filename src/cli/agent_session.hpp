@@ -29,6 +29,7 @@ class AgentSession
     [[nodiscard]] TurnStatus drive(JobKey key);
     TurnStatus submit(const std::string &prompt);
     [[nodiscard]] SessionID open(const AgentConfig &config);
+    [[nodiscard]] SessionID open_with_history(std::vector<ChatMessage> history);
     [[nodiscard]] CreateSessionRequest make_request(const AgentConfig &config) const;
     [[nodiscard]] AgentConfig endpoint_config(const AgentConfig &config) const;
     void bind_session(SessionID id);
