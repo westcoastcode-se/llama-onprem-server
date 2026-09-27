@@ -4,6 +4,7 @@
 
 extern int test_tools();
 extern int test_tool_policy();
+extern int test_project_context();
 extern int test_tool_execute_command();
 extern int test_tool_read_file();
 extern int test_tool_write_file();
@@ -14,7 +15,10 @@ extern int test_tool_subagent();
 extern int test_web_utils();
 extern int test_defer();
 extern int test_tool_schema();
+extern int test_servers();
+extern int test_theme();
 extern int test_session_store();
+extern int test_transcript_scroll();
 extern int test_utf8_stream();
 extern int test_token_buffer();
 extern int test_models();
@@ -26,6 +30,10 @@ int main()
         return rc;
     }
     if (const int rc = test_tool_policy())
+    {
+        return rc;
+    }
+    if (const int rc = test_project_context())
     {
         return rc;
     }
@@ -69,7 +77,19 @@ int main()
     {
         return rc;
     }
+    if (const int rc = test_servers())
+    {
+        return rc;
+    }
+    if (const int rc = test_theme())
+    {
+        return rc;
+    }
     if (const int rc = test_session_store())
+    {
+        return rc;
+    }
+    if (const int rc = test_transcript_scroll())
     {
         return rc;
     }

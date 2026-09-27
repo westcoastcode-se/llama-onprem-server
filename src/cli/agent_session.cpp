@@ -1,5 +1,6 @@
 #include "cli/agent_session.hpp"
 
+#include "cli/project_context.hpp"
 #include "cli/reply_stream.hpp"
 #include "cli/session_store.hpp"
 #include "cli/tool_runner.hpp"
@@ -9,6 +10,8 @@
 #include "api/models.hpp"
 #include "client/rest_client.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <format>
 #include <memory>
@@ -33,6 +36,61 @@ struct PipeClose
 };
 
 using Pipe = std::unique_ptr<FILE, PipeClose>;
+
+struct SubagentLive
+{
+    AgentUi *ui = nullptr;
+
+    explicit SubagentLive(AgentUi *ui) : ui(ui)
+    {
+        ui->set_subagent_live(true);
+    }
+
+    ~SubagentLive()
+    {
+        ui->set_subagent_live(false);
+    }
+};
+
+std::string git_diff_stat()
+{
+    Pipe pipe(popen("git diff --stat", "r"));
+    if (pipe == nullptr)
+    {
+        return {};
+    }
+    std::string output;
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe.get()) != nullptr)
+    {
+        output += buffer;
+        if (output.size() > 4000)
+        {
+            output.resize(4000);
+            output += "\n... [diff stat truncated]\n";
+            break;
+        }
+    }
+    return output;
+}
+
+bool same_label(std::string_view left, std::string_view right)
+{
+    if (left.size() != right.size())
+    {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i)
+    {
+        const auto a = static_cast<unsigned char>(left[i]);
+        const auto b = static_cast<unsigned char>(right[i]);
+        if (std::tolower(a) != std::tolower(b))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
 {
@@ -59,13 +117,18 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             if (error.code == kContextFull)
             {
                 state.ui->note(error.what());
-                state.ui->note("The message was removed. /compact the session, or send a smaller task.");
+                if (!state.subagent)
+                {
+                    state.ui->note("The message was removed. /compact the session, or send a smaller task.");
+                }
                 return TurnStatus::ContextFull;
             }
             throw;
         }
         const SessionResponse session = client.get_session(state.session);
         show_context(state, session);
+        // Captured before tools run, so a nested run cannot retarget this POST.
+        const SessionID session_id = state.session;
         if (session.state.value == SessionState::Idle || session.state.value == SessionState::Unknown)
         {
             return TurnStatus::Idle;
@@ -77,14 +140,14 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             {
                 return TurnStatus::Cancelled;
             }
-            const json queued = client.post_tool_results(state.session, *results);
+            const json queued = client.post_tool_results(session_id, *results);
             key = queued.at("key").get<JobKey>();
             continue;
         }
         if (session.state.value == SessionState::AwaitingQuestion && session.pending_question)
         {
             std::string answer;
-            if (state.exec && !isatty(STDIN_FILENO))
+            if (state.subagent || (state.exec && !isatty(STDIN_FILENO)))
             {
                 answer = "Continue with the most reasonable choice.";
             }
@@ -100,7 +163,7 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             SessionMessageRequest message;
             message.role = "user";
             message.content = std::move(answer);
-            key = client.post_message(state.session, message).key;
+            key = client.post_message(session_id, message).key;
             continue;
         }
         return TurnStatus::Idle;
@@ -116,7 +179,8 @@ AgentSession::AgentSession(AgentState &state, const AgentConfig &config, std::ve
 {
     if (!config_.exec)
     {
-        tools_.push_back(Tools::create_subagent_tool([this](std::string_view task) { return subagent(task); }));
+        tools_.push_back(Tools::create_subagent_tool(
+            [this](std::string_view task, bool inherit) { return subagent(task, inherit); }));
     }
 }
 
@@ -132,12 +196,40 @@ std::string AgentSession::last_assistant(const SessionResponse &session)
     return {};
 }
 
-std::string AgentSession::subagent(std::string_view task)
+std::string context_full_reply(bool inherit)
+{
+    std::string message = "error: sub-agent ran out of context. Call sub_agent again with a smaller task so the answer "
+                          "can be shorter. Do not repeat the same question.";
+    if (inherit)
+    {
+        message += " The copied conversation filled the window. Leave inherit false unless the task needs that history.";
+    }
+    return message;
+}
+
+std::string AgentSession::subagent(std::string_view task, bool inherit)
 {
     RestClient &client = *state_.client;
-    const SessionResponse snap = client.snapshot_session(state_.session);
-    const SessionID child = snap.id;
+    SessionID child = 0;
+    if (inherit)
+    {
+        child = client.snapshot_session(state_.session).id;
+    }
+    else
+    {
+        CreateSessionRequest request = make_request(config_);
+        request.tools.reserve(base_tools_.size());
+        for (const Tool &tool : base_tools_)
+        {
+            request.tools.push_back(ToolSchema::chat_tool(tool));
+        }
+        child = client.create_session(request).id;
+    }
     auto forget = [&] {
+        if (child == 0 || child == state_.session)
+        {
+            return;
+        }
         try
         {
             client.delete_session(child);
@@ -156,22 +248,45 @@ std::string AgentSession::subagent(std::string_view task)
         auto queued = client.post_message(child, message);
         AgentState child_state = state_;
         child_state.session = child;
-        child_state.exec = true;
-        if (run_turn(child_state, queued.key, base_tools_) != TurnStatus::Idle)
+        child_state.subagent = true;
+        const SubagentLive live(state_.ui);
+        const TurnStatus work = run_turn(child_state, queued.key, base_tools_);
+        if (work == TurnStatus::ContextFull)
+        {
+            forget();
+            return context_full_reply(inherit);
+        }
+        if (work != TurnStatus::Idle)
         {
             forget();
             return "sub-agent stopped before it finished";
         }
-        message.content = "Summarize the result for the parent. Include files changed and commands run. Do not call tools.";
+        message.content = "Summarize the result for the parent. Cite file:line for each finding. "
+                          "Include files changed and commands run. Do not call tools.";
         queued = client.post_message(child, message);
-        if (run_turn(child_state, queued.key, base_tools_) != TurnStatus::Idle)
+        const TurnStatus summary_turn = run_turn(child_state, queued.key, base_tools_);
+        if (summary_turn == TurnStatus::ContextFull)
+        {
+            forget();
+            return context_full_reply(inherit);
+        }
+        if (summary_turn != TurnStatus::Idle)
         {
             forget();
             return "sub-agent stopped before the summary";
         }
-        const std::string summary = last_assistant(client.get_session(child));
+        std::string summary = last_assistant(client.get_session(child));
+        if (summary.empty())
+        {
+            summary = "sub-agent produced no summary";
+        }
+        const std::string stat = git_diff_stat();
+        if (!stat.empty())
+        {
+            summary += "\n\nWorking tree:\n" + stat;
+        }
         forget();
-        return summary.empty() ? "sub-agent produced no summary" : summary;
+        return summary;
     }
     catch (...)
     {
@@ -198,17 +313,65 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
 {
     CreateSessionRequest request;
     request.questions = config.questions;
+    request.compress_tools = config.compress_tools;
+    std::string extra;
     const std::string instructions = load_ai_instructions(state_.cwd.string());
+    if (!instructions.empty())
+    {
+        extra += "\nProject instructions:\n" + instructions + "\n";
+    }
+    extra += "\nIf .callisto/map.md exists, read it with read_file before searching an unfamiliar area. "
+             "It is an index, not the source.\n";
+    const std::vector<SkillNote> skills = list_skills(state_.cwd);
+    if (!skills.empty())
+    {
+        extra += "Skills. Read the matching SKILL.md with read_file only when the task needs that procedure:\n";
+        for (const SkillNote &skill : skills)
+        {
+            extra += std::format("- {}: {} ({})\n", skill.name, skill.summary, skill.path);
+        }
+    }
     request.system = std::format(
         "You are a coding agent working in {}.\n"
         "Use tools to inspect and change the project. Keep edits limited to the task.\n"
         "Do not claim a command or a file change succeeded unless a tool result says so.\n{}",
-        state_.cwd.string(), instructions.empty() ? "" : "\nProject instructions:\n" + instructions);
+        state_.cwd.string(), extra);
     return request;
+}
+
+AgentConfig AgentSession::endpoint_config(const AgentConfig &config) const
+{
+    AgentConfig stored = config;
+    if (!state_.servers.empty())
+    {
+        stored.host = slot().target.host;
+        stored.port = slot().target.port;
+    }
+    return stored;
+}
+
+void AgentSession::bind_session(SessionID id)
+{
+    state_.session = id;
+    if (!state_.servers.empty())
+    {
+        slot().session = id;
+    }
+}
+
+ServerSlot &AgentSession::slot()
+{
+    return state_.servers.at(state_.active);
+}
+
+const ServerSlot &AgentSession::slot() const
+{
+    return state_.servers.at(state_.active);
 }
 
 SessionID AgentSession::open(const AgentConfig &config)
 {
+    const AgentConfig stored = endpoint_config(config);
     if (config.session != 0)
     {
         state_.client->get_session(config.session);
@@ -217,7 +380,7 @@ SessionID AgentSession::open(const AgentConfig &config)
     const SessionStore store;
     if (config.resume)
     {
-        if (const auto saved = store.recall(config, state_.cwd))
+        if (const auto saved = store.recall(stored, state_.cwd))
         {
             state_.client->get_session(*saved);
             return *saved;
@@ -231,14 +394,39 @@ SessionID AgentSession::open(const AgentConfig &config)
         request.tools.push_back(ToolSchema::chat_tool(tool));
     }
     const SessionResponse created = state_.client->create_session(request);
-    store.remember(config, created.id, state_.cwd);
+    store.remember(stored, created.id, state_.cwd);
+    return created.id;
+}
+
+SessionID AgentSession::open_with_history(std::vector<ChatMessage> history)
+{
+    AgentConfig fresh = config_;
+    fresh.session = 0;
+    fresh.resume = false;
+    CreateSessionRequest request = make_request(fresh);
+    request.tools.reserve(tools_.size());
+    for (const Tool &tool : tools_)
+    {
+        request.tools.push_back(ToolSchema::chat_tool(tool));
+    }
+    request.messages = std::move(history);
+    const SessionResponse created = state_.client->create_session(request);
+    SessionStore{}.remember(endpoint_config(fresh), created.id, state_.cwd);
     return created.id;
 }
 
 void AgentSession::refresh_status()
 {
-    state_.ui->set_status(std::format("session {}   {}   {}   http://{}:{}", state_.session, approval_name(state_.approval),
-                                     state_.cwd.string(), config_.host, config_.port));
+    if (state_.session == 0 || state_.client == nullptr)
+    {
+        state_.ui->set_status(std::format("offline   {}   {}", approval_name(state_.approval), state_.cwd.string()));
+        state_.ui->set_context(0, 0);
+        return;
+    }
+    const ServerTarget &server = state_.servers.empty() ? ServerTarget{} : slot().target;
+    const std::string model = state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
+    state_.ui->set_status(std::format("{}   session {}   {}   {}", model, state_.session, approval_name(state_.approval),
+                                     state_.cwd.string()));
     show_context(state_, state_.client->get_session(state_.session));
 }
 
@@ -270,8 +458,8 @@ void AgentSession::compact()
     ack.content = "I'll continue from that summary.";
     request.messages = {std::move(prior), std::move(ack)};
     const SessionResponse created = state_.client->create_session(request);
-    state_.session = created.id;
-    SessionStore{}.remember(config_, created.id, state_.cwd);
+    bind_session(created.id);
+    SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
     refresh_status();
     state_.ui->note("compacted into session " + std::to_string(created.id));
 }
@@ -279,9 +467,11 @@ void AgentSession::compact()
 void AgentSession::help() const
 {
     state_.ui->note("/help                 show these commands\n"
+                    "/model [name]         choose a server, or switch by name\n"
                     "/approval [mode]      read-only, auto, or full\n"
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
+                    "/map                  write .callisto/map.md from the tree\n"
                     "/compact              summarize the chat into a new session\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
@@ -320,8 +510,17 @@ bool AgentSession::slash(const std::string &line)
     }
     if (line == "/status")
     {
-        state_.ui->note(std::format("session {}\napproval {}\nserver http://{}:{}\ncwd {}", state_.session,
-                                   approval_name(state_.approval), config_.host, config_.port, state_.cwd.string()));
+        if (state_.session == 0 || state_.client == nullptr)
+        {
+            state_.ui->note(std::format("{}\napproval {}\ncwd {}", offline_message(), approval_name(state_.approval),
+                                       state_.cwd.string()));
+            return true;
+        }
+        const ServerTarget &server = state_.servers.empty() ? ServerTarget{} : slot().target;
+        const std::string model = state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
+        const std::string url = state_.servers.empty() ? std::format("http://{}:{}", config_.host, config_.port) : server.url();
+        state_.ui->note(std::format("model {}\nserver {}\nsession {}\napproval {}\ncwd {}", model, url, state_.session,
+                                   approval_name(state_.approval), state_.cwd.string()));
         return true;
     }
     if (line == "/diff")
@@ -335,16 +534,46 @@ bool AgentSession::slash(const std::string &line)
     }
     if (line == "/clear")
     {
+        if (!ensure_server())
+        {
+            return true;
+        }
         AgentConfig fresh = config_;
         fresh.session = 0;
         fresh.resume = false;
-        state_.session = open(fresh);
+        bind_session(open(fresh));
         refresh_status();
         state_.ui->note("session " + std::to_string(state_.session));
         return true;
     }
+    if (line == "/model" || line.starts_with("/model "))
+    {
+        std::string_view argument(line);
+        argument.remove_prefix(std::string_view("/model").size());
+        return model_command(string_view_trim(argument));
+    }
+    if (line == "/map")
+    {
+        try
+        {
+            if (refresh_project_map(state_.cwd, true))
+            {
+                state_.ui->note("wrote .callisto/map.md");
+            }
+        }
+        catch (const std::exception &error)
+        {
+            state_.ui->note(error.what());
+        }
+        return true;
+    }
     if (line == "/compact")
     {
+        if (state_.session == 0)
+        {
+            state_.ui->note(offline_message());
+            return true;
+        }
         compact();
         refresh_status();
         return true;
@@ -387,25 +616,277 @@ bool AgentSession::slash(const std::string &line)
     return false;
 }
 
+std::optional<std::size_t> AgentSession::find_model(std::string_view query) const
+{
+    if (query.empty() || state_.servers.empty())
+    {
+        return std::nullopt;
+    }
+    const bool digits = std::ranges::all_of(query, [](unsigned char c) { return std::isdigit(c) != 0; });
+    if (digits)
+    {
+        try
+        {
+            const int number = std::stoi(std::string(query));
+            if (number >= 1 && static_cast<std::size_t>(number) <= state_.servers.size())
+            {
+                return static_cast<std::size_t>(number - 1);
+            }
+        }
+        catch (const std::exception &)
+        {
+        }
+        return std::nullopt;
+    }
+    std::optional<std::size_t> found;
+    for (std::size_t i = 0; i < state_.servers.size(); ++i)
+    {
+        const ServerTarget &server = state_.servers[i].target;
+        const bool match = same_label(server.label(), query) || same_label(server.url(), query) ||
+                           same_label(std::format("{}:{}", server.host, server.port), query);
+        if (!match)
+        {
+            continue;
+        }
+        if (found)
+        {
+            return std::nullopt;
+        }
+        found = i;
+    }
+    return found;
+}
+
+void AgentSession::list_models()
+{
+    if (state_.servers.empty())
+    {
+        state_.ui->note("no models");
+        return;
+    }
+    std::vector<std::string> rows;
+    std::size_t selected = 0;
+    rows.reserve(state_.servers.size());
+    for (std::size_t i = 0; i < state_.servers.size(); ++i)
+    {
+        ServerSlot &server = state_.servers[i];
+        const bool up = server.client != nullptr && server.client->probe();
+        if (state_.session != 0 && i == state_.active)
+        {
+            selected = i;
+        }
+        rows.push_back(std::format("{}  {}{}", server.target.label(), server.target.url(), up ? "" : "  down"));
+    }
+    const std::optional<std::size_t> picked = state_.ui->choose("Model", std::move(rows), selected);
+    if (!picked)
+    {
+        return;
+    }
+    use_model(*picked);
+}
+
+void AgentSession::use_model(std::size_t index)
+{
+    if (index >= state_.servers.size() || state_.servers[index].client == nullptr)
+    {
+        state_.ui->note("unknown model. /model lists them.");
+        return;
+    }
+    ServerSlot &next = state_.servers[index];
+    if (!next.client->probe())
+    {
+        state_.ui->note(std::format("{} is not reachable at {}", next.target.label(), next.target.url()));
+        return;
+    }
+    if (index == state_.active && state_.session != 0)
+    {
+        state_.ui->note(std::format("already using {}", next.target.label()));
+        return;
+    }
+    const std::size_t previous = state_.active;
+    RestClient *previous_client = state_.client;
+    const SessionID previous_session = state_.session;
+    std::vector<ChatMessage> history;
+    if (previous_session != 0 && previous_client != nullptr)
+    {
+        history = previous_client->get_session(previous_session).messages;
+    }
+    const std::size_t carried = history.size();
+    state_.active = index;
+    state_.client = next.client;
+    try
+    {
+        next.session = open_with_history(std::move(history));
+        bind_session(next.session);
+    }
+    catch (...)
+    {
+        state_.active = previous;
+        state_.client = previous_client;
+        state_.session = previous_session;
+        if (index < state_.servers.size())
+        {
+            state_.servers[index].session = 0;
+        }
+        throw;
+    }
+    refresh_status();
+    if (carried == 0)
+    {
+        state_.ui->note(std::format("using {}  {}", next.target.label(), next.target.url()));
+    }
+    else
+    {
+        state_.ui->note(std::format("using {}  {}  ({} messages)", next.target.label(), next.target.url(), carried));
+    }
+}
+
+std::string AgentSession::offline_message() const
+{
+    std::string message = "no server is reachable";
+    for (const ServerSlot &server : state_.servers)
+    {
+        message += std::format("\n  {}  {}", server.target.label(), server.target.url());
+    }
+    return message;
+}
+
+bool AgentSession::ensure_server()
+{
+    if (state_.session != 0 && state_.client != nullptr && state_.client->probe())
+    {
+        state_.awaiting_server = false;
+        return true;
+    }
+    const std::optional<std::size_t> chosen = first_reachable(state_.servers.size(), [&](std::size_t index) {
+        RestClient *client = state_.servers[index].client;
+        return client != nullptr && client->probe();
+    });
+    if (!chosen)
+    {
+        state_.awaiting_server = true;
+        state_.ui->note(offline_message());
+        refresh_status();
+        return false;
+    }
+    if (*chosen == state_.active && state_.session != 0)
+    {
+        state_.awaiting_server = false;
+        return true;
+    }
+    use_model(*chosen);
+    state_.awaiting_server = state_.session == 0;
+    return state_.session != 0;
+}
+
+bool AgentSession::model_command(std::string_view argument)
+{
+    if (argument.empty())
+    {
+        list_models();
+        return true;
+    }
+    std::size_t matches = 0;
+    if (const bool digits = std::ranges::all_of(argument, [](unsigned char c) { return std::isdigit(c) != 0; }); digits)
+    {
+        const std::optional<std::size_t> index = find_model(argument);
+        if (!index)
+        {
+            state_.ui->note("unknown model. /model lists them.");
+            return true;
+        }
+        use_model(*index);
+        return true;
+    }
+    for (std::size_t i = 0; i < state_.servers.size(); ++i)
+    {
+        if (same_label(state_.servers[i].target.label(), argument) || same_label(state_.servers[i].target.url(), argument) ||
+            same_label(std::format("{}:{}", state_.servers[i].target.host, state_.servers[i].target.port), argument))
+        {
+            ++matches;
+        }
+    }
+    if (matches > 1)
+    {
+        state_.ui->note("that name is used by more than one server. /model lists them; use the number.");
+        return true;
+    }
+    const std::optional<std::size_t> index = find_model(argument);
+    if (!index)
+    {
+        state_.ui->note("unknown model. /model lists them.");
+        return true;
+    }
+    use_model(*index);
+    return true;
+}
+
 int AgentSession::loop()
 {
-    state_.session = open(config_);
-    refresh_status();
-    state_.ui->note("Type a task, or /help. Ctrl-C cancels a running turn.");
+    if (!state_.awaiting_server)
+    {
+        try
+        {
+            bind_session(open(config_));
+            refresh_status();
+            state_.ui->note(std::format("using {}  {}", slot().target.label(), slot().target.url()));
+        }
+        catch (const std::exception &error)
+        {
+            state_.awaiting_server = true;
+            state_.session = 0;
+            if (!state_.servers.empty())
+            {
+                slot().session = 0;
+            }
+            state_.ui->note(error.what());
+            refresh_status();
+        }
+    }
+    else if (!config_.exec)
+    {
+        state_.ui->note(offline_message());
+        refresh_status();
+    }
+    try
+    {
+        if (refresh_project_map(state_.cwd, false))
+        {
+            state_.ui->note("wrote .callisto/map.md");
+        }
+    }
+    catch (const std::exception &error)
+    {
+        state_.ui->note(error.what());
+    }
+    if (!config_.exec)
+    {
+        state_.ui->note("Type a task, or /help. Ctrl-C cancels a running turn.");
+    }
 
     if (!config_.prompt.empty())
     {
-        state_.ui->begin("you");
-        state_.ui->append(config_.prompt);
-        state_.ui->end();
-        const TurnStatus status = submit(config_.prompt);
-        if (status == TurnStatus::ContextFull)
+        if (!ensure_server())
         {
-            return 2;
+            if (config_.exec)
+            {
+                return 1;
+            }
         }
-        if (config_.exec)
+        else
         {
-            return status == TurnStatus::Cancelled ? 1 : 0;
+            state_.ui->begin("you");
+            state_.ui->append(config_.prompt);
+            state_.ui->end();
+            const TurnStatus status = submit(config_.prompt);
+            if (status == TurnStatus::ContextFull)
+            {
+                return 2;
+            }
+            if (config_.exec)
+            {
+                return status == TurnStatus::Cancelled ? 1 : 0;
+            }
         }
     }
     else if (config_.exec)
@@ -443,11 +924,15 @@ int AgentSession::loop()
         {
             continue;
         }
-        state_.ui->begin("you");
-        state_.ui->append(line);
-        state_.ui->end();
         try
         {
+            if (!ensure_server())
+            {
+                continue;
+            }
+            state_.ui->begin("you");
+            state_.ui->append(line);
+            state_.ui->end();
             submit(line);
         }
         catch (const std::exception &error)

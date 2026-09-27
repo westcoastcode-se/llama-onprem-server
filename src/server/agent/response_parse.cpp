@@ -571,7 +571,7 @@ string describe_tool(const ChatTool &tool)
 }
 
 string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools, std::string_view extra,
-                                   bool allow_questions)
+                                   bool allow_questions, bool compress_tools)
 {
     string prompt = "You are a coding agent. Solve the user's task carefully.\n\n"
                     "You cannot run commands yourself. When you need the client to run something, "
@@ -607,6 +607,13 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
                   "Do not use <question> or <answer> tags. Prefer a best-effort approach or "
                   "state assumptions instead of asking the user to choose.\n"
                   "When finished, reply with a clear final answer and no tool_call tags.\n";
+    }
+
+    if (compress_tools)
+    {
+        prompt += "Older tool results are replaced with one line naming the tool and its target, "
+                  "for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
+                  "Read the file or repeat the search when you need that text again.\n";
     }
 
     if (!extra.empty())

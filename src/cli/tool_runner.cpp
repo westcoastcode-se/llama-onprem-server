@@ -1,7 +1,10 @@
 #include "cli/tool_runner.hpp"
 
+#include "common/tools/tool_subagent.hpp"
+
 #include <algorithm>
 #include <filesystem>
+#include <initializer_list>
 #include <fstream>
 #include <ranges>
 #include <sstream>
@@ -27,7 +30,7 @@ ToolKind tool_kind(std::string_view name)
     {
         return ToolKind::Read;
     }
-    if (name == "write_file")
+    if (name == "write_file" || name == "apply_patch")
     {
         return ToolKind::Write;
     }
@@ -173,8 +176,8 @@ std::string tool_summary(std::string_view name, const json &args)
     {
         brief = arg_text(args, "command");
     }
-    else if (name == "write_file" || name == "read_file" || name == "list_directory" || name == "file_search" ||
-             name == "search_text")
+    else if (name == "write_file" || name == "apply_patch" || name == "read_file" || name == "list_directory" ||
+             name == "file_search" || name == "search_text")
     {
         brief = arg_text(args, "path");
         if (brief.empty())
@@ -208,15 +211,81 @@ std::string tool_summary(std::string_view name, const json &args)
     return summary;
 }
 
+std::string first_arg(const json &args, std::initializer_list<const char *> keys)
+{
+    for (const char *key : keys)
+    {
+        std::string value = arg_text(args, key);
+        if (!value.empty())
+        {
+            return value;
+        }
+    }
+    return {};
+}
+
+// Target stored with the tool result so a later one-line record can name it.
+std::string tool_subject(std::string_view name, const json &args)
+{
+    std::string brief;
+    if (name == "execute_command")
+    {
+        brief = arg_text(args, "command");
+    }
+    else if (name == "web_fetch")
+    {
+        brief = arg_text(args, "url");
+    }
+    else if (name == "web_search")
+    {
+        brief = arg_text(args, "query");
+    }
+    else if (name == "sub_agent")
+    {
+        brief = Tools::subagent_request_text(args);
+    }
+    else if (name == "search_text")
+    {
+        brief = first_arg(args, {"query", "pattern", "text", "search"});
+    }
+    else if (name == "file_search")
+    {
+        brief = first_arg(args, {"pattern", "query", "name"});
+    }
+    else
+    {
+        brief = first_arg(args, {"path", "url", "query", "command"});
+    }
+    const auto nl = brief.find('\n');
+    if (nl != std::string::npos)
+    {
+        brief.resize(nl);
+    }
+    if (brief.size() > 160)
+    {
+        brief.resize(157);
+        brief += "...";
+    }
+    return brief;
+}
+
 std::string approval_detail(std::string_view name, const json &args, const std::filesystem::path &cwd)
 {
     if (name == "write_file")
     {
         return edit_preview(cwd, args);
     }
+    if (name == "apply_patch")
+    {
+        return arg_text(args, "path") + "\n- " + arg_text(args, "old_string") + "\n+ " + arg_text(args, "new_string");
+    }
     if (name == "execute_command")
     {
         return arg_text(args, "command");
+    }
+    if (name == "sub_agent")
+    {
+        return Tools::subagent_request_text(args);
     }
     return {};
 }
@@ -333,7 +402,11 @@ std::optional<json> ToolRunner::run(const SessionResponse &session, std::span<co
     {
         json args = call.arguments.is_object() ? call.arguments : json::object();
         const std::string summary = tool_summary(call.name, args);
-        json item{{"id", call.id}, {"name", call.name}, {"denied", false}, {"content", ""}};
+        json item{{"id", call.id},
+                  {"name", call.name},
+                  {"detail", tool_subject(call.name, args)},
+                  {"denied", false},
+                  {"content", ""}};
         bool run = true;
         bool became_full = false;
         {

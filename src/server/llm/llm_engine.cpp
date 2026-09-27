@@ -224,7 +224,7 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
 
 void LlamaEngine::reset()
 {
-    trim_kv_to(0);
+    (void)trim_kv_to(0);
 }
 
 void LlamaEngine::erase_stored(const std::string &session_id)
@@ -308,11 +308,11 @@ void LlamaEngine::release_session(std::string_view session_id)
     erase_stored(id);
     if (active_session_id_ == id)
     {
-        trim_kv_to(0);
+        (void)trim_kv_to(0);
     }
 }
 
-void LlamaEngine::trim_kv_to(size_t n_tokens)
+bool LlamaEngine::trim_kv_to(size_t n_tokens)
 {
     // Positions and active_tokens_ describe the same sequence. Trimming one without the other
     // makes the next prefix diff decode tokens on top of the wrong cache.
@@ -320,11 +320,34 @@ void LlamaEngine::trim_kv_to(size_t n_tokens)
     {
         n_tokens = active_tokens_.size();
     }
-    if (ctx_)
+    if (!ctx_)
     {
-        llama_memory_seq_rm(llama_get_memory(ctx_.get()), 0, static_cast<llama_pos>(n_tokens), -1);
+        active_tokens_.resize(n_tokens);
+        return true;
     }
-    active_tokens_.resize(n_tokens);
+    if (n_tokens == active_tokens_.size())
+    {
+        return true;
+    }
+
+    llama_memory_t memory = llama_get_memory(ctx_.get());
+    // A hybrid model such as Qwen3.5 keeps one recurrent state. It can drop the whole sequence,
+    // but not an arbitrary suffix. Ignoring that failure leaves the old cells in place, and the
+    // next batch is written past them until the cache has no free slot.
+    const bool removed = llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(n_tokens), -1);
+    if (removed)
+    {
+        active_tokens_.resize(n_tokens);
+        return true;
+    }
+
+    log_info("[llm] session ", active_session_id_, " cannot drop a kv suffix at ", n_tokens, ", recomputing the prompt");
+    if (!llama_memory_seq_rm(memory, 0, 0, -1))
+    {
+        llama_memory_clear(memory, true);
+    }
+    active_tokens_.clear();
+    return false;
 }
 
 void LlamaEngine::park_active_session()
@@ -379,7 +402,7 @@ bool LlamaEngine::unpark_session(const std::string &session_id)
     SessionKv slot = std::move(*it);
     stored_sessions_.erase(it);
     // Clear sequence 0 before the restore so the snapshot replaces it instead of merging into it.
-    trim_kv_to(0);
+    (void)trim_kv_to(0);
     const size_t loaded = llama_state_seq_set_data(ctx_.get(), slot.state.data(), slot.state.size(), 0);
     if (loaded == 0)
     {
@@ -402,7 +425,7 @@ void LlamaEngine::activate_session(const std::string &session_id)
     active_tokens_.clear();
     if (!unpark_session(session_id))
     {
-        trim_kv_to(0);
+        (void)trim_kv_to(0);
         log_info("[llm] session ", session_id.empty() ? "(none)" : session_id, " kv miss");
     }
     else
@@ -585,13 +608,17 @@ std::string LlamaEngine::generate(std::string_view prompt, const LlamaRequest &r
     }
 
     // Anything past the shared token prefix is stale: a different reply, an edited message, or a
-    // template that rewrote an earlier turn. Drop it before decoding the new tail.
-    const size_t checkpoint = common_prefix_length(std::span<const int32_t>(active_tokens_),
-                                                   std::span<const int32_t>(prompt_tokens));
-    trim_kv_to(checkpoint);
+    // template that rewrote an earlier turn. Drop it before decoding the new tail. A model that
+    // cannot drop a suffix clears the sequence, and this turn decodes the whole prompt.
+    size_t checkpoint = common_prefix_length(std::span<const int32_t>(active_tokens_),
+                                             std::span<const int32_t>(prompt_tokens));
+    if (!trim_kv_to(checkpoint))
+    {
+        checkpoint = 0;
+    }
 
     // Failed and aborted turns must not become the next prefix. The caller may ignore the partial text.
-    auto rollback = [&] { trim_kv_to(checkpoint); };
+    auto rollback = [&] { (void)trim_kv_to(checkpoint); };
 
     std::string response;
     try

@@ -17,7 +17,7 @@ static int test_tool_read_file_lines() {
 
     const auto tool = Tools::create_read_file_tool();
     const auto result = tool.execute({{"path", path.string()}});
-    assertEquals("1: hello\n2: world\n", result);
+    assertEquals("lines 1-2 of 2\n1: hello\n2: world\n", result);
     return EXIT_SUCCESS;
 }
 
@@ -32,7 +32,7 @@ static int test_tool_read_file_offset_and_limit() {
 
     const auto tool = Tools::create_read_file_tool();
     const auto result = tool.execute({{"path", path.string()}, {"offset", 2}, {"limit", 1}});
-    assertEquals("2: two\n", result);
+    assertEquals("lines 2-2 of 3\n2: two\n", result);
     return EXIT_SUCCESS;
 }
 

@@ -67,4 +67,5 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text);
  * extra is appended as additional instructions.
  */
 string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools,
-                                   std::string_view extra = "", bool allow_questions = true);
+                                   std::string_view extra = "", bool allow_questions = true,
+                                   bool compress_tools = true);

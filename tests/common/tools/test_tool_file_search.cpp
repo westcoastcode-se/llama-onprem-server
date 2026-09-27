@@ -59,8 +59,42 @@ static int test_tool_file_search_error_invalid_pattern() {
 /**
  * Run all file_search tests
  */
+/**
+ * A match in a parent directory name does not select an unrelated file.
+ */
+static int test_tool_file_search_name_only() {
+    const auto dir = make_temp_dir("file-search");
+    defer(std::filesystem::remove_all(dir));
+    const auto nested = dir / "needle-dir" / "other.txt";
+    write_test_file(nested, "y");
+
+    const auto tool = Tools::create_file_search_tool();
+    const auto result = tool.execute({{"pattern", "needle"}, {"path", dir.string()}});
+    assertTrue(result.find("other.txt") == std::string::npos);
+    assertTrue(result.find("needle-dir") != std::string::npos);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Files under vendors are not listed.
+ */
+static int test_tool_file_search_skips_vendors() {
+    const auto dir = make_temp_dir("file-search");
+    defer(std::filesystem::remove_all(dir));
+    write_test_file(dir / "vendors" / "needle.txt", "x");
+    const auto keep = dir / "needle.txt";
+    write_test_file(keep, "x");
+
+    const auto tool = Tools::create_file_search_tool();
+    const auto result = tool.execute({{"pattern", "needle"}, {"path", dir.string()}});
+    assertEquals(keep.string() + "\n", result);
+    return EXIT_SUCCESS;
+}
+
 int test_tool_file_search() {
     RUN_TEST(test_tool_file_search_match);
+    RUN_TEST(test_tool_file_search_name_only);
+    RUN_TEST(test_tool_file_search_skips_vendors);
     RUN_TEST(test_tool_file_search_none);
     RUN_TEST(test_tool_file_search_error_missing_pattern);
     RUN_TEST(test_tool_file_search_error_invalid_pattern);

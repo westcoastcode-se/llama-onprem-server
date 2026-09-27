@@ -4,6 +4,55 @@
 
 namespace Tools {
 
+std::string subagent_request_text(const nlohmann::json &args)
+{
+    if (args.is_string())
+    {
+        return args.get<std::string>();
+    }
+    if (!args.is_object())
+    {
+        return {};
+    }
+    std::string text;
+    if (args.contains("tasks") && args["tasks"].is_array())
+    {
+        for (const auto &item : args["tasks"])
+        {
+            if (!item.is_string())
+            {
+                continue;
+            }
+            if (!text.empty())
+            {
+                text.push_back('\n');
+            }
+            text += item.get<std::string>();
+        }
+    }
+    if (text.empty())
+    {
+        const char *const keys[] = {"task", "prompt", "instruction", "description"};
+        for (const char *key : keys)
+        {
+            if (args.contains(key) && args[key].is_string())
+            {
+                text = args[key].get<std::string>();
+                break;
+            }
+        }
+    }
+    if (args.contains("inherit") && args["inherit"].is_boolean() && args["inherit"].get<bool>())
+    {
+        if (!text.empty())
+        {
+            text.push_back('\n');
+        }
+        text += "inherit: yes";
+    }
+    return text;
+}
+
 Tool create_subagent_tool(SubagentRunner runner) {
     return {
         .name = "sub_agent",
@@ -12,11 +61,13 @@ Tool create_subagent_tool(SubagentRunner runner) {
                 "context with full tool access (read/write files, execute commands, search code, web search, etc.) and "
                 "returns only its final result. Supports executing a single task or multiple tasks in a controlled "
                 "sequential order. Always use sub-agents when exploring large codebases, inspecting multiple or large "
-                "files, or investigating complex components (e.g. client, server, fat_client) to optimize context "
-                "usage. The sub-agent's findings and synthesized results can be directly utilized by the main agent or "
-                "subsequent sub-agents without needing to re-read large files into the conversation history.",
+                "files, or investigating complex components to keep large reads out of the parent session. "
+                "The result is a summary that cites file:line, plus git diff --stat when files changed. "
+                "Starts with an empty conversation unless inherit is true. If the result says the context is full, "
+                "call again with a smaller task so the answer can be shorter.",
         .schema_doc = "arguments:\n      task: string (one sub-task, or a JSON array of sub-tasks)\n      tasks: "
-                          "array (optional list of tasks to execute in order)",
+                          "array (optional list of tasks to execute in order)\n      inherit: boolean (optional, default false; "
+                          "copy this conversation into the sub-agent only when the task needs it)",
         .execute = [runner](const nlohmann::json &args) -> std::string {
                 if (!runner)
                 {
@@ -110,16 +161,26 @@ Tool create_subagent_tool(SubagentRunner runner) {
                     return "error: missing required argument 'task'";
                 }
 
+                bool inherit = false;
+                if (args.is_object() && args.contains("inherit") && args["inherit"].is_boolean())
+                {
+                    inherit = args["inherit"].get<bool>();
+                }
+
                 if (tasks.size() == 1)
                 {
-                    return runner(tasks[0]);
+                    return runner(tasks[0], inherit);
                 }
 
                 // Execute all tasks sequentially in controlled order
                 std::string combined_result;
                 for (size_t i = 0; i < tasks.size(); ++i)
                 {
-                    std::string task_res = runner(tasks[i]);
+                    std::string task_res = runner(tasks[i], inherit);
+                    if (task_res.starts_with("error: sub-agent ran out of context"))
+                    {
+                        return task_res;
+                    }
                     if (i > 0)
                     {
                         combined_result += "\n\n";

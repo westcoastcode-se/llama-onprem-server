@@ -21,4 +21,7 @@ namespace Tools {
  */
 Tool create_subagent_tool(SubagentRunner runner);
 
+// The task text shown when the user expands an approval row. Not shortened.
+[[nodiscard]] std::string subagent_request_text(const nlohmann::json &args);
+
 } // namespace Tools

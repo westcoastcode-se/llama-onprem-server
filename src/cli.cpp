@@ -1,4 +1,5 @@
 #include "cli/agent.hpp"
+#include "cli/servers.hpp"
 #include "common/std.hpp"
 #include "api/errors.hpp"
 #include "api/models.hpp"
@@ -186,7 +187,7 @@ ChatMessage parse_history_item(std::string_view text)
 }
 
 json load_tool_results(const std::string &path, const std::string &id, const std::string &name,
-                       const std::string &content, bool denied, bool from_flags)
+                       const std::string &content, const std::string &detail, bool denied, bool from_flags)
 {
     if (!path.empty())
     {
@@ -216,7 +217,12 @@ json load_tool_results(const std::string &path, const std::string &id, const std
     {
         throw std::runtime_error("pass --file or --name and --content");
     }
-    return json::array({json{{"id", id}, {"name", name}, {"content", content}, {"denied", denied}}});
+    json item{{"id", id}, {"name", name}, {"content", content}, {"denied", denied}};
+    if (!detail.empty())
+    {
+        item["detail"] = detail;
+    }
+    return json::array({std::move(item)});
 }
 
 void add_connection(CLI::App &app, Options &options)
@@ -235,16 +241,23 @@ int main(int argc, char **argv)
     CLI::App app{"Coding agent for the local Callisto server"};
     app.set_help_all_flag("--help-all", "Show help for every subcommand");
     app.footer("With no subcommand, start an interactive session in the current directory.\n"
+               "Repeat --server for several models, or use ~/.config/callisto/servers.json.\n"
+               "Colors come from --theme, or from ~/.config/callisto/theme.json.\n"
+               "The first server that answers is selected. /model opens a chooser.\n"
                "health, session, send, job, and tools talk to the HTTP API.");
 
     Options options;
     add_connection(app, options);
+    std::vector<std::string> server_specs;
+    app.add_option("--server", server_specs, "Model server as [model=]host:port. Repeat, or separate with commas.");
     std::string approval = "read-only";
     bool resume = false;
     bool show_think = true;
     bool debug = false;
     bool questions = true;
+    bool compress_tools = true;
     std::string resume_id;
+    std::string theme_name;
     std::vector<std::string> initial_prompt;
     app.add_option("--approval", approval, "read-only, auto, or full")->default_val("read-only");
     app.add_flag("--resume", resume, "Continue the saved session for this directory and server");
@@ -252,6 +265,10 @@ int main(int argc, char **argv)
     app.add_flag("--show-think,!--hide-think", show_think, "Print the thinking block");
     app.add_flag("--debug", debug, "Show tool-call XML and similar protocol blocks");
     app.add_flag("--questions,!--no-questions", questions, "Let the model pause and ask a question");
+    app.add_flag("--compress-tools,!--no-compress-tools", compress_tools,
+                 "Shorten finished tool results when the next message is saved. Applies to a new session");
+    app.add_option("--theme", theme_name,
+                   "Color theme: default, ink, nord, forest, ember, or a path to a JSON file");
     app.add_option("prompt", initial_prompt, "Task to start with")->expected(0, -1);
 
     int agent_status = 0;
@@ -263,12 +280,22 @@ int main(int argc, char **argv)
         AgentConfig config;
         config.host = options.host;
         config.port = options.port;
+        if (!server_specs.empty())
+        {
+            config.servers = parse_server_list(server_specs);
+        }
+        else
+        {
+            config.servers = load_servers_file(servers_config_path());
+        }
         config.show_think = show_think;
         config.debug = debug;
         config.questions = questions;
+        config.compress_tools = compress_tools;
         config.exec = exec_mode;
         config.resume = resume;
         config.prompt = prompt;
+        config.theme = theme_name;
         if (approval == "auto")
         {
             config.approval = ApprovalMode::Auto;
@@ -313,11 +340,14 @@ int main(int argc, char **argv)
     create->fallthrough();
     std::string system_text;
     bool create_questions = true;
+    bool create_compress_tools = true;
     int max_tokens = -1;
     std::vector<std::string> history;
     std::vector<std::string> tool_json;
     create->add_option("-s,--system", system_text, "Extra system instructions");
     create->add_flag("--questions,!--no-questions", create_questions, "Pause when the model asks a question");
+    create->add_flag("--compress-tools,!--no-compress-tools", create_compress_tools,
+                     "Shorten finished tool results when the next message is saved");
     create->add_option("--max-tokens", max_tokens, "Turn cap. Negative means no session cap")->default_val(-1);
     create->add_option("-m,--message", history, "History entry as role:text")->take_all();
     create->add_option("--tool", tool_json, "Tool JSON, OpenAI function or {name,description,parameters}")->take_all();
@@ -325,6 +355,7 @@ int main(int argc, char **argv)
         CreateSessionRequest request;
         request.system = system_text;
         request.questions = create_questions;
+        request.compress_tools = create_compress_tools;
         request.max_tokens = max_tokens;
         for (const auto &item : history)
         {
@@ -476,6 +507,7 @@ int main(int argc, char **argv)
     std::string tools_id = "1";
     std::string tools_name;
     std::string tools_content;
+    std::string tools_detail;
     bool tools_denied = false;
     bool tools_from_flags = false;
     tools->add_option("id", tools_session, "Session id")->required();
@@ -483,11 +515,12 @@ int main(int argc, char **argv)
     tools->add_option("--call-id", tools_id, "Tool call id")->default_val("1");
     tools->add_option("--name", tools_name, "Tool name");
     tools->add_option("--content", tools_content, "Tool output");
+    tools->add_option("--detail", tools_detail, "Target kept in the one-line record, such as a path or command");
     tools->add_flag("--denied", tools_denied, "The user denied this call");
     tools->callback([&] {
-        tools_from_flags = !tools_name.empty() || !tools_content.empty() || tools_denied;
-        const json results =
-            load_tool_results(tools_file, tools_id, tools_name, tools_content, tools_denied, tools_from_flags);
+        tools_from_flags = !tools_name.empty() || !tools_content.empty() || tools_denied || !tools_detail.empty();
+        const json results = load_tool_results(tools_file, tools_id, tools_name, tools_content, tools_detail,
+                                               tools_denied, tools_from_flags);
         RestClient client = connect(options);
         const SessionID id = parse_session_id(tools_session);
         const json queued = client.post_tool_results(id, results);

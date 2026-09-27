@@ -199,6 +199,9 @@ struct CreateSessionRequest
      */
     bool questions = true;
 
+    // When true, a finished turn's long tool results become one line before the next user message.
+    bool compress_tools = true;
+
     // Model-neutral tools. The server renders them into the system prompt for the loaded model.
     vector<ChatTool> tools;
 
@@ -225,6 +228,7 @@ struct CreateSessionRequest
             {"system", system},
             {"messages", arr},
             {"questions", questions},
+            {"compress_tools", compress_tools},
             {"tools", tools_json},
             {"max_tokens", max_tokens},
         };
@@ -236,6 +240,7 @@ struct CreateSessionRequest
         CreateSessionRequest req;
         req.system = j.value("system", "");
         req.questions = j.value("questions", true);
+        req.compress_tools = j.value("compress_tools", true);
         req.max_tokens = j.value("max_tokens", -1);
         const auto tools = j.value("tools", json::array());
         if (tools.is_array())
@@ -340,6 +345,9 @@ struct SessionResponse
     // TODO: This should be part of the client and not the server
     bool questions = true;
 
+    // Finished tool results are shortened before the next user message.
+    bool compress_tools = true;
+
     // Set when the latest generation failed. Empty after a successful turn.
     string error;
     // Stable code such as "context_full". Empty when error is empty or unclassified.
@@ -376,6 +384,7 @@ struct SessionResponse
             {"messages", arr},
             {"state", state.to_string()},
             {"questions", questions},
+            {"compress_tools", compress_tools},
             {"context_used", context_used},
             {"context_size", context_size}
         };
@@ -450,6 +459,7 @@ struct SessionResponse
         }
 
         req.questions = j.value("questions", true);
+        req.compress_tools = j.value("compress_tools", true);
         req.error = j.value("error", string());
         req.error_code = j.value("error_code", string());
         req.context_used = j.value("context_used", 0);

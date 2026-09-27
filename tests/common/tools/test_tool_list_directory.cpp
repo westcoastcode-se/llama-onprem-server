@@ -65,8 +65,25 @@ static int test_tool_list_directory_not_a_directory() {
 /**
  * Run all list_directory tests
  */
+/**
+ * Directories are listed before files, and each group is sorted by name.
+ */
+static int test_tool_list_directory_order() {
+    const auto dir = make_temp_dir("list-dir");
+    defer(std::filesystem::remove_all(dir));
+    write_test_file(dir / "b.txt", "bb");
+    write_test_file(dir / "a.txt", "a");
+    std::filesystem::create_directory(dir / "zdir");
+
+    const auto tool = Tools::create_list_directory_tool();
+    const auto result = tool.execute({{"path", dir.string()}});
+    assertEquals("[DIR]  zdir\n[FILE] a.txt (1 bytes)\n[FILE] b.txt (2 bytes)\n", result);
+    return EXIT_SUCCESS;
+}
+
 int test_tool_list_directory() {
     RUN_TEST(test_tool_list_directory_file);
+    RUN_TEST(test_tool_list_directory_order);
     RUN_TEST(test_tool_list_directory_empty);
     RUN_TEST(test_tool_list_directory_missing);
     RUN_TEST(test_tool_list_directory_not_a_directory);

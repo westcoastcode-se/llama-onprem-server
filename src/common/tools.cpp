@@ -23,6 +23,7 @@ std::vector<Tool> get_base_tools() {
         Tools::create_execute_command_tool(),
         Tools::create_read_file_tool(),
         Tools::create_write_file_tool(),
+        Tools::create_apply_patch_tool(),
         Tools::create_list_directory_tool(),
         Tools::create_file_search_tool(),
         Tools::create_search_text_tool(),
@@ -59,6 +60,7 @@ std::string load_ai_instructions(std::string_view base_dir) {
 
     // Search for standard project instruction files in priority order
     const std::vector<std::string> candidate_names = {
+        "AGENTS.md",
         "AI_INSTRUCTIONS.md",
         "ai_instructions.md",
         ".github/copilot-instructions.md",
@@ -87,6 +89,11 @@ std::string load_ai_instructions(std::string_view base_dir) {
                     content.clear();
                 }
                 if (!content.empty()) {
+                    constexpr std::size_t kCap = 2000;
+                    if (content.size() > kCap) {
+                        content.resize(kCap);
+                        content += "\n[instructions truncated]";
+                    }
                     return content;
                 }
             }

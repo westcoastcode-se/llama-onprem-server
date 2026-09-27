@@ -94,7 +94,7 @@ static int test_tool_search_text_max_matches() {
     write_test_file(path, "secret one\nsecret two\n");
 
     const auto tool = Tools::create_search_text_tool();
-    const auto result = tool.execute({{"query", "secret"}, {"path", path.string()}, {"max_matches", 1}});
+    const auto result = tool.execute({{"query", "secret"}, {"path", path.string()}, {"max_matches", 1}, {"context", 0}});
     assertEquals(path.string() + ":1: secret one\n\n... [matches truncated]", result);
     return EXIT_SUCCESS;
 }
@@ -141,11 +141,44 @@ static int test_tool_search_text_error_bad_regex() {
 /**
  * Run all search_text tests
  */
+/**
+ * context includes the lines around a hit.
+ */
+static int test_tool_search_text_context() {
+    const auto dir = make_temp_dir("search-text");
+    defer(std::filesystem::remove_all(dir));
+    const auto path = dir / "note.txt";
+    write_test_file(path, "before\nhit\nafter\n");
+
+    const auto tool = Tools::create_search_text_tool();
+    const auto result = tool.execute({{"query", "hit"}, {"path", path.string()}, {"context", 1}});
+    assertEquals(path.string() + ":1: before\n" + path.string() + ":2: hit\n" + path.string() + ":3: after\n", result);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * vendors is not searched when walking a project root.
+ */
+static int test_tool_search_text_skips_vendors() {
+    const auto dir = make_temp_dir("search-text");
+    defer(std::filesystem::remove_all(dir));
+    const auto keep = dir / "keep.txt";
+    write_test_file(keep, "secret\n");
+    write_test_file(dir / "vendors" / "note.txt", "secret\n");
+
+    const auto tool = Tools::create_search_text_tool();
+    const auto result = tool.execute({{"query", "secret"}, {"path", dir.string()}, {"context", 0}});
+    assertEquals(keep.string() + ":1: secret\n", result);
+    return EXIT_SUCCESS;
+}
+
 int test_tool_search_text() {
     RUN_TEST(test_tool_search_text_match);
     RUN_TEST(test_tool_search_text_case_sensitive);
     RUN_TEST(test_tool_search_text_file_pattern);
     RUN_TEST(test_tool_search_text_skips_git);
+    RUN_TEST(test_tool_search_text_skips_vendors);
+    RUN_TEST(test_tool_search_text_context);
     RUN_TEST(test_tool_search_text_skips_binary);
     RUN_TEST(test_tool_search_text_max_matches);
     RUN_TEST(test_tool_search_text_error_missing_query);

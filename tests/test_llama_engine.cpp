@@ -11,6 +11,8 @@
 #include <string>
 
 extern int test_context_params();
+extern int test_session_gc();
+extern int test_tool_history();
 
 namespace
 {
@@ -308,7 +310,10 @@ int test_system_prompt_uses_client_tools()
     assertTrue(qwen_prompt.find("<parameter=host>") != std::string::npos);
     assertTrue(qwen_prompt.find("Ping a host") != std::string::npos);
     assertTrue(qwen_prompt.find("Be brief") != std::string::npos);
+    assertTrue(qwen_prompt.find("Older tool results") != std::string::npos);
     assertTrue(qwen_prompt.find("execute_command") == std::string::npos);
+    const std::string quiet = default_agent_system_prompt(qwen, tools, "", true, false);
+    assertTrue(quiet.find("Older tool results") == std::string::npos);
 
     const DeepseekAdapter deepseek;
     const std::string deepseek_prompt = default_agent_system_prompt(deepseek, tools, "", false);
@@ -431,6 +436,14 @@ int main()
         return rc;
     }
     if (const int rc = test_context_params())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_gc())
+    {
+        return rc;
+    }
+    if (const int rc = test_tool_history())
     {
         return rc;
     }

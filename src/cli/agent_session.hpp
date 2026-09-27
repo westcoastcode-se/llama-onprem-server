@@ -4,6 +4,7 @@
 
 #include "common/tools.hpp"
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,11 +25,22 @@ class AgentSession
     std::vector<Tool> base_tools_;
     std::vector<Tool> tools_;
 
-    [[nodiscard]] std::string subagent(std::string_view task);
+    [[nodiscard]] std::string subagent(std::string_view task, bool inherit);
     [[nodiscard]] TurnStatus drive(JobKey key);
     TurnStatus submit(const std::string &prompt);
     [[nodiscard]] SessionID open(const AgentConfig &config);
+    [[nodiscard]] SessionID open_with_history(std::vector<ChatMessage> history);
     [[nodiscard]] CreateSessionRequest make_request(const AgentConfig &config) const;
+    [[nodiscard]] AgentConfig endpoint_config(const AgentConfig &config) const;
+    void bind_session(SessionID id);
+    [[nodiscard]] ServerSlot &slot();
+    [[nodiscard]] const ServerSlot &slot() const;
+    [[nodiscard]] std::optional<std::size_t> find_model(std::string_view query) const;
+    void list_models();
+    void use_model(std::size_t index);
+    [[nodiscard]] bool model_command(std::string_view argument);
+    [[nodiscard]] std::string offline_message() const;
+    [[nodiscard]] bool ensure_server();
     [[nodiscard]] static std::string last_assistant(const SessionResponse &session);
     void refresh_status();
     void compact();

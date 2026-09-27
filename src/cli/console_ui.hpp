@@ -1,8 +1,7 @@
 #pragma once
 
+#include "cli/theme.hpp"
 #include "cli/ui.hpp"
-
-#include "common/color.hpp"
 
 #include <cctype>
 #include <iostream>
@@ -14,9 +13,13 @@
 // Plain-text session used by exec. Lines go to the terminal, not the fullscreen UI.
 class ConsoleUi final : public AgentUi
 {
+    Theme theme_;
     bool thinking = false;
 
   public:
+    explicit ConsoleUi(Theme theme) : theme_(std::move(theme))
+    {
+    }
     void set_status(std::string status) override
     {
         std::println(stderr, "{}", status);
@@ -36,7 +39,7 @@ class ConsoleUi final : public AgentUi
         thinking = kind == "thinking";
         if (thinking)
         {
-            std::print("{}", Color::GRAY);
+            std::print("{}", theme_.thinking_text.ansi());
         }
     }
 
@@ -49,7 +52,7 @@ class ConsoleUi final : public AgentUi
     {
         if (thinking)
         {
-            std::println("{}", Color::RESET);
+            std::println("{}", "\033[0m");
         }
         else
         {
@@ -115,6 +118,43 @@ class ConsoleUi final : public AgentUi
             }
         }
         return line;
+    }
+
+    std::optional<std::size_t> choose(std::string prompt, std::vector<std::string> choices, std::size_t selected) override
+    {
+        std::println(stderr, "{}", prompt);
+        for (std::size_t i = 0; i < choices.size(); ++i)
+        {
+            std::println(stderr, "  {} {}", i + 1, choices[i]);
+        }
+        if (selected < choices.size())
+        {
+            std::println(stderr, "current {}", selected + 1);
+        }
+        std::print(stderr, "model> ");
+        std::fflush(stderr);
+        std::string line;
+        if (!std::getline(std::cin, line) || line.empty())
+        {
+            return std::nullopt;
+        }
+        const bool digits = std::ranges::all_of(line, [](unsigned char c) { return std::isdigit(c) != 0; });
+        if (!digits)
+        {
+            return std::nullopt;
+        }
+        try
+        {
+            const int number = std::stoi(line);
+            if (number >= 1 && static_cast<std::size_t>(number) <= choices.size())
+            {
+                return static_cast<std::size_t>(number - 1);
+            }
+        }
+        catch (const std::exception &)
+        {
+        }
+        return std::nullopt;
     }
 
     std::string read_line() override
