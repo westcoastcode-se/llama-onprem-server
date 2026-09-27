@@ -129,15 +129,21 @@ ftxui::Element thinking_block(const Block &block, bool reveal, ftxui::Box &hit)
     using namespace ftxui;
     const Color ink = Color::GrayDark;
     Element body;
+    const std::string title = block.caption.empty() ? "thinking" : block.caption;
     if (!block.expanded)
     {
         const int columns = std::max(16, Terminal::Size().dimx - 8);
-        const std::string label = collapsed_thinking_label(block.text, columns);
+        std::string label = collapsed_thinking_label(block.text, columns);
+        if (!block.caption.empty())
+        {
+            const ThinkPreview preview = think_preview(block.text);
+            label = fit_label(block.caption + (preview.line.empty() ? "" : "  " + preview.line), columns, preview.more);
+        }
         body = hbox({text(" ▶ " + label), filler()}) | color(Color::GrayLight) | bgcolor(ink);
     }
     else
     {
-        Element header = hbox({text("▼ thinking") | bold, filler()});
+        Element header = hbox({text("▼ " + title) | bold, filler()});
         if (reveal)
         {
             header = header | focus;
@@ -178,7 +184,7 @@ ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit)
     }
     else
     {
-        Element header = hbox({text("▼ " + fit_columns(title, columns)) | bold | color(ink), filler()});
+        Element header = hbox({text("▼ " + title) | bold | color(ink), filler()});
         if (reveal)
         {
             header = header | focus;
@@ -216,7 +222,8 @@ ftxui::Element assistant_block(const Block &block)
     using namespace ftxui;
     const std::string clean = trimmed_edges(block.text);
     Element body = paragraph(clean);
-    return window(text(" assistant ") | dim, body);
+    const std::string title = block.caption.empty() ? " assistant " : " " + block.caption + " ";
+    return window(text(title) | dim, body);
 }
 
 std::size_t utf8_prev(std::string_view text, std::size_t index)
@@ -300,6 +307,7 @@ class TuiUi final : public AgentUi
     bool line_ready = false;
     std::string line;
     bool quit = false;
+    bool subagent_live = false;
     bool asking = false;
     bool question_mode = false;
     bool pick_mode = false;
@@ -392,6 +400,13 @@ class TuiUi final : public AgentUi
         wake();
     }
 
+    void set_subagent_live(bool on) override
+    {
+        std::lock_guard lock(mutex);
+        subagent_live = on;
+        wake();
+    }
+
     void begin(std::string kind) override
     {
         {
@@ -401,6 +416,10 @@ class TuiUi final : public AgentUi
                 open = false;
             }
             blocks.push_back(Block{std::move(kind), {}});
+            if (subagent_live)
+            {
+                blocks.back().caption = "sub-agent";
+            }
             open = true;
         }
         wake();
@@ -414,6 +433,10 @@ class TuiUi final : public AgentUi
             {
                 blocks.push_back(Block{"assistant", {}});
                 open = true;
+                if (subagent_live)
+                {
+                    blocks.back().caption = "sub-agent";
+                }
             }
             blocks.back().text += text;
         }

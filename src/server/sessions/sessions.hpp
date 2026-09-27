@@ -124,11 +124,18 @@ class Session
         return {context_used_, context_size_};
     }
 
-    /** No generation in flight. Awaiting a tool result still expires after kIdleTtl. */
+    /**
+     * Idle long enough to collect. A session waiting on the client is kept:
+     * the tool-result or answer POST still has to land on this id.
+     */
     [[nodiscard]] bool is_gc_idle() const
     {
         std::lock_guard lock(mutex_);
-        return !active_job_ && state_ != SessionState::Generating;
+        if (active_job_ || state_ == SessionState::Generating)
+        {
+            return false;
+        }
+        return state_ != SessionState::AwaitingTools && state_ != SessionState::AwaitingQuestion;
     }
 
     // Copy of the conversation a sub-agent can continue from. The system prompt is kept as-is.

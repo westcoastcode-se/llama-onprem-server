@@ -1,5 +1,7 @@
 #include "cli/tool_runner.hpp"
 
+#include "common/tools/tool_subagent.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -27,7 +29,7 @@ ToolKind tool_kind(std::string_view name)
     {
         return ToolKind::Read;
     }
-    if (name == "write_file")
+    if (name == "write_file" || name == "apply_patch")
     {
         return ToolKind::Write;
     }
@@ -173,8 +175,8 @@ std::string tool_summary(std::string_view name, const json &args)
     {
         brief = arg_text(args, "command");
     }
-    else if (name == "write_file" || name == "read_file" || name == "list_directory" || name == "file_search" ||
-             name == "search_text")
+    else if (name == "write_file" || name == "apply_patch" || name == "read_file" || name == "list_directory" ||
+             name == "file_search" || name == "search_text")
     {
         brief = arg_text(args, "path");
         if (brief.empty())
@@ -214,9 +216,17 @@ std::string approval_detail(std::string_view name, const json &args, const std::
     {
         return edit_preview(cwd, args);
     }
+    if (name == "apply_patch")
+    {
+        return arg_text(args, "path") + "\n- " + arg_text(args, "old_string") + "\n+ " + arg_text(args, "new_string");
+    }
     if (name == "execute_command")
     {
         return arg_text(args, "command");
+    }
+    if (name == "sub_agent")
+    {
+        return Tools::subagent_request_text(args);
     }
     return {};
 }

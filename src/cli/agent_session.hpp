@@ -25,7 +25,7 @@ class AgentSession
     std::vector<Tool> base_tools_;
     std::vector<Tool> tools_;
 
-    [[nodiscard]] std::string subagent(std::string_view task);
+    [[nodiscard]] std::string subagent(std::string_view task, bool inherit);
     [[nodiscard]] TurnStatus drive(JobKey key);
     TurnStatus submit(const std::string &prompt);
     [[nodiscard]] SessionID open(const AgentConfig &config);

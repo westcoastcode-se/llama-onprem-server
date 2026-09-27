@@ -8,7 +8,7 @@ namespace Tools {
  * @brief Creates and returns the tool definition for "file_search".
  *
  * Recursively searches directory structures for files or subdirectories
- * whose name or path matches a given substring pattern.
+ * whose name contains a substring. Vendor and build directories are skipped.
  * Skips inaccessible directories via `skip_permission_denied` and limits
  * search results to a maximum of 100 matches.
  *

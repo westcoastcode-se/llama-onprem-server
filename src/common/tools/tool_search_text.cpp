@@ -32,8 +32,7 @@ static bool is_binary_file(const std::filesystem::path & file_path) {
  * @brief Determines if a directory should be automatically ignored during recursive search.
  */
 static bool should_ignore_dir_name(std::string_view name) {
-    return name == ".git" || name == ".svn" || name == ".hg" || name == ".idea" ||
-           name == "node_modules" || name == "cmake-build-debug" || name == "cmake-build-release";
+    return is_skipped_directory(name);
 }
 
 /**
@@ -102,6 +101,13 @@ std::string search_text(const nlohmann::json & args) {
     }
     if (max_matches < 1) max_matches = 1;
 
+    int context = 2;
+    if (args.contains("context") && args["context"].is_number()) {
+        context = args["context"].get<int>();
+    }
+    if (context < 0) context = 0;
+    if (context > 5) context = 5;
+
     // Prepare regex or lowercased query
     std::regex reg_pattern;
     std::string query_lower;
@@ -153,28 +159,52 @@ std::string search_text(const nlohmann::json & args) {
         std::ifstream file(file_path);
         if (!file.is_open()) return;
 
+        std::vector<std::string> lines;
         std::string line;
-        int line_num = 1;
         while (std::getline(file, line)) {
+            lines.push_back(std::move(line));
+        }
+
+        std::vector<int> hits;
+        for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
             bool matches = false;
             if (is_regex) {
-                matches = std::regex_search(line, reg_pattern);
+                matches = std::regex_search(lines[static_cast<std::size_t>(i)], reg_pattern);
             } else if (case_sensitive) {
-                matches = (line.find(query) != std::string::npos);
+                matches = (lines[static_cast<std::size_t>(i)].find(query) != std::string::npos);
             } else {
-                matches = icontains(line, query_lower);
+                matches = icontains(lines[static_cast<std::size_t>(i)], query_lower);
             }
-
             if (matches) {
-                result += file_path.string() + ":" + std::to_string(line_num) + ": " + line + "\n";
-                match_count++;
-                if (result.size() > MAX_TOOL_OUTPUT_CHARS || match_count >= max_matches) {
-                    truncated = true;
-                    return;
-                }
+                hits.push_back(i);
             }
-            line_num++;
         }
+        if (hits.empty()) return;
+
+        const int room = max_matches - match_count;
+        if (static_cast<int>(hits.size()) > room) {
+            hits.resize(static_cast<std::size_t>(room));
+            truncated = true;
+        }
+        match_count += static_cast<int>(hits.size());
+
+        std::vector<char> show(lines.size(), 0);
+        for (const int hit : hits) {
+            const int from = std::max(0, hit - context);
+            const int to = std::min(static_cast<int>(lines.size()) - 1, hit + context);
+            for (int i = from; i <= to; ++i) {
+                show[static_cast<std::size_t>(i)] = 1;
+            }
+        }
+        for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
+            if (show[static_cast<std::size_t>(i)] == 0) continue;
+            result += file_path.string() + ":" + std::to_string(i + 1) + ": " + lines[static_cast<std::size_t>(i)] + "\n";
+            if (result.size() > MAX_TOOL_OUTPUT_CHARS) {
+                truncated = true;
+                return;
+            }
+        }
+        if (truncated) return;
     };
 
     try {
@@ -222,7 +252,7 @@ Tool create_search_text_tool() {
             "arguments:\n      query: string (the text or regex pattern to search for in files)\n      path: string "
             "(optional directory or file to search in, default '.')\n      file_pattern: string (optional filename "
             "filter or extension, e.g. '.cpp')\n      case_sensitive: boolean (optional, default false)\n      "
-            "is_regex: boolean (optional, default false)\n      max_matches: integer (optional, default 100)",
+            "is_regex: boolean (optional, default false)\n      context: integer (optional lines before and after each hit, default 2, max 5)\n      max_matches: integer (optional, default 100)",
         .execute = search_text,
         .aliases = {"grep", "grep_search", "find_text", "search_in_files", "search_files_text", "search_file_content"}};
 }

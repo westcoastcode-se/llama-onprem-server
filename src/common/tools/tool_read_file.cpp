@@ -1,6 +1,9 @@
 #include "common/tools/tool_read_file.hpp"
+
 #include <fstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace Tools {
 
@@ -25,58 +28,43 @@ std::string read_file(const nlohmann::json & args) {
     if (offset < 1) offset = 1;
     if (limit < 1) limit = 1;
 
-    int current_line = 1;
-    int lines_read = 0;
-    std::string result;
-    bool truncated = false;
-    bool any_byte = false;
-
-    while (lines_read < limit) {
-        std::string line;
-        bool got = false;
-        char ch = 0;
-        while (file.get(ch)) {
-            any_byte = true;
-            got = true;
-            if (ch == '\n') {
-                break;
-            }
-            if (line.size() >= MAX_TOOL_OUTPUT_CHARS) {
-                truncated = true;
-                while (file.get(ch) && ch != '\n') {
-                }
-                break;
-            }
-            line.push_back(ch);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.size() > MAX_TOOL_OUTPUT_CHARS) {
+            line.resize(MAX_TOOL_OUTPUT_CHARS);
         }
-        if (!got) {
-            break;
-        }
-        if (current_line >= offset) {
-            result += std::to_string(current_line) + ": " + line + "\n";
-            lines_read++;
-            if (result.size() > MAX_TOOL_OUTPUT_CHARS) {
-                result.resize(MAX_TOOL_OUTPUT_CHARS);
-                truncated = true;
-                break;
-            }
-        }
-        current_line++;
+        lines.push_back(std::move(line));
     }
-
-    if (!any_byte) {
+    if (file.bad()) {
+        return "error: failed to read file '" + path + "'";
+    }
+    if (lines.empty()) {
         if (offset <= 1) {
             return "(empty file)";
         }
         return "error: offset " + std::to_string(offset) + " is beyond file length (0 lines)";
     }
-    if (file.bad()) {
-        return "error: failed to read file '" + path + "'";
-    }
-    if (lines_read == 0) {
+    if (offset > static_cast<int>(lines.size())) {
         return "error: offset " + std::to_string(offset) + " is beyond file length (" +
-               std::to_string(current_line - 1) + " lines)";
+               std::to_string(lines.size()) + " lines)";
     }
+
+    const int first = offset;
+    int last = offset;
+    std::string body;
+    bool truncated = false;
+    for (int number = offset; number <= static_cast<int>(lines.size()) && (number - offset) < limit; ++number) {
+        body += std::to_string(number) + ": " + lines[static_cast<std::size_t>(number - 1)] + "\n";
+        last = number;
+        if (body.size() > MAX_TOOL_OUTPUT_CHARS) {
+            body.resize(MAX_TOOL_OUTPUT_CHARS);
+            truncated = true;
+            break;
+        }
+    }
+    std::string result = "lines " + std::to_string(first) + "-" + std::to_string(last) + " of " +
+                         std::to_string(lines.size()) + "\n" + body;
     if (truncated) {
         result += "\n[content truncated]";
     }
@@ -86,7 +74,7 @@ std::string read_file(const nlohmann::json & args) {
 Tool create_read_file_tool() {
     return {
         .name = "read_file",
-        .description = "Read file contents with line numbers.",
+        .description = "Read file contents with line numbers. The first line states the window, for example lines 1-80 of 420.",
         .schema_doc =
                 "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, "
                 "1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",

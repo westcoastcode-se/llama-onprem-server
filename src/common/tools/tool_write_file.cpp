@@ -45,7 +45,7 @@ std::string write_file(const nlohmann::json & args) {
 Tool create_write_file_tool() {
     return {
         .name = "write_file",
-        .description = "Write or overwrite a file with given content. Creates parent directories if needed.",
+        .description = "Create a file or replace its entire contents. To change part of an existing file, use apply_patch.",
         .schema_doc =
                 "arguments:\n      path: string (path to the file)\n      content: string (the full content to write)",
         .execute = write_file

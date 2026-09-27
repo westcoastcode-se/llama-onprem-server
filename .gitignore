@@ -10,3 +10,7 @@ __pycache__
 
 # Ignore model if downloaded in the project directory
 Qwen3.8-27B-GGUF
+
+# Generated project index. Skills under .callisto/skills stay in git.
+.callisto/map.md
+.callisto/map.head

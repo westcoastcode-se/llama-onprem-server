@@ -1,6 +1,9 @@
 #include "common/tools/tool_list_directory.hpp"
+
+#include <algorithm>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace Tools {
 
@@ -19,21 +22,45 @@ std::string list_directory(const nlohmann::json & args) {
             return "error: path is not a directory: " + path_str;
         }
 
-        std::string result;
-        int count = 0;
-        for (const auto & entry : std::filesystem::directory_iterator(p)) {
-            if (++count > 250) {
-                result += "... [entries truncated]\n";
-                break;
-            }
-            std::string type = entry.is_directory() ? "[DIR] " : "[FILE]";
-            std::string size_str;
+        struct Row {
+            std::string name;
+            bool directory = false;
+            std::uintmax_t size = 0;
+        };
+        std::vector<Row> rows;
+        for (const auto &entry : std::filesystem::directory_iterator(p)) {
+            Row row;
+            row.name = entry.path().filename().string();
+            row.directory = entry.is_directory();
             if (entry.is_regular_file()) {
-                size_str = " (" + std::to_string(entry.file_size()) + " bytes)";
+                row.size = entry.file_size();
             }
-            result += type + " " + entry.path().filename().string() + size_str + "\n";
+            rows.push_back(std::move(row));
         }
-        return result.empty() ? "(empty directory)" : result;
+        std::ranges::sort(rows, [](const Row &left, const Row &right) {
+            if (left.directory != right.directory) {
+                return left.directory;
+            }
+            return left.name < right.name;
+        });
+        if (rows.empty()) {
+            return "(empty directory)";
+        }
+        constexpr std::size_t kCap = 250;
+        const std::size_t shown = std::min(rows.size(), kCap);
+        std::string result;
+        for (std::size_t i = 0; i < shown; ++i) {
+            const Row &row = rows[i];
+            if (row.directory) {
+                result += "[DIR]  " + row.name + "\n";
+            } else {
+                result += "[FILE] " + row.name + " (" + std::to_string(row.size) + " bytes)\n";
+            }
+        }
+        if (rows.size() > shown) {
+            result += std::to_string(shown) + " of " + std::to_string(rows.size()) + "\n";
+        }
+        return result;
     } catch (const std::exception & e) {
         return std::string("error listing directory: ") + e.what();
     }

@@ -57,6 +57,7 @@ set(COMMON_TOOL_SOURCES
     src/common/tools/tool_execute_command.cpp
     src/common/tools/tool_read_file.cpp
     src/common/tools/tool_write_file.cpp
+    src/common/tools/tool_apply_patch.cpp
     src/common/tools/tool_list_directory.cpp
     src/common/tools/tool_file_search.cpp
     src/common/tools/tool_search_text.cpp
@@ -101,6 +102,7 @@ add_executable(callisto_cli
         src/cli.cpp
         src/cli/agent.cpp
         src/cli/agent_session.cpp
+        src/cli/project_context.cpp
         src/cli/reply_stream.cpp
         src/cli/servers.cpp
         src/cli/session_store.cpp
@@ -135,6 +137,7 @@ add_executable(tests
     tests/common/tools/test_tool_subagent.cpp
     tests/cli/test_tool_schema.cpp
     tests/cli/test_servers.cpp
+    tests/cli/test_project_context.cpp
     tests/cli/test_session_store.cpp
     tests/cli/test_transcript_scroll.cpp
     src/cli/transcript_scroll.cpp
@@ -142,6 +145,7 @@ add_executable(tests
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
     src/cli/tool_schema.cpp
+    src/cli/project_context.cpp
     src/cli/servers.cpp
     src/cli/session_store.cpp
     ${COMMON_TOOL_SOURCES})
@@ -151,6 +155,7 @@ target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl ${CMAKE_THREAD_LIBS
 add_executable(callisto_tests
         tests/test_llama_engine.cpp
         tests/server/test_context_params.cpp
+        tests/server/test_session_gc.cpp
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp)

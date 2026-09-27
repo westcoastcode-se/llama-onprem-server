@@ -4,6 +4,7 @@
 
 extern int test_tools();
 extern int test_tool_policy();
+extern int test_project_context();
 extern int test_tool_execute_command();
 extern int test_tool_read_file();
 extern int test_tool_write_file();
@@ -28,6 +29,10 @@ int main()
         return rc;
     }
     if (const int rc = test_tool_policy())
+    {
+        return rc;
+    }
+    if (const int rc = test_project_context())
     {
         return rc;
     }

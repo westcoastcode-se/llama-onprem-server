@@ -66,6 +66,10 @@ int test_transcript_scroll_wheel_up_then_growth_stays()
     screen = draw(lines(10), scroll, 4, 4);
     assertEquals(6, scroll.max_offset);
     assertEquals(1, scroll.offset);
+    assertTrue(scroll.hold);
+    assertTrue(!scroll.follow_bottom);
+    screen = draw(lines(12), scroll, 4, 4);
+    assertEquals(1, scroll.offset);
     assertEquals(std::string("b\nc\nd\ne"), first_column(screen));
     return 0;
 }

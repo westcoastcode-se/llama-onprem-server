@@ -39,7 +39,7 @@ class TranscriptFrame : public ftxui::Node
         {
             frame_offset_ = scroll_->offset;
             const int seen_max = scroll_->max_offset;
-            const bool tail_visible = scroll_->follow_bottom || seen_max <= 0 || frame_offset_ >= seen_max;
+            const bool tail_visible = !scroll_->hold && (scroll_->follow_bottom || seen_max <= 0 || frame_offset_ >= seen_max);
             pin_bottom_ = tail_visible && !scroll_->follow_reveal;
             snapped_ = true;
         }
@@ -77,7 +77,11 @@ class TranscriptFrame : public ftxui::Node
             offset = frame_offset_;
         }
         offset = std::clamp(offset, 0, max_offset);
-        if (!scroll_->follow_reveal)
+        if (scroll_->hold)
+        {
+            scroll_->follow_bottom = false;
+        }
+        else if (!scroll_->follow_reveal)
         {
             scroll_->follow_bottom = offset >= max_offset;
         }
@@ -122,6 +126,7 @@ bool transcript_scroll_wheel(TranscriptScroll &scroll, bool up, int step)
     {
         scroll.follow_bottom = false;
         scroll.follow_reveal = false;
+        scroll.hold = true;
         scroll.offset = std::max(0, scroll.offset - step);
         return scroll.offset != previous || was_following;
     }
@@ -134,6 +139,7 @@ bool transcript_scroll_wheel(TranscriptScroll &scroll, bool up, int step)
     if (scroll.offset >= scroll.max_offset)
     {
         scroll.follow_bottom = true;
+        scroll.hold = false;
     }
     return scroll.offset != previous || was_following;
 }

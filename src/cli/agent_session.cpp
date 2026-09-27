@@ -1,5 +1,6 @@
 #include "cli/agent_session.hpp"
 
+#include "cli/project_context.hpp"
 #include "cli/reply_stream.hpp"
 #include "cli/session_store.hpp"
 #include "cli/tool_runner.hpp"
@@ -35,6 +36,43 @@ struct PipeClose
 };
 
 using Pipe = std::unique_ptr<FILE, PipeClose>;
+
+struct SubagentLive
+{
+    AgentUi *ui = nullptr;
+
+    explicit SubagentLive(AgentUi *ui) : ui(ui)
+    {
+        ui->set_subagent_live(true);
+    }
+
+    ~SubagentLive()
+    {
+        ui->set_subagent_live(false);
+    }
+};
+
+std::string git_diff_stat()
+{
+    Pipe pipe(popen("git diff --stat", "r"));
+    if (pipe == nullptr)
+    {
+        return {};
+    }
+    std::string output;
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe.get()) != nullptr)
+    {
+        output += buffer;
+        if (output.size() > 4000)
+        {
+            output.resize(4000);
+            output += "\n... [diff stat truncated]\n";
+            break;
+        }
+    }
+    return output;
+}
 
 bool same_label(std::string_view left, std::string_view right)
 {
@@ -79,13 +117,18 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             if (error.code == kContextFull)
             {
                 state.ui->note(error.what());
-                state.ui->note("The message was removed. /compact the session, or send a smaller task.");
+                if (!state.subagent)
+                {
+                    state.ui->note("The message was removed. /compact the session, or send a smaller task.");
+                }
                 return TurnStatus::ContextFull;
             }
             throw;
         }
         const SessionResponse session = client.get_session(state.session);
         show_context(state, session);
+        // Captured before tools run, so a nested run cannot retarget this POST.
+        const SessionID session_id = state.session;
         if (session.state.value == SessionState::Idle || session.state.value == SessionState::Unknown)
         {
             return TurnStatus::Idle;
@@ -97,14 +140,14 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             {
                 return TurnStatus::Cancelled;
             }
-            const json queued = client.post_tool_results(state.session, *results);
+            const json queued = client.post_tool_results(session_id, *results);
             key = queued.at("key").get<JobKey>();
             continue;
         }
         if (session.state.value == SessionState::AwaitingQuestion && session.pending_question)
         {
             std::string answer;
-            if (state.exec && !isatty(STDIN_FILENO))
+            if (state.subagent || (state.exec && !isatty(STDIN_FILENO)))
             {
                 answer = "Continue with the most reasonable choice.";
             }
@@ -120,7 +163,7 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             SessionMessageRequest message;
             message.role = "user";
             message.content = std::move(answer);
-            key = client.post_message(state.session, message).key;
+            key = client.post_message(session_id, message).key;
             continue;
         }
         return TurnStatus::Idle;
@@ -136,7 +179,8 @@ AgentSession::AgentSession(AgentState &state, const AgentConfig &config, std::ve
 {
     if (!config_.exec)
     {
-        tools_.push_back(Tools::create_subagent_tool([this](std::string_view task) { return subagent(task); }));
+        tools_.push_back(Tools::create_subagent_tool(
+            [this](std::string_view task, bool inherit) { return subagent(task, inherit); }));
     }
 }
 
@@ -152,12 +196,40 @@ std::string AgentSession::last_assistant(const SessionResponse &session)
     return {};
 }
 
-std::string AgentSession::subagent(std::string_view task)
+std::string context_full_reply(bool inherit)
+{
+    std::string message = "error: sub-agent ran out of context. Call sub_agent again with a smaller task so the answer "
+                          "can be shorter. Do not repeat the same question.";
+    if (inherit)
+    {
+        message += " The copied conversation filled the window. Leave inherit false unless the task needs that history.";
+    }
+    return message;
+}
+
+std::string AgentSession::subagent(std::string_view task, bool inherit)
 {
     RestClient &client = *state_.client;
-    const SessionResponse snap = client.snapshot_session(state_.session);
-    const SessionID child = snap.id;
+    SessionID child = 0;
+    if (inherit)
+    {
+        child = client.snapshot_session(state_.session).id;
+    }
+    else
+    {
+        CreateSessionRequest request = make_request(config_);
+        request.tools.reserve(base_tools_.size());
+        for (const Tool &tool : base_tools_)
+        {
+            request.tools.push_back(ToolSchema::chat_tool(tool));
+        }
+        child = client.create_session(request).id;
+    }
     auto forget = [&] {
+        if (child == 0 || child == state_.session)
+        {
+            return;
+        }
         try
         {
             client.delete_session(child);
@@ -176,22 +248,45 @@ std::string AgentSession::subagent(std::string_view task)
         auto queued = client.post_message(child, message);
         AgentState child_state = state_;
         child_state.session = child;
-        child_state.exec = true;
-        if (run_turn(child_state, queued.key, base_tools_) != TurnStatus::Idle)
+        child_state.subagent = true;
+        const SubagentLive live(state_.ui);
+        const TurnStatus work = run_turn(child_state, queued.key, base_tools_);
+        if (work == TurnStatus::ContextFull)
+        {
+            forget();
+            return context_full_reply(inherit);
+        }
+        if (work != TurnStatus::Idle)
         {
             forget();
             return "sub-agent stopped before it finished";
         }
-        message.content = "Summarize the result for the parent. Include files changed and commands run. Do not call tools.";
+        message.content = "Summarize the result for the parent. Cite file:line for each finding. "
+                          "Include files changed and commands run. Do not call tools.";
         queued = client.post_message(child, message);
-        if (run_turn(child_state, queued.key, base_tools_) != TurnStatus::Idle)
+        const TurnStatus summary_turn = run_turn(child_state, queued.key, base_tools_);
+        if (summary_turn == TurnStatus::ContextFull)
+        {
+            forget();
+            return context_full_reply(inherit);
+        }
+        if (summary_turn != TurnStatus::Idle)
         {
             forget();
             return "sub-agent stopped before the summary";
         }
-        const std::string summary = last_assistant(client.get_session(child));
+        std::string summary = last_assistant(client.get_session(child));
+        if (summary.empty())
+        {
+            summary = "sub-agent produced no summary";
+        }
+        const std::string stat = git_diff_stat();
+        if (!stat.empty())
+        {
+            summary += "\n\nWorking tree:\n" + stat;
+        }
         forget();
-        return summary.empty() ? "sub-agent produced no summary" : summary;
+        return summary;
     }
     catch (...)
     {
@@ -218,12 +313,28 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
 {
     CreateSessionRequest request;
     request.questions = config.questions;
+    std::string extra;
     const std::string instructions = load_ai_instructions(state_.cwd.string());
+    if (!instructions.empty())
+    {
+        extra += "\nProject instructions:\n" + instructions + "\n";
+    }
+    extra += "\nIf .callisto/map.md exists, read it with read_file before searching an unfamiliar area. "
+             "It is an index, not the source.\n";
+    const std::vector<SkillNote> skills = list_skills(state_.cwd);
+    if (!skills.empty())
+    {
+        extra += "Skills. Read the matching SKILL.md with read_file only when the task needs that procedure:\n";
+        for (const SkillNote &skill : skills)
+        {
+            extra += std::format("- {}: {} ({})\n", skill.name, skill.summary, skill.path);
+        }
+    }
     request.system = std::format(
         "You are a coding agent working in {}.\n"
         "Use tools to inspect and change the project. Keep edits limited to the task.\n"
         "Do not claim a command or a file change succeeded unless a tool result says so.\n{}",
-        state_.cwd.string(), instructions.empty() ? "" : "\nProject instructions:\n" + instructions);
+        state_.cwd.string(), extra);
     return request;
 }
 
@@ -359,6 +470,7 @@ void AgentSession::help() const
                     "/approval [mode]      read-only, auto, or full\n"
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
+                    "/map                  write .callisto/map.md from the tree\n"
                     "/compact              summarize the chat into a new session\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
@@ -438,6 +550,21 @@ bool AgentSession::slash(const std::string &line)
         std::string_view argument(line);
         argument.remove_prefix(std::string_view("/model").size());
         return model_command(string_view_trim(argument));
+    }
+    if (line == "/map")
+    {
+        try
+        {
+            if (refresh_project_map(state_.cwd, true))
+            {
+                state_.ui->note("wrote .callisto/map.md");
+            }
+        }
+        catch (const std::exception &error)
+        {
+            state_.ui->note(error.what());
+        }
+        return true;
     }
     if (line == "/compact")
     {
@@ -719,6 +846,17 @@ int AgentSession::loop()
     {
         state_.ui->note(offline_message());
         refresh_status();
+    }
+    try
+    {
+        if (refresh_project_map(state_.cwd, false))
+        {
+            state_.ui->note("wrote .callisto/map.md");
+        }
+    }
+    catch (const std::exception &error)
+    {
+        state_.ui->note(error.what());
     }
     if (!config_.exec)
     {

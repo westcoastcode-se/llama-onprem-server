@@ -179,16 +179,16 @@ static int test_run_tool_exception() {
  */
 static int test_registered_tools() {
     const auto base = get_base_tools();
-    assertEquals(8, static_cast<int>(base.size()));
+    assertEquals(9, static_cast<int>(base.size()));
     assertEquals("execute_command", base.front().name);
     assertEquals("web_search", base.back().name);
 
-    const auto with_sub = get_registered_tools(true, [](std::string_view) { return std::string("ok"); });
-    assertEquals(9, static_cast<int>(with_sub.size()));
+    const auto with_sub = get_registered_tools(true, [](std::string_view, bool) { return std::string("ok"); });
+    assertEquals(10, static_cast<int>(with_sub.size()));
     assertEquals("sub_agent", with_sub.back().name);
 
     const auto without = get_registered_tools(false);
-    assertEquals(8, static_cast<int>(without.size()));
+    assertEquals(9, static_cast<int>(without.size()));
     return EXIT_SUCCESS;
 }
 
@@ -245,6 +245,25 @@ static int test_load_ai_instructions() {
 }
 
 /**
+ * AGENTS.md wins over AI_INSTRUCTIONS.md. A long file is capped.
+ */
+static int test_load_agents_md_and_cap()
+{
+    const auto dir = make_temp_dir("agents");
+    defer(std::filesystem::remove_all(dir));
+    write_test_file(dir / "AI_INSTRUCTIONS.md", "from instructions");
+    write_test_file(dir / "AGENTS.md", "from agents");
+    assertEquals("from agents", load_ai_instructions(dir.string()));
+
+    write_test_file(dir / "AGENTS.md", std::string(2500, 'a'));
+    const std::string capped = load_ai_instructions(dir.string());
+    assertTrue(capped.size() < 2500);
+    assertTrue(capped.find("[instructions truncated]") != std::string::npos);
+    assertTrue(capped.find('a') != std::string::npos);
+    return EXIT_SUCCESS;
+}
+
+/**
  * A short think block is separated from the answer. An empty block is dropped.
  */
 static int test_thinking_stream_filter() {
@@ -291,6 +310,7 @@ int test_tool_policy() {
     RUN_TEST(test_registered_tools);
     RUN_TEST(test_build_system_prompt);
     RUN_TEST(test_load_ai_instructions);
+    RUN_TEST(test_load_agents_md_and_cap);
     RUN_TEST(test_thinking_stream_filter);
     return EXIT_SUCCESS;
 }

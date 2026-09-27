@@ -11,6 +11,7 @@
 #include <string>
 
 extern int test_context_params();
+extern int test_session_gc();
 
 namespace
 {
@@ -431,6 +432,10 @@ int main()
         return rc;
     }
     if (const int rc = test_context_params())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_gc())
     {
         return rc;
     }

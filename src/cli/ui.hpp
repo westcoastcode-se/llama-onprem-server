@@ -32,6 +32,8 @@ struct AgentUi
     virtual void expand(std::string_view) {}
     virtual void collapse(std::string_view) {}
     virtual void caption(std::string) {}
+    // While true, streamed sub-agent text stays expanded and the view follows it.
+    virtual void set_subagent_live(bool) {}
     virtual Ask ask(std::string title, std::string body) = 0;
     virtual std::optional<std::string> question(std::string prompt, std::vector<std::string> answers) = 0;
     // Row index. nullopt when the user cancels. selected is the highlighted row.

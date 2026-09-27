@@ -4,9 +4,9 @@
 #include <ftxui/screen/box.hpp>
 
 // Vertical viewport for the session transcript.
-// follow_bottom is set whenever the latest line is already on screen, so added
-// text keeps moving the viewport down. Scrolling up clears it until the tail
-// is visible again.
+// follow_bottom keeps the latest line on screen as text arrives.
+// hold means the user scrolled up; new text must not pull the view back down
+// until the wheel returns to the bottom.
 // follow_reveal keeps a focused row (an opened thinking or tool block) on screen.
 // The wheel moves offset by whole lines.
 struct TranscriptScroll
@@ -15,6 +15,7 @@ struct TranscriptScroll
     int max_offset = 0;
     bool follow_bottom = true;
     bool follow_reveal = false;
+    bool hold = false;
     ftxui::Box viewport{};
 };
 

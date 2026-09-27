@@ -17,6 +17,7 @@ void Sessions::unsafe_gc()
         {
             return false;
         }
+        log_info("session ", entry.first, " idle, collected");
         jobs_.release_session(std::to_string(entry.first));
         return true;
     });
