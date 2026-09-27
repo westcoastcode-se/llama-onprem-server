@@ -302,6 +302,8 @@ class TuiUi final : public AgentUi
     bool quit = false;
     bool asking = false;
     bool question_mode = false;
+    bool pick_mode = false;
+    int ask_pick = -1;
     std::string ask_title;
     std::vector<std::string> menu;
     int menu_index = 0;
@@ -478,6 +480,7 @@ class TuiUi final : public AgentUi
             std::lock_guard lock(mutex);
             asking = true;
             question_mode = false;
+            pick_mode = false;
             ask_title = std::move(title);
             menu = tool_menu_entries();
             menu_index = 0;
@@ -497,6 +500,7 @@ class TuiUi final : public AgentUi
             std::lock_guard lock(mutex);
             asking = true;
             question_mode = true;
+            pick_mode = false;
             ask_title = std::move(prompt);
             menu = std::move(choices);
             menu.push_back(std::string(kOwnAnswer));
@@ -515,6 +519,39 @@ class TuiUi final : public AgentUi
             return std::nullopt;
         }
         return ask_text;
+    }
+
+    std::optional<std::size_t> choose(std::string prompt, std::vector<std::string> choices, std::size_t selected) override
+    {
+        if (choices.empty())
+        {
+            return std::nullopt;
+        }
+        if (selected >= choices.size())
+        {
+            selected = 0;
+        }
+        {
+            std::lock_guard lock(mutex);
+            asking = true;
+            question_mode = false;
+            pick_mode = true;
+            ask_title = std::move(prompt);
+            menu = std::move(choices);
+            menu_index = static_cast<int>(selected);
+            ask_pick = -1;
+            ask_done = false;
+        }
+        wake();
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return ask_done || quit; });
+        asking = false;
+        pick_mode = false;
+        if (quit || ask_pick < 0 || static_cast<std::size_t>(ask_pick) >= menu.size())
+        {
+            return std::nullopt;
+        }
+        return static_cast<std::size_t>(ask_pick);
     }
 
     std::string read_line() override
@@ -604,6 +641,7 @@ class TuiUi final : public AgentUi
             {
                 ask_done = true;
                 ask_result = Ask::Closed;
+                ask_pick = -1;
                 asking = false;
             }
             if (event == Event::CtrlD)
@@ -701,9 +739,34 @@ class TuiUi final : public AgentUi
             cv.notify_all();
             return true;
         }
+        if (event == Event::Escape)
+        {
+            std::lock_guard lock(mutex);
+            if (asking && pick_mode)
+            {
+                ask_pick = -1;
+                ask_done = true;
+                asking = false;
+                cv.notify_all();
+                return true;
+            }
+            return false;
+        }
         if (event == Event::Return)
         {
             std::lock_guard lock(mutex);
+            if (asking && pick_mode)
+            {
+                if (menu.empty() || menu_index < 0 || menu_index >= static_cast<int>(menu.size()))
+                {
+                    return true;
+                }
+                ask_pick = menu_index;
+                ask_done = true;
+                asking = false;
+                cv.notify_all();
+                return true;
+            }
             if (asking && question_mode)
             {
                 if (menu.empty() || menu_index < 0 || menu_index >= static_cast<int>(menu.size()))
@@ -823,6 +886,7 @@ class TuiUi final : public AgentUi
         int menu_index_copy = 0;
         bool show_ask = false;
         bool show_question = false;
+        bool show_pick = false;
         {
             std::lock_guard lock(mutex);
             status_copy = status;
@@ -832,6 +896,7 @@ class TuiUi final : public AgentUi
             cursor_copy = std::min(cursor, input.size());
             show_ask = asking;
             show_question = question_mode;
+            show_pick = pick_mode;
             title = ask_title;
             menu_copy = menu;
             menu_index_copy = menu_index;
@@ -876,7 +941,11 @@ class TuiUi final : public AgentUi
                 }
                 panel.push_back(row);
             }
-            if (show_question)
+            if (show_pick)
+            {
+                panel.push_back(text("Up and down select. Enter chooses. Esc cancels.") | dim);
+            }
+            else if (show_question)
             {
                 panel.push_back(text("Up and down select. Enter sends the row. Type your own answer, then Enter.") | dim);
             }

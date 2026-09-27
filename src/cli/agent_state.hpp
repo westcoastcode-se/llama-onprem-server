@@ -16,11 +16,23 @@ enum class TurnStatus
     ContextFull
 };
 
+// One configured model server. The client pointer is owned by run_agent.
+struct ServerSlot
+{
+    ServerTarget target;
+    RestClient *client = nullptr;
+    SessionID session = 0;
+};
+
 // Shared context for one client process. The pointers are owned by run_agent.
 struct AgentState
 {
+    std::vector<ServerSlot> servers;
+    std::size_t active = 0;
     RestClient *client = nullptr;
     SessionID session = 0;
+    // True until a server answers. The UI stays open and chat is refused.
+    bool awaiting_server = false;
     ApprovalMode approval = ApprovalMode::ReadOnly;
     bool show_think = true;
     bool debug = false;

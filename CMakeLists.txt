@@ -102,6 +102,7 @@ add_executable(callisto_cli
         src/cli/agent.cpp
         src/cli/agent_session.cpp
         src/cli/reply_stream.cpp
+        src/cli/servers.cpp
         src/cli/session_store.cpp
         src/cli/tool_runner.cpp
         src/cli/tool_schema.cpp
@@ -133,6 +134,7 @@ add_executable(tests
     tests/common/tools/test_tool_search_text.cpp
     tests/common/tools/test_tool_subagent.cpp
     tests/cli/test_tool_schema.cpp
+    tests/cli/test_servers.cpp
     tests/cli/test_session_store.cpp
     tests/cli/test_transcript_scroll.cpp
     src/cli/transcript_scroll.cpp
@@ -140,6 +142,7 @@ add_executable(tests
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
     src/cli/tool_schema.cpp
+    src/cli/servers.cpp
     src/cli/session_store.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)

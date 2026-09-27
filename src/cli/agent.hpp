@@ -1,9 +1,11 @@
 #pragma once
 
 #include "api/sessions.hpp"
+#include "cli/servers.hpp"
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 enum class ApprovalMode
 {
@@ -24,6 +26,8 @@ struct AgentConfig
     bool resume = false;
     SessionID session = 0;
     std::string prompt;
+    // Empty means the single --host and --port server.
+    std::vector<ServerTarget> servers;
 };
 
 // Interactive agent, or one non-interactive task when exec is set.

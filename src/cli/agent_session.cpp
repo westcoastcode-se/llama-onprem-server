@@ -9,6 +9,8 @@
 #include "api/models.hpp"
 #include "client/rest_client.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <format>
 #include <memory>
@@ -33,6 +35,24 @@ struct PipeClose
 };
 
 using Pipe = std::unique_ptr<FILE, PipeClose>;
+
+bool same_label(std::string_view left, std::string_view right)
+{
+    if (left.size() != right.size())
+    {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i)
+    {
+        const auto a = static_cast<unsigned char>(left[i]);
+        const auto b = static_cast<unsigned char>(right[i]);
+        if (std::tolower(a) != std::tolower(b))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
 {
@@ -207,8 +227,39 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
     return request;
 }
 
+AgentConfig AgentSession::endpoint_config(const AgentConfig &config) const
+{
+    AgentConfig stored = config;
+    if (!state_.servers.empty())
+    {
+        stored.host = slot().target.host;
+        stored.port = slot().target.port;
+    }
+    return stored;
+}
+
+void AgentSession::bind_session(SessionID id)
+{
+    state_.session = id;
+    if (!state_.servers.empty())
+    {
+        slot().session = id;
+    }
+}
+
+ServerSlot &AgentSession::slot()
+{
+    return state_.servers.at(state_.active);
+}
+
+const ServerSlot &AgentSession::slot() const
+{
+    return state_.servers.at(state_.active);
+}
+
 SessionID AgentSession::open(const AgentConfig &config)
 {
+    const AgentConfig stored = endpoint_config(config);
     if (config.session != 0)
     {
         state_.client->get_session(config.session);
@@ -217,7 +268,7 @@ SessionID AgentSession::open(const AgentConfig &config)
     const SessionStore store;
     if (config.resume)
     {
-        if (const auto saved = store.recall(config, state_.cwd))
+        if (const auto saved = store.recall(stored, state_.cwd))
         {
             state_.client->get_session(*saved);
             return *saved;
@@ -231,14 +282,22 @@ SessionID AgentSession::open(const AgentConfig &config)
         request.tools.push_back(ToolSchema::chat_tool(tool));
     }
     const SessionResponse created = state_.client->create_session(request);
-    store.remember(config, created.id, state_.cwd);
+    store.remember(stored, created.id, state_.cwd);
     return created.id;
 }
 
 void AgentSession::refresh_status()
 {
-    state_.ui->set_status(std::format("session {}   {}   {}   http://{}:{}", state_.session, approval_name(state_.approval),
-                                     state_.cwd.string(), config_.host, config_.port));
+    if (state_.session == 0 || state_.client == nullptr)
+    {
+        state_.ui->set_status(std::format("offline   {}   {}", approval_name(state_.approval), state_.cwd.string()));
+        state_.ui->set_context(0, 0);
+        return;
+    }
+    const ServerTarget &server = state_.servers.empty() ? ServerTarget{} : slot().target;
+    const std::string model = state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
+    state_.ui->set_status(std::format("{}   session {}   {}   {}", model, state_.session, approval_name(state_.approval),
+                                     state_.cwd.string()));
     show_context(state_, state_.client->get_session(state_.session));
 }
 
@@ -270,8 +329,8 @@ void AgentSession::compact()
     ack.content = "I'll continue from that summary.";
     request.messages = {std::move(prior), std::move(ack)};
     const SessionResponse created = state_.client->create_session(request);
-    state_.session = created.id;
-    SessionStore{}.remember(config_, created.id, state_.cwd);
+    bind_session(created.id);
+    SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
     refresh_status();
     state_.ui->note("compacted into session " + std::to_string(created.id));
 }
@@ -279,6 +338,7 @@ void AgentSession::compact()
 void AgentSession::help() const
 {
     state_.ui->note("/help                 show these commands\n"
+                    "/model [name]         choose a server, or switch by name\n"
                     "/approval [mode]      read-only, auto, or full\n"
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
@@ -320,8 +380,17 @@ bool AgentSession::slash(const std::string &line)
     }
     if (line == "/status")
     {
-        state_.ui->note(std::format("session {}\napproval {}\nserver http://{}:{}\ncwd {}", state_.session,
-                                   approval_name(state_.approval), config_.host, config_.port, state_.cwd.string()));
+        if (state_.session == 0 || state_.client == nullptr)
+        {
+            state_.ui->note(std::format("{}\napproval {}\ncwd {}", offline_message(), approval_name(state_.approval),
+                                       state_.cwd.string()));
+            return true;
+        }
+        const ServerTarget &server = state_.servers.empty() ? ServerTarget{} : slot().target;
+        const std::string model = state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
+        const std::string url = state_.servers.empty() ? std::format("http://{}:{}", config_.host, config_.port) : server.url();
+        state_.ui->note(std::format("model {}\nserver {}\nsession {}\napproval {}\ncwd {}", model, url, state_.session,
+                                   approval_name(state_.approval), state_.cwd.string()));
         return true;
     }
     if (line == "/diff")
@@ -335,16 +404,31 @@ bool AgentSession::slash(const std::string &line)
     }
     if (line == "/clear")
     {
+        if (!ensure_server())
+        {
+            return true;
+        }
         AgentConfig fresh = config_;
         fresh.session = 0;
         fresh.resume = false;
-        state_.session = open(fresh);
+        bind_session(open(fresh));
         refresh_status();
         state_.ui->note("session " + std::to_string(state_.session));
         return true;
     }
+    if (line == "/model" || line.starts_with("/model "))
+    {
+        std::string_view argument(line);
+        argument.remove_prefix(std::string_view("/model").size());
+        return model_command(string_view_trim(argument));
+    }
     if (line == "/compact")
     {
+        if (state_.session == 0)
+        {
+            state_.ui->note(offline_message());
+            return true;
+        }
         compact();
         refresh_status();
         return true;
@@ -387,25 +471,278 @@ bool AgentSession::slash(const std::string &line)
     return false;
 }
 
+std::optional<std::size_t> AgentSession::find_model(std::string_view query) const
+{
+    if (query.empty() || state_.servers.empty())
+    {
+        return std::nullopt;
+    }
+    const bool digits = std::ranges::all_of(query, [](unsigned char c) { return std::isdigit(c) != 0; });
+    if (digits)
+    {
+        try
+        {
+            const int number = std::stoi(std::string(query));
+            if (number >= 1 && static_cast<std::size_t>(number) <= state_.servers.size())
+            {
+                return static_cast<std::size_t>(number - 1);
+            }
+        }
+        catch (const std::exception &)
+        {
+        }
+        return std::nullopt;
+    }
+    std::optional<std::size_t> found;
+    for (std::size_t i = 0; i < state_.servers.size(); ++i)
+    {
+        const ServerTarget &server = state_.servers[i].target;
+        const bool match = same_label(server.label(), query) || same_label(server.url(), query) ||
+                           same_label(std::format("{}:{}", server.host, server.port), query);
+        if (!match)
+        {
+            continue;
+        }
+        if (found)
+        {
+            return std::nullopt;
+        }
+        found = i;
+    }
+    return found;
+}
+
+void AgentSession::list_models()
+{
+    if (state_.servers.empty())
+    {
+        state_.ui->note("no models");
+        return;
+    }
+    std::vector<std::string> rows;
+    std::size_t selected = 0;
+    rows.reserve(state_.servers.size());
+    for (std::size_t i = 0; i < state_.servers.size(); ++i)
+    {
+        ServerSlot &server = state_.servers[i];
+        const bool up = server.client != nullptr && server.client->probe();
+        if (state_.session != 0 && i == state_.active)
+        {
+            selected = i;
+        }
+        rows.push_back(std::format("{}  {}{}", server.target.label(), server.target.url(), up ? "" : "  down"));
+    }
+    const std::optional<std::size_t> picked = state_.ui->choose("Model", std::move(rows), selected);
+    if (!picked)
+    {
+        return;
+    }
+    use_model(*picked);
+}
+
+void AgentSession::use_model(std::size_t index)
+{
+    if (index >= state_.servers.size() || state_.servers[index].client == nullptr)
+    {
+        state_.ui->note("unknown model. /model lists them.");
+        return;
+    }
+    ServerSlot &next = state_.servers[index];
+    if (!next.client->probe())
+    {
+        state_.ui->note(std::format("{} is not reachable at {}", next.target.label(), next.target.url()));
+        return;
+    }
+    if (index == state_.active && state_.session != 0)
+    {
+        state_.ui->note(std::format("already using {}", next.target.label()));
+        return;
+    }
+    const std::size_t previous = state_.active;
+    RestClient *previous_client = state_.client;
+    const SessionID previous_session = state_.session;
+    state_.active = index;
+    state_.client = next.client;
+    try
+    {
+        if (next.session == 0)
+        {
+            AgentConfig fresh = config_;
+            fresh.session = 0;
+            fresh.resume = false;
+            if (config_.resume)
+            {
+                const AgentConfig stored = endpoint_config(fresh);
+                if (const auto saved = SessionStore{}.recall(stored, state_.cwd))
+                {
+                    try
+                    {
+                        state_.client->get_session(*saved);
+                        next.session = *saved;
+                    }
+                    catch (const std::exception &)
+                    {
+                        next.session = 0;
+                    }
+                }
+            }
+            if (next.session == 0)
+            {
+                next.session = open(fresh);
+            }
+        }
+        bind_session(next.session);
+    }
+    catch (...)
+    {
+        state_.active = previous;
+        state_.client = previous_client;
+        state_.session = previous_session;
+        if (index < state_.servers.size())
+        {
+            state_.servers[index].session = 0;
+        }
+        throw;
+    }
+    refresh_status();
+    state_.ui->note(std::format("using {}  {}", next.target.label(), next.target.url()));
+}
+
+std::string AgentSession::offline_message() const
+{
+    std::string message = "no server is reachable";
+    for (const ServerSlot &server : state_.servers)
+    {
+        message += std::format("\n  {}  {}", server.target.label(), server.target.url());
+    }
+    return message;
+}
+
+bool AgentSession::ensure_server()
+{
+    if (state_.session != 0 && state_.client != nullptr && state_.client->probe())
+    {
+        state_.awaiting_server = false;
+        return true;
+    }
+    const std::optional<std::size_t> chosen = first_reachable(state_.servers.size(), [&](std::size_t index) {
+        RestClient *client = state_.servers[index].client;
+        return client != nullptr && client->probe();
+    });
+    if (!chosen)
+    {
+        state_.awaiting_server = true;
+        state_.ui->note(offline_message());
+        refresh_status();
+        return false;
+    }
+    if (*chosen == state_.active && state_.session != 0)
+    {
+        state_.awaiting_server = false;
+        return true;
+    }
+    use_model(*chosen);
+    state_.awaiting_server = state_.session == 0;
+    return state_.session != 0;
+}
+
+bool AgentSession::model_command(std::string_view argument)
+{
+    if (argument.empty())
+    {
+        list_models();
+        return true;
+    }
+    std::size_t matches = 0;
+    if (const bool digits = std::ranges::all_of(argument, [](unsigned char c) { return std::isdigit(c) != 0; }); digits)
+    {
+        const std::optional<std::size_t> index = find_model(argument);
+        if (!index)
+        {
+            state_.ui->note("unknown model. /model lists them.");
+            return true;
+        }
+        use_model(*index);
+        return true;
+    }
+    for (std::size_t i = 0; i < state_.servers.size(); ++i)
+    {
+        if (same_label(state_.servers[i].target.label(), argument) || same_label(state_.servers[i].target.url(), argument) ||
+            same_label(std::format("{}:{}", state_.servers[i].target.host, state_.servers[i].target.port), argument))
+        {
+            ++matches;
+        }
+    }
+    if (matches > 1)
+    {
+        state_.ui->note("that name is used by more than one server. /model lists them; use the number.");
+        return true;
+    }
+    const std::optional<std::size_t> index = find_model(argument);
+    if (!index)
+    {
+        state_.ui->note("unknown model. /model lists them.");
+        return true;
+    }
+    use_model(*index);
+    return true;
+}
+
 int AgentSession::loop()
 {
-    state_.session = open(config_);
-    refresh_status();
-    state_.ui->note("Type a task, or /help. Ctrl-C cancels a running turn.");
+    if (!state_.awaiting_server)
+    {
+        try
+        {
+            bind_session(open(config_));
+            refresh_status();
+            state_.ui->note(std::format("using {}  {}", slot().target.label(), slot().target.url()));
+        }
+        catch (const std::exception &error)
+        {
+            state_.awaiting_server = true;
+            state_.session = 0;
+            if (!state_.servers.empty())
+            {
+                slot().session = 0;
+            }
+            state_.ui->note(error.what());
+            refresh_status();
+        }
+    }
+    else if (!config_.exec)
+    {
+        state_.ui->note(offline_message());
+        refresh_status();
+    }
+    if (!config_.exec)
+    {
+        state_.ui->note("Type a task, or /help. Ctrl-C cancels a running turn.");
+    }
 
     if (!config_.prompt.empty())
     {
-        state_.ui->begin("you");
-        state_.ui->append(config_.prompt);
-        state_.ui->end();
-        const TurnStatus status = submit(config_.prompt);
-        if (status == TurnStatus::ContextFull)
+        if (!ensure_server())
         {
-            return 2;
+            if (config_.exec)
+            {
+                return 1;
+            }
         }
-        if (config_.exec)
+        else
         {
-            return status == TurnStatus::Cancelled ? 1 : 0;
+            state_.ui->begin("you");
+            state_.ui->append(config_.prompt);
+            state_.ui->end();
+            const TurnStatus status = submit(config_.prompt);
+            if (status == TurnStatus::ContextFull)
+            {
+                return 2;
+            }
+            if (config_.exec)
+            {
+                return status == TurnStatus::Cancelled ? 1 : 0;
+            }
         }
     }
     else if (config_.exec)
@@ -443,11 +780,15 @@ int AgentSession::loop()
         {
             continue;
         }
-        state_.ui->begin("you");
-        state_.ui->append(line);
-        state_.ui->end();
         try
         {
+            if (!ensure_server())
+            {
+                continue;
+            }
+            state_.ui->begin("you");
+            state_.ui->append(line);
+            state_.ui->end();
             submit(line);
         }
         catch (const std::exception &error)

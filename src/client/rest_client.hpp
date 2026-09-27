@@ -14,6 +14,9 @@
 /**
  * Thin HTTP helper around callisto_server REST endpoints (/v1/...).
  */
+inline constexpr int kRestConnectSeconds = 5;
+inline constexpr int kRestProbeSeconds = 1;
+
 class RestClient
 {
   public:
@@ -34,7 +37,7 @@ class RestClient
 
     RestClient(string host, const int port) : base_host_(std::move(host)), port_(port), cli_(base_host_, port_)
     {
-        cli_.set_connection_timeout(5, 0);
+        cli_.set_connection_timeout(kRestConnectSeconds, 0);
         cli_.set_read_timeout(600, 0);
         cli_.set_write_timeout(30, 0);
         cli_.set_keep_alive(true);
@@ -55,6 +58,11 @@ class RestClient
         return port_;
     }
 
+    void set_connection_timeout(int seconds)
+    {
+        cli_.set_connection_timeout(seconds, 0);
+    }
+
     /** Interrupt an in-flight request (e.g. token stream) from another thread. */
     void stop()
     {
@@ -70,6 +78,15 @@ class RestClient
     {
         auto res = cli_.Get("/health");
         return res && res->status == 200;
+    }
+
+    // Short connect timeout so a dead server does not stall startup or /model.
+    bool probe()
+    {
+        set_connection_timeout(kRestProbeSeconds);
+        const bool up = health();
+        set_connection_timeout(kRestConnectSeconds);
+        return up;
     }
 
     /**

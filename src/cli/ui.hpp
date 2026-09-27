@@ -34,6 +34,8 @@ struct AgentUi
     virtual void caption(std::string) {}
     virtual Ask ask(std::string title, std::string body) = 0;
     virtual std::optional<std::string> question(std::string prompt, std::vector<std::string> answers) = 0;
+    // Row index. nullopt when the user cancels. selected is the highlighted row.
+    virtual std::optional<std::size_t> choose(std::string prompt, std::vector<std::string> choices, std::size_t selected) = 0;
     // Empty when the user leaves the session.
     virtual std::string read_line() = 0;
 };

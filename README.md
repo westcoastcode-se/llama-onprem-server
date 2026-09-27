@@ -86,6 +86,27 @@ Start the client in the project you want it to edit:
 ./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
+Several models means several servers. Pass them at startup, or keep the list in `~/.config/callisto/servers.json`. The client connects to every server and uses the first one that answers. `/model` opens a dialog to switch. Each server keeps its own session, so switching back continues that conversation.
+
+```bash
+./cmake-build-release/callisto_cli \
+  --server qwen=127.0.0.1:8080 \
+  --server devstral=127.0.0.1:8081
+```
+
+```json
+{
+  "servers": [
+    {"model": "qwen", "host": "127.0.0.1", "port": 8080},
+    {"model": "devstral", "host": "127.0.0.1", "port": 8081}
+  ]
+}
+```
+
+`--server` replaces the file. With neither, `--host` and `-p` are the single server. HTTP subcommands such as `health` and `session` still use `--host` and `-p`.
+
+The fullscreen client still opens when every server is down. Status stays `offline`, and a chat message reports that none are reachable. The next message connects to the first server that answers.
+
 One task from a script:
 
 ```bash
@@ -114,6 +135,7 @@ Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one
 | Command | What it does |
 |---|---|
 | `/help` | Show the commands |
+| `/model [name]` | Open the server dialog, or switch by name |
 | `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
 | `/status` | Session id, approval mode, and server |
 | `/diff` | `git diff --stat` for the working directory |

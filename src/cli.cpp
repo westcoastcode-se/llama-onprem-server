@@ -1,4 +1,5 @@
 #include "cli/agent.hpp"
+#include "cli/servers.hpp"
 #include "common/std.hpp"
 #include "api/errors.hpp"
 #include "api/models.hpp"
@@ -235,10 +236,14 @@ int main(int argc, char **argv)
     CLI::App app{"Coding agent for the local Callisto server"};
     app.set_help_all_flag("--help-all", "Show help for every subcommand");
     app.footer("With no subcommand, start an interactive session in the current directory.\n"
+               "Repeat --server for several models, or use ~/.config/callisto/servers.json.\n"
+               "The first server that answers is selected. /model opens a chooser.\n"
                "health, session, send, job, and tools talk to the HTTP API.");
 
     Options options;
     add_connection(app, options);
+    std::vector<std::string> server_specs;
+    app.add_option("--server", server_specs, "Model server as [model=]host:port. Repeat, or separate with commas.");
     std::string approval = "read-only";
     bool resume = false;
     bool show_think = true;
@@ -263,6 +268,14 @@ int main(int argc, char **argv)
         AgentConfig config;
         config.host = options.host;
         config.port = options.port;
+        if (!server_specs.empty())
+        {
+            config.servers = parse_server_list(server_specs);
+        }
+        else
+        {
+            config.servers = load_servers_file(servers_config_path());
+        }
         config.show_think = show_think;
         config.debug = debug;
         config.questions = questions;
