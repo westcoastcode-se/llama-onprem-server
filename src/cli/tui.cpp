@@ -1,4 +1,5 @@
 #include "cli/tui.hpp"
+#include "cli/transcript_scroll.hpp"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -247,6 +248,7 @@ std::size_t utf8_next(std::string_view text, std::size_t index)
 }
 
 constexpr std::string_view kOwnAnswer = "Own answer";
+constexpr int kWheelLines = 3;
 
 std::vector<std::string> tool_menu_entries()
 {
@@ -311,6 +313,7 @@ class TuiUi final : public AgentUi
     // Hit boxes from the last frame. Empty until a folding row is drawn.
     std::vector<ftxui::Box> think_boxes;
     std::size_t revealed = static_cast<std::size_t>(-1);
+    TranscriptScroll scroll;
 
     std::size_t latest(std::string_view kind) const
     {
@@ -334,10 +337,14 @@ class TuiUi final : public AgentUi
         if (blocks[index].expanded)
         {
             revealed = index;
+            scroll.follow_reveal = true;
+            scroll.follow_bottom = false;
         }
         else if (revealed == index)
         {
             revealed = static_cast<std::size_t>(-1);
+            scroll.follow_reveal = false;
+            scroll.follow_bottom = true;
         }
     }
 
@@ -446,6 +453,8 @@ class TuiUi final : public AgentUi
             if (revealed == index)
             {
                 revealed = static_cast<std::size_t>(-1);
+                scroll.follow_reveal = false;
+                scroll.follow_bottom = true;
             }
         }
         wake();
@@ -526,17 +535,12 @@ class TuiUi final : public AgentUi
         std::lock_guard lock(mutex);
         Elements rows;
         think_boxes.assign(blocks.size(), Box{0, -1, 0, -1});
-        bool follow_tail = true;
         for (std::size_t i = 0; i < blocks.size(); ++i)
         {
             const Block &block = blocks[i];
             if (foldable(block))
             {
                 const bool reveal = block.expanded && revealed == i;
-                if (reveal)
-                {
-                    follow_tail = false;
-                }
                 if (block.kind == "thinking")
                 {
                     rows.push_back(thinking_block(block, reveal, think_boxes[i]));
@@ -586,11 +590,7 @@ class TuiUi final : public AgentUi
             rows.push_back(text("Ask for a change, or /help") | dim);
         }
         Element body = vbox(std::move(rows));
-        if (follow_tail)
-        {
-            body = body | focusPositionRelative(0, 1);
-        }
-        return body | yframe | flex;
+        return transcript_scroll(std::move(body), scroll);
     }
 
     bool on_event(ftxui::Event event)
@@ -617,6 +617,14 @@ class TuiUi final : public AgentUi
         if (event.is_mouse())
         {
             const Mouse &mouse = event.mouse();
+            if (mouse.button == Mouse::WheelUp || mouse.button == Mouse::WheelDown)
+            {
+                if (!scroll.viewport.Contain(mouse.x, mouse.y))
+                {
+                    return false;
+                }
+                return transcript_scroll_wheel(scroll, mouse.button == Mouse::WheelUp, kWheelLines);
+            }
             if (mouse.button == Mouse::Left && mouse.motion == Mouse::Pressed)
             {
                 std::lock_guard lock(mutex);
@@ -738,6 +746,8 @@ class TuiUi final : public AgentUi
             input.clear();
             cursor = 0;
             line_ready = true;
+            scroll.follow_bottom = true;
+            scroll.follow_reveal = false;
             cv.notify_all();
             return true;
         }

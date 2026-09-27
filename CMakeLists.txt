@@ -105,6 +105,7 @@ add_executable(callisto_cli
         src/cli/session_store.cpp
         src/cli/tool_runner.cpp
         src/cli/tool_schema.cpp
+        src/cli/transcript_scroll.cpp
         src/cli/tui.cpp
         src/common/log.cpp
         ${COMMON_TOOL_SOURCES})
@@ -133,6 +134,8 @@ add_executable(tests
     tests/common/tools/test_tool_subagent.cpp
     tests/cli/test_tool_schema.cpp
     tests/cli/test_session_store.cpp
+    tests/cli/test_transcript_scroll.cpp
+    src/cli/transcript_scroll.cpp
     tests/server/test_utf8_stream.cpp
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
@@ -140,7 +143,7 @@ add_executable(tests
     src/cli/session_store.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
-target_link_libraries(tests PRIVATE CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 add_executable(callisto_tests
         tests/test_llama_engine.cpp
