@@ -242,6 +242,7 @@ int main(int argc, char **argv)
     app.set_help_all_flag("--help-all", "Show help for every subcommand");
     app.footer("With no subcommand, start an interactive session in the current directory.\n"
                "Repeat --server for several models, or use ~/.config/callisto/servers.json.\n"
+               "Colors come from --theme, or from ~/.config/callisto/theme.json.\n"
                "The first server that answers is selected. /model opens a chooser.\n"
                "health, session, send, job, and tools talk to the HTTP API.");
 
@@ -256,6 +257,7 @@ int main(int argc, char **argv)
     bool questions = true;
     bool compress_tools = true;
     std::string resume_id;
+    std::string theme_name;
     std::vector<std::string> initial_prompt;
     app.add_option("--approval", approval, "read-only, auto, or full")->default_val("read-only");
     app.add_flag("--resume", resume, "Continue the saved session for this directory and server");
@@ -265,6 +267,8 @@ int main(int argc, char **argv)
     app.add_flag("--questions,!--no-questions", questions, "Let the model pause and ask a question");
     app.add_flag("--compress-tools,!--no-compress-tools", compress_tools,
                  "Shorten finished tool results when the next message is saved. Applies to a new session");
+    app.add_option("--theme", theme_name,
+                   "Color theme: default, ink, nord, forest, ember, or a path to a JSON file");
     app.add_option("prompt", initial_prompt, "Task to start with")->expected(0, -1);
 
     int agent_status = 0;
@@ -291,6 +295,7 @@ int main(int argc, char **argv)
         config.exec = exec_mode;
         config.resume = resume;
         config.prompt = prompt;
+        config.theme = theme_name;
         if (approval == "auto")
         {
             config.approval = ApprovalMode::Auto;

@@ -28,6 +28,8 @@ struct AgentConfig
     bool resume = false;
     SessionID session = 0;
     std::string prompt;
+    // Empty loads ~/.config/callisto/theme.json, or the built-in default theme.
+    std::string theme;
     // Empty means the single --host and --port server.
     std::vector<ServerTarget> servers;
 };

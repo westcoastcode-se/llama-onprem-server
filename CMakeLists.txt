@@ -108,6 +108,7 @@ add_executable(callisto_cli
         src/cli/servers.cpp
         src/cli/session_store.cpp
         src/cli/tool_runner.cpp
+        src/cli/theme.cpp
         src/cli/tool_schema.cpp
         src/cli/transcript_scroll.cpp
         src/cli/tui.cpp
@@ -136,7 +137,9 @@ add_executable(tests
     tests/common/tools/test_tool_file_search.cpp
     tests/common/tools/test_tool_search_text.cpp
     tests/common/tools/test_tool_subagent.cpp
+    tests/cli/test_theme.cpp
     tests/cli/test_tool_schema.cpp
+    src/cli/theme.cpp
     tests/cli/test_servers.cpp
     tests/cli/test_project_context.cpp
     tests/cli/test_session_store.cpp

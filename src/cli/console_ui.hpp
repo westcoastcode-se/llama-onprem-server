@@ -1,8 +1,7 @@
 #pragma once
 
+#include "cli/theme.hpp"
 #include "cli/ui.hpp"
-
-#include "common/color.hpp"
 
 #include <cctype>
 #include <iostream>
@@ -14,9 +13,13 @@
 // Plain-text session used by exec. Lines go to the terminal, not the fullscreen UI.
 class ConsoleUi final : public AgentUi
 {
+    Theme theme_;
     bool thinking = false;
 
   public:
+    explicit ConsoleUi(Theme theme) : theme_(std::move(theme))
+    {
+    }
     void set_status(std::string status) override
     {
         std::println(stderr, "{}", status);
@@ -36,7 +39,7 @@ class ConsoleUi final : public AgentUi
         thinking = kind == "thinking";
         if (thinking)
         {
-            std::print("{}", Color::GRAY);
+            std::print("{}", theme_.thinking_text.ansi());
         }
     }
 
@@ -49,7 +52,7 @@ class ConsoleUi final : public AgentUi
     {
         if (thinking)
         {
-            std::println("{}", Color::RESET);
+            std::println("{}", "\033[0m");
         }
         else
         {

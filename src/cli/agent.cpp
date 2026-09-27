@@ -3,6 +3,7 @@
 #include "cli/agent_state.hpp"
 #include "cli/console_ui.hpp"
 #include "cli/servers.hpp"
+#include "cli/theme.hpp"
 #include "cli/tui.hpp"
 #include "cli/ui.hpp"
 
@@ -76,14 +77,15 @@ int run_agent(const AgentConfig &incoming)
     state.debug = config.debug;
     state.exec = config.exec;
 
+    const Theme theme = load_theme(config.theme);
     AgentSession session(state, config, get_registered_tools(false, nullptr));
     if (config.exec)
     {
-        ConsoleUi ui;
+        ConsoleUi ui(theme);
         state.ui = &ui;
         return session.loop();
     }
-    return run_tui([&](AgentUi &ui) {
+    return run_tui(theme, [&](AgentUi &ui) {
         state.ui = &ui;
         return session.loop();
     });

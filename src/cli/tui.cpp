@@ -1,6 +1,8 @@
 #include "cli/tui.hpp"
 #include "cli/transcript_scroll.hpp"
 
+#include <ftxui/screen/color.hpp>
+
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -124,40 +126,61 @@ std::string without_cr(std::string text)
     return text;
 }
 
-ftxui::Element thinking_block(const Block &block, bool reveal, ftxui::Box &hit)
+ftxui::Color paint(const ThemeColor &color)
+{
+    if (color.palette >= 0 && color.palette <= 15)
+    {
+        return ftxui::Color(static_cast<ftxui::Color::Palette16>(color.palette));
+    }
+    return ftxui::Color::RGBA(color.r, color.g, color.b, 255);
+}
+
+ftxui::Element weighted(ftxui::Element element, const Theme &theme)
+{
+    if (!theme.bold)
+    {
+        return element;
+    }
+    return std::move(element) | ftxui::bold;
+}
+
+int text_columns()
+{
+    return std::max(16, ftxui::Terminal::Size().dimx - 2);
+}
+
+ftxui::Element thinking_block(const Block &block, bool reveal, ftxui::Box &hit, const Theme &theme)
 {
     using namespace ftxui;
-    const Color ink = Color::GrayDark;
-    Element body;
+    const Color ink = paint(theme.thinking_text);
     const std::string title = block.caption.empty() ? "thinking" : block.caption;
+    Elements lines;
     if (!block.expanded)
     {
-        const int columns = std::max(16, Terminal::Size().dimx - 8);
+        const int columns = text_columns();
         std::string label = collapsed_thinking_label(block.text, columns);
         if (!block.caption.empty())
         {
             const ThinkPreview preview = think_preview(block.text);
             label = fit_label(block.caption + (preview.line.empty() ? "" : "  " + preview.line), columns, preview.more);
         }
-        body = hbox({text(" ▶ " + label), filler()}) | color(Color::GrayLight) | bgcolor(ink);
+        lines.push_back(text("▶ " + label) | color(ink));
     }
     else
     {
-        Element header = hbox({text("▼ " + title) | bold, filler()});
+        Element header = weighted(text("▼ " + title), theme) | color(ink);
         if (reveal)
         {
             header = header | focus;
         }
-        Elements lines;
-        lines.push_back(header);
+        lines.push_back(std::move(header));
         const std::string clean = without_cr(block.text);
         if (!clean.empty())
         {
-            lines.push_back(paragraph(clean));
+            lines.push_back(paragraph(clean) | color(ink));
         }
-        body = vbox(std::move(lines)) | color(ink) | borderStyled(ROUNDED, ink);
     }
-    return body | reflect(hit);
+    return vbox(std::move(lines)) | reflect(hit);
 }
 
 bool foldable(const Block &block)
@@ -165,11 +188,11 @@ bool foldable(const Block &block)
     return block.kind == "thinking" || block.kind == "tool";
 }
 
-ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit)
+ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit, const Theme &theme)
 {
     using namespace ftxui;
-    const Color ink = Color::Yellow;
-    const int columns = std::max(16, Terminal::Size().dimx - 8);
+    const Color ink = paint(theme.tool);
+    const int columns = text_columns();
     const ThinkPreview preview = think_preview(block.text);
     std::string title = block.caption.empty() ? preview.line : block.caption;
     if (title.empty())
@@ -177,28 +200,26 @@ ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit)
         title = "tool";
     }
     const bool more = !preview.line.empty() || preview.more;
-    Element body;
+    Elements lines;
     if (!block.expanded)
     {
-        body = hbox({text(" ▶ " + fit_label(title, columns, more)), filler()}) | color(ink) | bgcolor(Color::GrayDark);
+        lines.push_back(text("▶ " + fit_label(title, columns, more)) | color(ink));
     }
     else
     {
-        Element header = hbox({text("▼ " + title) | bold | color(ink), filler()});
+        Element header = weighted(text("▼ " + title), theme) | color(ink);
         if (reveal)
         {
             header = header | focus;
         }
-        Elements lines;
         lines.push_back(std::move(header));
         const std::string clean = without_cr(block.text);
         if (!clean.empty())
         {
-            lines.push_back(paragraph(clean) | color(Color::GrayLight));
+            lines.push_back(paragraph(clean) | color(paint(theme.tool_text)));
         }
-        body = vbox(std::move(lines)) | borderStyled(ROUNDED, ink);
     }
-    return body | reflect(hit);
+    return vbox(std::move(lines)) | reflect(hit);
 }
 
 std::string trimmed_edges(const std::string &text)
@@ -217,13 +238,19 @@ std::string trimmed_edges(const std::string &text)
     return clean.substr(begin, end - begin);
 }
 
-ftxui::Element assistant_block(const Block &block)
+ftxui::Element assistant_block(const Block &block, const Theme &theme)
 {
     using namespace ftxui;
     const std::string clean = trimmed_edges(block.text);
-    Element body = paragraph(clean);
-    const std::string title = block.caption.empty() ? " assistant " : " " + block.caption + " ";
-    return window(text(title) | dim, body);
+    const std::string title = block.caption.empty() ? "assistant" : block.caption;
+    const Color ink = paint(theme.text);
+    Elements lines;
+    lines.push_back(text(title) | dim | color(ink));
+    if (!clean.empty())
+    {
+        lines.push_back(paragraph(clean) | color(ink));
+    }
+    return vbox(std::move(lines));
 }
 
 std::size_t utf8_prev(std::string_view text, std::size_t index)
@@ -294,6 +321,11 @@ Ask tool_ask_from_index(int index)
 class TuiUi final : public AgentUi
 {
   public:
+    explicit TuiUi(Theme theme) : theme(std::move(theme))
+    {
+    }
+
+    Theme theme;
     std::mutex mutex;
     std::condition_variable cv;
     std::vector<Block> blocks;
@@ -603,11 +635,11 @@ class TuiUi final : public AgentUi
                 const bool reveal = block.expanded && revealed == i;
                 if (block.kind == "thinking")
                 {
-                    rows.push_back(thinking_block(block, reveal, think_boxes[i]));
+                    rows.push_back(thinking_block(block, reveal, think_boxes[i], theme));
                 }
                 else
                 {
-                    rows.push_back(tool_block(block, reveal, think_boxes[i]));
+                    rows.push_back(tool_block(block, reveal, think_boxes[i], theme));
                 }
                 rows.push_back(separatorEmpty());
                 continue;
@@ -616,19 +648,19 @@ class TuiUi final : public AgentUi
             {
                 if (!trimmed_edges(block.text).empty())
                 {
-                    rows.push_back(assistant_block(block));
+                    rows.push_back(assistant_block(block, theme));
                     rows.push_back(separatorEmpty());
                 }
                 continue;
             }
-            Color ink = Color::White;
+            Color ink = paint(theme.text);
             if (block.kind == "you")
             {
-                ink = Color::Cyan;
+                ink = paint(theme.you);
             }
             else if (block.kind == "note")
             {
-                ink = Color::GrayLight;
+                ink = paint(theme.note);
             }
             rows.push_back(text(block.kind) | dim | color(ink));
             std::istringstream lines(block.text);
@@ -938,7 +970,7 @@ class TuiUi final : public AgentUi
             const std::size_t next = utf8_next(after, 0);
             caret = hbox({text(after.substr(0, next)) | inverted, text(after.substr(next))});
         }
-        Element composer = hbox({text("> ") | bold, text(before), caret});
+        Element composer = hbox({weighted(text("> "), theme), text(before), caret});
         if (show_ask && !show_question)
         {
             composer = composer | dim;
@@ -948,7 +980,7 @@ class TuiUi final : public AgentUi
         if (show_ask)
         {
             Elements panel;
-            panel.push_back(text(title) | bold | color(Color::Yellow));
+            panel.push_back(weighted(text(title), theme) | color(paint(theme.prompt)));
             if (menu_index_copy < 0 || menu_index_copy >= static_cast<int>(menu_copy.size()))
             {
                 menu_index_copy = 0;
@@ -977,7 +1009,12 @@ class TuiUi final : public AgentUi
                 panel.push_back(text("Up and down select. Enter confirms.  y once   n no   a always   f full") | dim);
             }
             column.push_back(separator());
-            column.push_back(vbox(std::move(panel)) | border);
+            Element ask = vbox(std::move(panel));
+            if (theme.border)
+            {
+                ask = ask | borderStyled(theme.rounded ? ROUNDED : LIGHT);
+            }
+            column.push_back(ask);
         }
         column.push_back(separator());
         column.push_back(composer);
@@ -992,14 +1029,14 @@ class TuiUi final : public AgentUi
                 percent = 999;
             }
             const std::string label = std::format("{}%  {}/{}", percent, format_token_count(used), format_token_count(size_copy));
-            Color ink = Color::GrayLight;
+            Color ink = paint(theme.meter);
             if (percent >= 90)
             {
-                ink = Color::Red;
+                ink = paint(theme.meter_hot);
             }
             else if (percent >= 75)
             {
-                ink = Color::Yellow;
+                ink = paint(theme.meter_warn);
             }
             meter = text(label) | color(ink);
         }
@@ -1007,22 +1044,26 @@ class TuiUi final : public AgentUi
             text(status_copy) | dim,
             hbox({filler(), meter}),
         });
-        return window(text(" callisto "), vbox({
-                                               header,
-                                               separator(),
-                                               main,
-                                           })) |
-               flex;
+        Element screen = vbox({
+            header,
+            separator(),
+            main,
+        });
+        if (!theme.border)
+        {
+            return screen | flex;
+        }
+        return window(text(" callisto "), std::move(screen), theme.rounded ? ROUNDED : LIGHT) | flex;
     }
 };
 
 } // namespace
 
-int run_tui(const std::function<int(AgentUi &)> &body)
+int run_tui(const Theme &theme, const std::function<int(AgentUi &)> &body)
 {
     using namespace ftxui;
     auto screen = ScreenInteractive::Fullscreen();
-    auto ui = std::make_shared<TuiUi>();
+    auto ui = std::make_shared<TuiUi>(theme);
     ui->screen = &screen;
 
     int status = 0;

@@ -89,10 +89,12 @@ Start the client in the project you want it to edit:
 Several models means several servers. Pass them at startup, or keep the list in `~/.config/callisto/servers.json`. The client connects to every server and uses the first one that answers. `/model` opens a dialog to switch. Switching starts a new session on that server and copies the conversation so far, so the next turn continues there.
 
 ```bash
-./cmake-build-release/callisto_cli \
+export COLORTERM=truecolor ./cmake-build-release/callisto_cli \
   --server qwen=127.0.0.1:8080 \
   --server devstral=127.0.0.1:8081
 ```
+
+Setting `COLORTERM=truecolor` is optional but gives you the best color experience
 
 ```json
 {
