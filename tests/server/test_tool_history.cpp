@@ -119,6 +119,7 @@ int test_older_tool_results_shrink_when_the_next_arrives()
     assertTrue(session.to_response().compress_tools);
     assertTrue(session.to_response().system_prompt.find("Older tool results") != std::string::npos);
     assertTrue(session.to_response().system_prompt.find("The latest result stays in full.") != std::string::npos);
+    assertTrue(session.to_response().system_prompt.find("A later read of the same file") != std::string::npos);
 
     post_user(session, "fix it");
     ParsedAssistantActions read;
