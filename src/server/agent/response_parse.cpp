@@ -551,25 +551,6 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
     return parse_assistant_actions(text, qwen);
 }
 
-string describe_tool(const ChatTool &tool)
-{
-    string text = std::format("- {}: {}\n", tool.name, tool.description);
-    for (const ToolParameter &parameter : tool_parameters(tool))
-    {
-        text += std::format("    {}: {}", parameter.name, parameter.type.empty() ? "value" : parameter.type);
-        if (!parameter.required)
-        {
-            text += ", optional";
-        }
-        if (!parameter.description.empty())
-        {
-            text += std::format(" ({})", parameter.description);
-        }
-        text.push_back('\n');
-    }
-    return text;
-}
-
 string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools, std::string_view extra,
                                    bool allow_questions, bool compress_tools)
 {
@@ -582,13 +563,8 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
     }
     else
     {
+        // Names and parameters travel with the chat template. This example is the syntax the adapter parses.
         prompt += adapter.example_call(tools);
-        prompt += "Available tools:\n";
-        for (const ChatTool &tool : tools)
-        {
-            prompt += describe_tool(tool);
-        }
-        prompt.push_back('\n');
     }
 
     if (allow_questions)
@@ -611,9 +587,10 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
 
     if (compress_tools)
     {
-        prompt += "Older tool results are replaced with one line naming the tool and its target, "
-                  "for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
-                  "Read the file or repeat the search when you need that text again. "
+        prompt += "Older tool results are replaced with one line naming the tool and its target "
+                  "when a newer tool result arrives, for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
+                  "The latest result stays in full. Record anything you still need before the next tool call, "
+                  "then read the file or repeat the search if you need the text again. "
                   "A sub_agent result stays in full.\n";
     }
 

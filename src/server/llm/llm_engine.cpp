@@ -493,7 +493,9 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
         common_chat_msg msg;
         msg.role = message.role;
         msg.content = message.content;
-        msg.reasoning_content = message.reasoning_content;
+        // The stored message keeps reasoning_content for the client. Putting it in the
+        // template would replay every earlier thought on the next turn. This turn still
+        // thinks: enable_thinking opens a new block in the generation prompt.
         inputs.messages.push_back(std::move(msg));
     }
     inputs.tools.reserve(tools.size());

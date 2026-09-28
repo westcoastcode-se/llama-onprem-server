@@ -294,7 +294,7 @@ int test_tool_parse_question()
 }
 
 /**
- * The system prompt lists the client's tools in that model's call syntax.
+ * The system prompt shows that model's call syntax. Tool schemas are not copied into the prompt.
  */
 int test_system_prompt_uses_client_tools()
 {
@@ -309,7 +309,8 @@ int test_system_prompt_uses_client_tools()
     const std::string qwen_prompt = default_agent_system_prompt(qwen, tools, "Be brief", true);
     assertTrue(qwen_prompt.find("<function=ping>") != std::string::npos);
     assertTrue(qwen_prompt.find("<parameter=host>") != std::string::npos);
-    assertTrue(qwen_prompt.find("Ping a host") != std::string::npos);
+    assertTrue(qwen_prompt.find("Ping a host") == std::string::npos);
+    assertTrue(qwen_prompt.find("Available tools:") == std::string::npos);
     assertTrue(qwen_prompt.find("Be brief") != std::string::npos);
     assertTrue(qwen_prompt.find("Older tool results") != std::string::npos);
     assertTrue(qwen_prompt.find("A sub_agent result stays in full.") != std::string::npos);

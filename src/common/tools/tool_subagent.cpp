@@ -64,7 +64,8 @@ Tool create_subagent_tool(SubagentRunner runner) {
                 "returns only its final result. Supports executing a single task or multiple tasks in a controlled "
                 "sequential order. Always use sub-agents when exploring large codebases, inspecting multiple or large "
                 "files, or investigating complex components to keep large reads out of the parent session. "
-                "The result is a summary that cites file:line, plus git diff --stat when files changed. "
+                "The result is a summary that cites file:line and does not include file contents, plus git diff --stat when "
+                "files changed. "
                 "Starts with an empty conversation unless inherit is true. If the result says the context is full, "
                 "call again with a smaller task so the answer can be shorter.",
         .schema_doc = "arguments:\n      task: string (one sub-task, or a JSON array of sub-tasks)\n      tasks: "

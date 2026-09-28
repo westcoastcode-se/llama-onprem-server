@@ -263,7 +263,7 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
             return "sub-agent stopped before it finished";
         }
         message.content = "Summarize the result for the parent. Cite file:line for each finding. "
-                          "Include files changed and commands run. Do not call tools.";
+                          "Include files changed and commands run. Do not paste file contents. Do not call tools.";
         queued = client.post_message(child, message);
         const TurnStatus summary_turn = run_turn(child_state, queued.key, base_tools_);
         if (summary_turn == TurnStatus::ContextFull)

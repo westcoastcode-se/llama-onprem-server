@@ -211,12 +211,9 @@ class Session
         arm_rollback_unlocked();
         clear_pending_unlocked();
         state_ = SessionState::Idle;
-        if (compress_tools_ && turn_finished)
+        if (turn_finished)
         {
-            for (ChatMessage &message : messages_)
-            {
-                message.content = shrink_tool_responses(message.content);
-            }
+            shrink_stored_tool_results_unlocked();
         }
         messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content, .reasoning_content = {}});
         turn_max_tokens_ = msg.max_tokens >= 0 ? msg.max_tokens : max_tokens_;
@@ -237,6 +234,9 @@ class Session
         }
 
         arm_rollback_unlocked();
+        // The new result stays intact. Earlier bodies become one line before this prompt is built,
+        // so a long review does not keep every file it already acted on.
+        shrink_stored_tool_results_unlocked();
         messages_.push_back(ChatMessage{.role = string(ChatMessage::ROLE_USER),
                                         .content = format_tool_results(body, compress_tools_),
                                         .reasoning_content = {}});
@@ -408,6 +408,19 @@ class Session
     {
         pending_tool_calls_.clear();
         pending_question_.reset();
+    }
+
+    // Tool bodies already in the session become one line. The caller appends the message that stays intact.
+    void shrink_stored_tool_results_unlocked()
+    {
+        if (!compress_tools_)
+        {
+            return;
+        }
+        for (ChatMessage &message : messages_)
+        {
+            message.content = shrink_tool_responses(message.content);
+        }
     }
 
     void ensure_no_active_generation_unlocked() const
