@@ -24,4 +24,22 @@ Tool create_subagent_tool(SubagentRunner runner);
 // The task text shown when the user expands an approval row. Not shortened.
 [[nodiscard]] std::string subagent_request_text(const nlohmann::json &args);
 
+// Names a model may emit for this tool. The stored tool_response uses whichever one it called.
+inline constexpr std::string_view kSubagentNames[] = {
+    "sub_agent",      "subagent",     "delegate_subagent", "delegate_task", "spawn_subagent", "run_subagent",
+    "sub_task",       "subtask",      "run_task",          "task_agent",    "tasks",          "run_tasks",
+};
+
+[[nodiscard]] inline bool is_subagent_name(std::string_view name)
+{
+    for (const std::string_view known : kSubagentNames)
+    {
+        if (known == name)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace Tools

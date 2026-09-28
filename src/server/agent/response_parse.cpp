@@ -613,7 +613,8 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
     {
         prompt += "Older tool results are replaced with one line naming the tool and its target, "
                   "for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
-                  "Read the file or repeat the search when you need that text again.\n";
+                  "Read the file or repeat the search when you need that text again. "
+                  "A sub_agent result stays in full.\n";
     }
 
     if (!extra.empty())

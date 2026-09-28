@@ -196,17 +196,20 @@ std::vector<Tool> get_registered_tools(bool include_subagents = true, SubagentRu
  * @brief Looks up and executes a tool with the specified JSON arguments.
  * Also handles tool aliases and error formatting.
  */
+// The tool with this name, or with this alias. Null when nothing matches.
+[[nodiscard]] const Tool *find_tool(std::span<const Tool> tools, std::string_view name);
+
 std::string run_tool(std::span<const Tool> tools, std::string_view name, const nlohmann::json & arguments);
 
 /**
- * @brief Loads AI instructions from the project directory (AI_INSTRUCTIONS.md, etc.).
+ * @brief Loads AGENTS.md instructions from the project directory
  */
-std::string load_ai_instructions(std::string_view base_dir = ".");
+std::string load_agents_markdown(std::filesystem::path base_dir);
 
 /**
  * @brief Builds the system prompt with environment context, ReAct instructions, and tool schemas.
  */
-std::string build_system_prompt(std::span<const Tool> tools, std::string_view custom_prompt = "", std::string_view working_dir = ".");
+std::string build_system_prompt(std::span<const Tool> tools, std::string_view custom_prompt = "", std::filesystem::path working_dir = {"."});
 
 /**
  * @brief Represents a parsed tool call with tool name and arguments.

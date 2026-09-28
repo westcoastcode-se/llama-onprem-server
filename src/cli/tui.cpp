@@ -1,4 +1,5 @@
 #include "cli/tui.hpp"
+#include "cli/system_block.hpp"
 #include "cli/transcript_scroll.hpp"
 
 #include <ftxui/screen/color.hpp>
@@ -185,7 +186,7 @@ ftxui::Element thinking_block(const Block &block, bool reveal, ftxui::Box &hit, 
 
 bool foldable(const Block &block)
 {
-    return block.kind == "thinking" || block.kind == "tool";
+    return block.kind == "thinking" || block.kind == "tool" || block.kind == "system";
 }
 
 ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit, const Theme &theme)
@@ -529,6 +530,20 @@ class TuiUi final : public AgentUi
         wake();
     }
 
+    void show_system(std::string text) override
+    {
+        if (text.empty())
+        {
+            return;
+        }
+        {
+            std::lock_guard lock(mutex);
+            open = false;
+            blocks.push_back(Block{"system", std::move(text)});
+        }
+        wake();
+    }
+
     Ask ask(std::string title, std::string) override
     {
         {
@@ -636,6 +651,11 @@ class TuiUi final : public AgentUi
                 if (block.kind == "thinking")
                 {
                     rows.push_back(thinking_block(block, reveal, think_boxes[i], theme));
+                }
+                else if (block.kind == "system")
+                {
+                    rows.push_back(system_prompt_block(block.text, block.expanded, reveal, paint(theme.note),
+                                                       paint(theme.text), theme.bold, think_boxes[i]));
                 }
                 else
                 {

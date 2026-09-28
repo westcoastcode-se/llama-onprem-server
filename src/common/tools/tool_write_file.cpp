@@ -48,7 +48,8 @@ Tool create_write_file_tool() {
         .description = "Create a file or replace its entire contents. To change part of an existing file, use apply_patch.",
         .schema_doc =
                 "arguments:\n      path: string (path to the file)\n      content: string (the full content to write)",
-        .execute = write_file
+        .execute = write_file,
+        .present = [](const nlohmann::json &args) { return tool_arg(args, "path"); }
     };
 }
 

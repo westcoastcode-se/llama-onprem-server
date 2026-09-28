@@ -1,4 +1,6 @@
 #include "common/tools/tool_subagent.hpp"
+
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -191,8 +193,8 @@ Tool create_subagent_tool(SubagentRunner runner) {
                 }
                 return combined_result;
             },
-            .aliases = {"subagent", "delegate_subagent", "delegate_task", "spawn_subagent", "run_subagent", "sub_task",
-                        "subtask", "run_task", "task_agent", "tasks", "run_tasks"}};
+            .present = [](const nlohmann::json &args) { return tool_arg(args, "task"); },
+            .aliases = std::vector<std::string>(std::next(std::begin(kSubagentNames)), std::end(kSubagentNames))};
 }
 
 } // namespace Tools

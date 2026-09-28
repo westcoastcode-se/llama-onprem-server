@@ -42,6 +42,7 @@ class AgentSession
     [[nodiscard]] std::string offline_message() const;
     [[nodiscard]] bool ensure_server();
     [[nodiscard]] static std::string last_assistant(const SessionResponse &session);
+    void present_system(const SessionResponse &created) const;
     void refresh_status();
     void compact();
     void help() const;

@@ -195,8 +195,9 @@ class LlamaEngine
     bool unpark_session(const std::string &session_id);
     void erase_stored(const std::string &session_id);
     // Keep the first n_tokens of the live sequence and drop the rest from both KV and active_tokens_.
-    // False means this model cannot drop a suffix. The live sequence is cleared instead, and the
-    // caller decodes its prompt from the start.
+    // False means the cache tail is not on that token. The live sequence is cleared instead, and the
+    // caller decodes its prompt from the start. A hybrid seq_rm can report success and still leave
+    // the recurrent tail behind the attention cells.
     [[nodiscard]] bool trim_kv_to(size_t n_tokens);
     // Decode tokens onto the live sequence. Appends each accepted batch to active_tokens_.
     void decode_tokens(std::span<const int32_t> tokens, std::move_only_function<bool()> &should_stop);

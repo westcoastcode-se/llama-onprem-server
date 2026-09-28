@@ -55,54 +55,30 @@ static std::string get_current_iso_time() {
     return std::string(buf);
 }
 
-std::string load_ai_instructions(std::string_view base_dir) {
-    std::filesystem::path dir = base_dir.empty() ? std::filesystem::current_path() : std::filesystem::path(base_dir);
-
+std::string load_agents_markdown(const std::filesystem::path base_dir) {
     // Search for standard project instruction files in priority order
-    const std::vector<std::string> candidate_names = {
-        "AGENTS.md",
-        "AI_INSTRUCTIONS.md",
-        "ai_instructions.md",
-        ".github/copilot-instructions.md",
-        ".github/copilot_instructions.md",
-        "copilot_instructions.md",
-        "copilot-instructions.md",
-        ".copilot_instructions.md",
-        ".copilot-instructions.md",
-        ".ai_instructions.md"
-    };
-
-    for (const auto & rel : candidate_names) {
-        std::error_code ec;
-        std::filesystem::path p = dir / rel;
-        if (std::filesystem::exists(p, ec) && std::filesystem::is_regular_file(p, ec)) {
-            std::ifstream ifs(p);
-            if (ifs.is_open()) {
-                std::stringstream buffer;
-                buffer << ifs.rdbuf();
-                std::string content = buffer.str();
-                // Trim trailing whitespace
-                size_t last = content.find_last_not_of(" \t\r\n");
-                if (last != std::string::npos) {
-                    content = content.substr(0, last + 1);
-                } else {
-                    content.clear();
-                }
-                if (!content.empty()) {
-                    constexpr std::size_t kCap = 2000;
-                    if (content.size() > kCap) {
-                        content.resize(kCap);
-                        content += "\n[instructions truncated]";
-                    }
-                    return content;
-                }
+    std::filesystem::path p = base_dir / "AGENTS.md";
+    if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
+        std::ifstream ifs(p);
+        if (ifs.is_open()) {
+            std::stringstream buffer;
+            buffer << ifs.rdbuf();
+            std::string content = buffer.str();
+            // Trim trailing whitespace
+            size_t last = content.find_last_not_of(" \t\r\n");
+            if (last != std::string::npos) {
+                content = content.substr(0, last + 1);
+            } else {
+                content.clear();
             }
+            return content;
         }
     }
+
     return "";
 }
 
-std::string build_system_prompt(std::span<const Tool> tools, std::string_view custom_prompt, std::string_view working_dir) {
+std::string build_system_prompt(std::span<const Tool> tools, std::string_view custom_prompt, std::filesystem::path working_dir) {
     std::string cwd = working_dir.empty() || working_dir == "." ? std::filesystem::current_path().string() : std::string(working_dir);
     std::string now_str = get_current_iso_time();
 
@@ -153,7 +129,7 @@ std::string build_system_prompt(std::span<const Tool> tools, std::string_view cu
         prompt += std::format("- **{}**:\n    description: {}\n    {}\n\n", tool.name, tool.description, tool.schema_doc);
     }
 
-    const std::string project_instructions = load_ai_instructions(working_dir);
+    const std::string project_instructions = load_agents_markdown(working_dir);
     if (!project_instructions.empty()) {
         prompt += std::format("## Project Instructions (AI_INSTRUCTIONS.md):\n{}\n\n", project_instructions);
     }
@@ -169,30 +145,42 @@ std::string build_system_prompt(std::span<const Tool> tools, std::string_view cu
 // Tool Dispatcher & Execution
 // ---------------------------------------------------------------------------
 
+const Tool *find_tool(std::span<const Tool> tools, std::string_view name)
+{
+    for (const Tool &tool : tools)
+    {
+        if (tool.name == name)
+        {
+            return &tool;
+        }
+    }
+    for (const Tool &tool : tools)
+    {
+        for (const std::string &alias : tool.aliases)
+        {
+            if (alias == name)
+            {
+                return &tool;
+            }
+        }
+    }
+    return nullptr;
+}
+
 std::string run_tool(std::span<const Tool> tools, std::string_view name, const nlohmann::json & arguments) {
-    // 1. Exact match by tool name
-    for (const auto & tool : tools) {
-        if (tool.name == name) {
-            try {
-                return tool.execute(arguments);
-            } catch (const std::exception & e) {
-                return std::format("error executing tool '{}': {}", name, e.what());
-            }
-        }
+    const Tool *tool = find_tool(tools, name);
+    if (tool == nullptr || !tool->execute)
+    {
+        return std::format("error: unknown tool '{}'", name);
     }
-    // 2. Match against tool aliases
-    for (const auto & tool : tools) {
-        for (const auto & alias : tool.aliases) {
-            if (alias == name) {
-                try {
-                    return tool.execute(arguments);
-                } catch (const std::exception & e) {
-                    return std::format("error executing tool '{}': {}", name, e.what());
-                }
-            }
-        }
+    try
+    {
+        return tool->execute(arguments);
     }
-    return std::format("error: unknown tool '{}'", name);
+    catch (const std::exception & e)
+    {
+        return std::format("error executing tool '{}': {}", name, e.what());
+    }
 }
 
 // ---------------------------------------------------------------------------

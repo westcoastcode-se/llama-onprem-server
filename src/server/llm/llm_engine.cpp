@@ -3,6 +3,7 @@
 #include "common/log.hpp"
 #include "common/span_prefix.hpp"
 #include "context_params.hpp"
+#include "kv_match.hpp"
 #include "utf8_stream.hpp"
 
 #include "chat.h"
@@ -325,28 +326,42 @@ bool LlamaEngine::trim_kv_to(size_t n_tokens)
         active_tokens_.resize(n_tokens);
         return true;
     }
-    if (n_tokens == active_tokens_.size())
+
+    llama_memory_t memory = llama_get_memory(ctx_.get());
+    auto clear_sequence = [&] {
+        if (!llama_memory_seq_rm(memory, 0, 0, -1))
+        {
+            llama_memory_clear(memory, true);
+        }
+        active_tokens_.clear();
+    };
+    // seq_rm can return true for a hybrid model without moving the recurrent tail. The attention
+    // cells then stay past that tail, and every new token takes another cell until none are free.
+    auto tail_ok = [&](size_t n) {
+        return kv_tail_matches(n, llama_memory_seq_pos_max(memory, 0));
+    };
+    if (n_tokens == active_tokens_.size() && tail_ok(n_tokens))
     {
         return true;
     }
 
-    llama_memory_t memory = llama_get_memory(ctx_.get());
-    // A hybrid model such as Qwen3.5 keeps one recurrent state. It can drop the whole sequence,
-    // but not an arbitrary suffix. Ignoring that failure leaves the old cells in place, and the
-    // next batch is written past them until the cache has no free slot.
-    const bool removed = llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(n_tokens), -1);
-    if (removed)
+    if (n_tokens < active_tokens_.size())
     {
-        active_tokens_.resize(n_tokens);
-        return true;
+        // A hybrid model such as Qwen3.5 keeps one recurrent state. It can drop the whole sequence,
+        // but not an arbitrary suffix. A reported success still has to leave the tail on the last kept token.
+        const bool removed = llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(n_tokens), -1);
+        if (removed)
+        {
+            active_tokens_.resize(n_tokens);
+            if (tail_ok(n_tokens))
+            {
+                return true;
+            }
+        }
     }
 
     log_info("[llm] session ", active_session_id_, " cannot drop a kv suffix at ", n_tokens, ", recomputing the prompt");
-    if (!llama_memory_seq_rm(memory, 0, 0, -1))
-    {
-        llama_memory_clear(memory, true);
-    }
-    active_tokens_.clear();
+    clear_sequence();
     return false;
 }
 

@@ -12,7 +12,8 @@ namespace Tools {
  * Automatically skips binary files and hidden VCS directories like .git.
  *
  * JSON Parameters:
- *   - query (string, required) or pattern: Search text or regex to match against file contents.
+ *   - query (string, required) or pattern: Search text. text1|text2 matches either alternative.
+ *     is_regex selects a regular expression instead.
  *   - path (string, optional, defaults to "."): Root path or individual file to search in.
  *   - file_pattern (string, optional): Filename filter/extension (e.g. ".cpp", ".h", "CMakeLists.txt").
  *   - case_sensitive (bool, optional, defaults to false): Whether search is case-sensitive.

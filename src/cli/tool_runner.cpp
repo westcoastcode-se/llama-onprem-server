@@ -169,33 +169,14 @@ std::string edit_preview(const std::filesystem::path &cwd, const json &args)
     return preview;
 }
 
-std::string tool_summary(std::string_view name, const json &args)
+// The collapsed tool line: the name the model used, then the text that tool chose.
+// The brief is capped so the row stays one line.
+std::string tool_summary(std::span<const Tool> tools, std::string_view name, const json &args)
 {
     std::string brief;
-    if (name == "execute_command")
+    if (const Tool *tool = find_tool(tools, name); tool != nullptr && tool->present)
     {
-        brief = arg_text(args, "command");
-    }
-    else if (name == "write_file" || name == "apply_patch" || name == "read_file" || name == "list_directory" ||
-             name == "file_search" || name == "search_text")
-    {
-        brief = arg_text(args, "path");
-        if (brief.empty())
-        {
-            brief = arg_text(args, "query");
-        }
-    }
-    else if (name == "web_fetch")
-    {
-        brief = arg_text(args, "url");
-    }
-    else if (name == "web_search")
-    {
-        brief = arg_text(args, "query");
-    }
-    else if (name == "sub_agent")
-    {
-        brief = arg_text(args, "task");
+        brief = tool->present(args);
     }
     if (brief.size() > 120)
     {
@@ -401,7 +382,7 @@ std::optional<json> ToolRunner::run(const SessionResponse &session, std::span<co
     for (const ParsedToolCall &call : session.pending_tool_calls)
     {
         json args = call.arguments.is_object() ? call.arguments : json::object();
-        const std::string summary = tool_summary(call.name, args);
+        const std::string summary = tool_summary(tools, call.name, args);
         json item{{"id", call.id},
                   {"name", call.name},
                   {"detail", tool_subject(call.name, args)},

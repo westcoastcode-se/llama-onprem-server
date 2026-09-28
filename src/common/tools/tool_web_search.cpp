@@ -152,7 +152,8 @@ Tool create_web_search_tool() {
                           "categories such as general, science, it)\n      language: string (optional language code "
                           "such as sv or en)\n      time_range: string (optional day, week, month, or year)",
         .execute = web_search,
-            .aliases = {"searxng_search", "searx_search", "internet_search", "search"}};
+        .present = [](const nlohmann::json &args) { return tool_arg_first(args, {"query", "q", "search_query", "input"}); },
+        .aliases = {"searxng_search", "searx_search", "internet_search", "search"}};
 }
 
 } // namespace Tools

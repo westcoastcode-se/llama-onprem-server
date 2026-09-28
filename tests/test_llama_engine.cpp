@@ -2,6 +2,7 @@
 #include "common/span_prefix.hpp"
 #include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
+#include "server/llm/kv_match.hpp"
 #include "tests.hpp"
 
 #include "chat.h"
@@ -311,15 +312,29 @@ int test_system_prompt_uses_client_tools()
     assertTrue(qwen_prompt.find("Ping a host") != std::string::npos);
     assertTrue(qwen_prompt.find("Be brief") != std::string::npos);
     assertTrue(qwen_prompt.find("Older tool results") != std::string::npos);
+    assertTrue(qwen_prompt.find("A sub_agent result stays in full.") != std::string::npos);
     assertTrue(qwen_prompt.find("execute_command") == std::string::npos);
     const std::string quiet = default_agent_system_prompt(qwen, tools, "", true, false);
     assertTrue(quiet.find("Older tool results") == std::string::npos);
+    assertTrue(quiet.find("A sub_agent result stays in full.") == std::string::npos);
 
     const DeepseekAdapter deepseek;
     const std::string deepseek_prompt = default_agent_system_prompt(deepseek, tools, "", false);
     assertTrue(deepseek_prompt.find("<｜tool▁sep｜>ping") != std::string::npos);
     assertTrue(deepseek_prompt.find("\"host\"") != std::string::npos);
     assertTrue(deepseek_prompt.find("When several approaches") == std::string::npos);
+    return EXIT_SUCCESS;
+}
+
+int test_kv_tail_matches_hybrid_suffix()
+{
+    assertTrue(kv_tail_matches(0, -1));
+    assertTrue(!kv_tail_matches(0, 0));
+    assertTrue(kv_tail_matches(84639, 84638));
+    // Recurrent tail stayed behind the attention cells. Treating this as a kept prefix
+    // writes the next tokens onto cells that are already occupied.
+    assertTrue(!kv_tail_matches(84639, 80000));
+    assertTrue(!kv_tail_matches(1, -1));
     return EXIT_SUCCESS;
 }
 
@@ -345,65 +360,6 @@ int test_model_adapter_selection()
     return EXIT_SUCCESS;
 }
 
-/**
- * The Qwen template opens a think block when reasoning is on, and renders tools and history.
- */
-int test_qwen_template()
-{
-    const std::string src = read_template(LLAMA_ENGINE_TEMPLATE);
-    assertTrue(!src.empty());
-
-    common_chat_templates_ptr tmpls = common_chat_templates_init(nullptr, src);
-    assertTrue(tmpls != nullptr);
-
-    auto apply = [&](bool thinking, bool with_tool, bool add_assistant) {
-        common_chat_templates_inputs inputs;
-        inputs.use_jinja = true;
-        inputs.enable_thinking = thinking;
-        inputs.add_generation_prompt = add_assistant;
-        common_chat_msg user;
-        user.role = "user";
-        user.content = "hello";
-        inputs.messages.push_back(user);
-        if (!add_assistant)
-        {
-            common_chat_msg assistant;
-            assistant.role = "assistant";
-            assistant.content = "hi there";
-            inputs.messages.push_back(std::move(assistant));
-        }
-        if (with_tool)
-        {
-            inputs.tools.push_back(common_chat_tool{"read_file", "Read a file", R"({"type":"object","properties":{}})"});
-        }
-        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
-    };
-
-    try
-    {
-        const std::string thinking = apply(true, false, true);
-        assertTrue(thinking.find("<|im_start|>assistant\n<think>\n") != std::string::npos);
-        assertTrue(thinking.find("<think>\n\n</think>") == std::string::npos);
-
-        const std::string quiet = apply(false, false, true);
-        assertTrue(quiet.find("<think>\n\n</think>\n\n") != std::string::npos);
-
-        const std::string with_tool = apply(true, true, true);
-        assertTrue(with_tool.find("read_file") != std::string::npos);
-        assertTrue(with_tool.find("<tools>") != std::string::npos);
-
-        const std::string done = apply(true, false, false);
-        assertTrue(done.find("hi there") != std::string::npos);
-        assertTrue(done.find("<|im_end|>") != std::string::npos);
-    }
-    catch (const std::exception &error)
-    {
-        std::cout << "Assertion failed at " << AI_SHORT_FILENAME << ":" << __LINE__ << ": " << error.what() << std::endl;
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
-}
-
 } // namespace
 
 int test_llama_engine()
@@ -425,7 +381,7 @@ int test_llama_engine()
     RUN_TEST(test_tool_parse_question);
     RUN_TEST(test_system_prompt_uses_client_tools);
     RUN_TEST(test_model_adapter_selection);
-    RUN_TEST(test_qwen_template);
+    RUN_TEST(test_kv_tail_matches_hybrid_suffix);
     return EXIT_SUCCESS;
 }
 

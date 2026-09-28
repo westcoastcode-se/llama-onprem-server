@@ -144,7 +144,8 @@ namespace Tools {
             .description =
                     "Execute a shell / bash command on the local system and return the output and exit code.",
             .schema_doc = "arguments:\n      command: string (the shell command to run)",
-            .execute = execute_command
+            .execute = execute_command,
+            .present = [](const nlohmann::json &args) { return tool_arg(args, "command"); }
         };
     }
 } // namespace Tools

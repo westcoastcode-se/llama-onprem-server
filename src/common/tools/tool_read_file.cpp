@@ -78,7 +78,8 @@ Tool create_read_file_tool() {
         .schema_doc =
                 "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, "
                 "1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",
-        .execute = read_file
+        .execute = read_file,
+        .present = [](const nlohmann::json &args) { return tool_arg(args, "path"); }
     };
 }
 

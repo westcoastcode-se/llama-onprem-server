@@ -142,6 +142,40 @@ static int test_tool_search_text_error_bad_regex() {
  * Run all search_text tests
  */
 /**
+ * text1|text2 matches either alternative, including across files.
+ */
+static int test_tool_search_text_pipe_is_either() {
+    const auto dir = make_temp_dir("search-text");
+    defer(std::filesystem::remove_all(dir));
+    const auto first = dir / "one.txt";
+    const auto second = dir / "two.txt";
+    write_test_file(first, "see alpha here\n");
+    write_test_file(second, "see beta there\nnope\n");
+
+    const auto tool = Tools::create_search_text_tool();
+    const auto result = tool.execute({{"query", "alpha|beta"}, {"path", dir.string()}, {"context", 0}});
+    assertTrue(result.find(first.string() + ":1: see alpha here") != std::string::npos);
+    assertTrue(result.find(second.string() + ":1: see beta there") != std::string::npos);
+    assertTrue(result.find("nope") == std::string::npos);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Spaces around the pipe are not part of either alternative.
+ */
+static int test_tool_search_text_pipe_trims_alternatives() {
+    const auto dir = make_temp_dir("search-text");
+    defer(std::filesystem::remove_all(dir));
+    const auto path = dir / "note.txt";
+    write_test_file(path, "Alpha\n");
+
+    const auto tool = Tools::create_search_text_tool();
+    const auto result = tool.execute({{"query", " alpha | missing "}, {"path", path.string()}, {"context", 0}});
+    assertEquals(path.string() + ":1: Alpha\n", result);
+    return EXIT_SUCCESS;
+}
+
+/**
  * context includes the lines around a hit.
  */
 static int test_tool_search_text_context() {
@@ -174,6 +208,8 @@ static int test_tool_search_text_skips_vendors() {
 
 int test_tool_search_text() {
     RUN_TEST(test_tool_search_text_match);
+    RUN_TEST(test_tool_search_text_pipe_is_either);
+    RUN_TEST(test_tool_search_text_pipe_trims_alternatives);
     RUN_TEST(test_tool_search_text_case_sensitive);
     RUN_TEST(test_tool_search_text_file_pattern);
     RUN_TEST(test_tool_search_text_skips_git);

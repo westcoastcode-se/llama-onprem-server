@@ -32,6 +32,8 @@ struct AgentUi
     virtual void expand(std::string_view) {}
     virtual void collapse(std::string_view) {}
     virtual void caption(std::string) {}
+    // System prompt of a session that was just created. The console session ignores this.
+    virtual void show_system(std::string) {}
     // While true, streamed sub-agent text stays expanded and the view follows it.
     virtual void set_subagent_live(bool) {}
     virtual Ask ask(std::string title, std::string body) = 0;

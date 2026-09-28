@@ -88,6 +88,29 @@ int test_shrink_names_the_target()
     return EXIT_SUCCESS;
 }
 
+int test_shrink_keeps_subagent_body()
+{
+    const std::string findings = long_read();
+    const std::string text = "before\n<tool_response name=\"sub_agent\" detail=\"inspect tui\">\n" + findings +
+                             "</tool_response>\nafter\n"
+                             "<tool_response name=\"read_file\" detail=\"src/cli/tui.cpp\">\n" +
+                             findings + "</tool_response>";
+    const std::string shrunk = shrink_tool_responses(text);
+    assertTrue(shrunk.find("before\n") == 0);
+    assertTrue(shrunk.find("name=\"sub_agent\"") != std::string::npos);
+    assertTrue(shrunk.find("1: alpha") != std::string::npos);
+    assertTrue(shrunk.find("read_file src/cli/tui.cpp, lines 1-4 of 90") != std::string::npos);
+    const auto sub_at = shrunk.find("name=\"sub_agent\"");
+    const auto read_at = shrunk.find("name=\"read_file\"");
+    assertTrue(sub_at < read_at);
+    assertTrue(shrunk.find("1: alpha") < read_at);
+    assertEquals(shrunk, shrink_tool_responses(shrunk));
+
+    const std::string alias = "<tool_response name=\"spawn_subagent\" detail=\"look\">\n" + findings + "</tool_response>";
+    assertEquals(alias, shrink_tool_responses(alias));
+    return EXIT_SUCCESS;
+}
+
 int test_tool_results_stay_until_the_next_user_turn()
 {
     QwenAdapter adapter;
@@ -141,6 +164,52 @@ int test_tool_results_stay_until_the_next_user_turn()
     const SessionResponse again = session.to_response();
     assertEquals(stored.messages[2].content, again.messages[2].content);
     assertEquals(stored.messages[4].content, again.messages[4].content);
+    return EXIT_SUCCESS;
+}
+
+int test_subagent_result_survives_the_next_user_turn()
+{
+    QwenAdapter adapter;
+    Session session(adapter);
+    session.configure({});
+    assertTrue(session.to_response().system_prompt.find("A sub_agent result stays in full.") != std::string::npos);
+
+    post_user(session, "map the tui");
+    ParsedAssistantActions delegated;
+    ParsedToolCall sub;
+    sub.name = "sub_agent";
+    delegated.tool_calls.push_back(std::move(sub));
+    ParsedToolCall read_call;
+    read_call.name = "read_file";
+    delegated.tool_calls.push_back(std::move(read_call));
+    finish(session, "delegating", std::move(delegated));
+
+    ToolResultItem sub_item;
+    sub_item.name = "sub_agent";
+    sub_item.detail = "inspect tui";
+    sub_item.content = long_read();
+    ToolResultItem read_item;
+    read_item.name = "read_file";
+    read_item.detail = "src/cli/tui.cpp";
+    read_item.content = long_read();
+    SessionToolResultsRequest body;
+    body.results.push_back(std::move(sub_item));
+    body.results.push_back(std::move(read_item));
+    session.accept_tool_results(body);
+    assertTrue(session.to_response().messages.back().content.find("1: alpha") != std::string::npos);
+
+    finish(session, "the caption is set in tui.cpp");
+    post_user(session, "next task");
+
+    const std::string stored = session.to_response().messages[2].content;
+    assertTrue(stored.find("name=\"sub_agent\"") != std::string::npos);
+    assertTrue(stored.find("1: alpha") != std::string::npos);
+    assertTrue(stored.find("sub_agent inspect tui,") == std::string::npos);
+    assertTrue(stored.find("read_file src/cli/tui.cpp, lines 1-4 of 90") != std::string::npos);
+    const auto sub_at = stored.find("name=\"sub_agent\"");
+    const auto read_at = stored.find("name=\"read_file\"");
+    assertTrue(sub_at < read_at);
+    assertTrue(stored.find("1: alpha") < read_at);
     return EXIT_SUCCESS;
 }
 
@@ -222,7 +291,9 @@ int test_tool_history()
 {
     RUN_TEST(test_shrink_keeps_short_and_records);
     RUN_TEST(test_shrink_names_the_target);
+    RUN_TEST(test_shrink_keeps_subagent_body);
     RUN_TEST(test_tool_results_stay_until_the_next_user_turn);
+    RUN_TEST(test_subagent_result_survives_the_next_user_turn);
     RUN_TEST(test_question_answer_keeps_the_tool_result);
     RUN_TEST(test_compress_tools_can_be_off);
     return EXIT_SUCCESS;

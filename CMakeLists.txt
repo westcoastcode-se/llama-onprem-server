@@ -107,6 +107,7 @@ add_executable(callisto_cli
         src/cli/reply_stream.cpp
         src/cli/servers.cpp
         src/cli/session_store.cpp
+        src/cli/system_block.cpp
         src/cli/tool_runner.cpp
         src/cli/theme.cpp
         src/cli/tool_schema.cpp
@@ -144,7 +145,9 @@ add_executable(tests
     tests/cli/test_project_context.cpp
     tests/cli/test_session_store.cpp
     tests/cli/test_transcript_scroll.cpp
+    tests/cli/test_system_block.cpp
     src/cli/transcript_scroll.cpp
+    src/cli/system_block.cpp
     tests/server/test_utf8_stream.cpp
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
@@ -166,8 +169,7 @@ add_executable(callisto_tests
         src/common/log.cpp
         src/common/tool_history.cpp)
 configure_localai_target(callisto_tests)
-target_compile_definitions(callisto_tests PRIVATE
-        LLAMA_ENGINE_TEMPLATE="${CMAKE_SOURCE_DIR}/src/templates/Qwen3.8-27B.jinja")
+target_compile_definitions(callisto_tests PRIVATE)
 target_link_libraries(callisto_tests PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 enable_testing()

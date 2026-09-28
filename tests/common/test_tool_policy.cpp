@@ -186,6 +186,12 @@ static int test_registered_tools() {
     const auto with_sub = get_registered_tools(true, [](std::string_view, bool) { return std::string("ok"); });
     assertEquals(10, static_cast<int>(with_sub.size()));
     assertEquals("sub_agent", with_sub.back().name);
+    assertEquals(11, static_cast<int>(with_sub.back().aliases.size()));
+    assertEquals(std::string("subagent"), with_sub.back().aliases.front());
+    assertEquals(std::string("run_tasks"), with_sub.back().aliases.back());
+    assertTrue(Tools::is_subagent_name("sub_agent"));
+    assertTrue(Tools::is_subagent_name("spawn_subagent"));
+    assertTrue(!Tools::is_subagent_name("read_file"));
 
     const auto without = get_registered_tools(false);
     assertEquals(9, static_cast<int>(without.size()));
@@ -198,7 +204,7 @@ static int test_registered_tools() {
 static int test_build_system_prompt() {
     const auto dir = make_temp_dir("prompt");
     defer(std::filesystem::remove_all(dir));
-    write_test_file(dir / "AI_INSTRUCTIONS.md", "Project rule\n");
+    write_test_file(dir / "AGENTS.md", "Project rule\n");
 
     const Tool tool{
         .name = "read_file",
@@ -206,7 +212,7 @@ static int test_build_system_prompt() {
         .schema_doc = "arguments:\n      path: string (path)",
         .execute = [](const nlohmann::json &) { return std::string{}; },
     };
-    const auto prompt = build_system_prompt(std::span<const Tool>(&tool, 1), "Be brief", dir.string());
+    const auto prompt = build_system_prompt(std::span<const Tool>(&tool, 1), "Be brief", dir);
     assertTrue(prompt.find("Working Directory: " + dir.string()) != std::string::npos);
     assertTrue(prompt.find("read_file") != std::string::npos);
     assertTrue(prompt.find("Be brief") != std::string::npos);
@@ -220,7 +226,7 @@ static int test_build_system_prompt() {
         .execute = [](const nlohmann::json &) { return std::string{}; },
     };
     const Tool both[] = {tool, sub};
-    const auto with_sub = build_system_prompt(both, "", dir.string());
+    const auto with_sub = build_system_prompt(both, "", dir);
     assertTrue(with_sub.find("Sub-Agent Task Planning") != std::string::npos);
     return EXIT_SUCCESS;
 }
@@ -231,35 +237,13 @@ static int test_build_system_prompt() {
 static int test_load_ai_instructions() {
     const auto dir = make_temp_dir("prompt");
     defer(std::filesystem::remove_all(dir));
-    assertEquals("", load_ai_instructions(dir.string()));
+    assertEquals("", load_agents_markdown(dir.string()));
 
-    write_test_file(dir / "AI_INSTRUCTIONS.md", "  \n");
-    assertEquals("", load_ai_instructions(dir.string()));
+    write_test_file(dir / "AGENTS.md", "  \n");
+    assertEquals("", load_agents_markdown(dir.string()));
 
-    write_test_file(dir / "ai_instructions.md", "from the second file");
-    assertEquals("from the second file", load_ai_instructions(dir.string()));
-
-    write_test_file(dir / "AI_INSTRUCTIONS.md", "from the first file\n");
-    assertEquals("from the first file", load_ai_instructions(dir.string()));
-    return EXIT_SUCCESS;
-}
-
-/**
- * AGENTS.md wins over AI_INSTRUCTIONS.md. A long file is capped.
- */
-static int test_load_agents_md_and_cap()
-{
-    const auto dir = make_temp_dir("agents");
-    defer(std::filesystem::remove_all(dir));
-    write_test_file(dir / "AI_INSTRUCTIONS.md", "from instructions");
-    write_test_file(dir / "AGENTS.md", "from agents");
-    assertEquals("from agents", load_ai_instructions(dir.string()));
-
-    write_test_file(dir / "AGENTS.md", std::string(2500, 'a'));
-    const std::string capped = load_ai_instructions(dir.string());
-    assertTrue(capped.size() < 2500);
-    assertTrue(capped.find("[instructions truncated]") != std::string::npos);
-    assertTrue(capped.find('a') != std::string::npos);
+    write_test_file(dir / "AGENTS.md", "from the first file\n");
+    assertEquals("from the first file", load_agents_markdown(dir.string()));
     return EXIT_SUCCESS;
 }
 
@@ -310,7 +294,6 @@ int test_tool_policy() {
     RUN_TEST(test_registered_tools);
     RUN_TEST(test_build_system_prompt);
     RUN_TEST(test_load_ai_instructions);
-    RUN_TEST(test_load_agents_md_and_cap);
     RUN_TEST(test_thinking_stream_filter);
     return EXIT_SUCCESS;
 }

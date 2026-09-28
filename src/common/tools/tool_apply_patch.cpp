@@ -141,7 +141,8 @@ Tool create_apply_patch_tool()
         .name = "apply_patch",
         .description = "Replace one unique stretch of text in an existing file. Fails if old_string is missing or appears more than once.",
         .schema_doc = "arguments:\n      path: string (path to the existing file)\n      old_string: string (exact text to replace, must occur once)\n      new_string: string (replacement text)",
-        .execute = apply_patch};
+        .execute = apply_patch,
+        .present = [](const nlohmann::json &args) { return tool_arg(args, "path"); }};
 }
 
 } // namespace Tools
