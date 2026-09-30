@@ -48,11 +48,11 @@ std::string file_search(const nlohmann::json & args) {
 
 Tool create_file_search_tool() {
     return {
-        .name = "file_search",
-        .description = "Recursively search for files or directories whose name contains a substring. Skips vendors and build directories.",
-        .schema_doc = "arguments:\n      pattern: string (substring matched against the file or directory name)\n      path: string (optional "
-                          "starting directory, defaults to '.')",
-        .execute = file_search
+        .name = std::string(kFileSearchName),
+        .description = std::string(kFileSearchDescription),
+        .schema_doc = std::string(kFileSearchSchema),
+        .execute = file_search,
+        .present = [](const nlohmann::json &args) { return tool_arg_first(args, {"pattern", "query", "name", "path"}); }
     };
 }
 

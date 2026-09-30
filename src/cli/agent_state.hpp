@@ -39,7 +39,7 @@ struct AgentState
     bool exec = false;
     // Nested run. Questions are answered without a dialog, and the UI keeps the stream in view.
     bool subagent = false;
-    int max_rounds = 40;
+    int max_rounds = 100;
     std::vector<std::string> always_tools;
     std::filesystem::path cwd = std::filesystem::current_path();
     AgentUi *ui = nullptr;

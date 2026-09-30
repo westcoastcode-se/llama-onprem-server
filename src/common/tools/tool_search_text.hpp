@@ -4,24 +4,20 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "search_text".
- *
- * Recursively searches files in a directory (or a single file) for lines
- * matching a given search query or regular expression.
- * Automatically skips binary files and hidden VCS directories like .git.
- *
- * JSON Parameters:
- *   - query (string, required) or pattern: Search text or regex to match against file contents.
- *   - path (string, optional, defaults to "."): Root path or individual file to search in.
- *   - file_pattern (string, optional): Filename filter/extension (e.g. ".cpp", ".h", "CMakeLists.txt").
- *   - case_sensitive (bool, optional, defaults to false): Whether search is case-sensitive.
- *   - is_regex (bool, optional, defaults to false): Whether the query should be interpreted as a regex.
- *   - max_matches (integer, optional, defaults to 100): Maximum matching lines to return.
- *
- * Return value:
- *   - Formatted matches in "filepath:line_number: line_text" format or no matches message.
- */
+inline constexpr std::string_view kSearchTextName = "search_text";
+inline constexpr std::string_view kSearchTextDescription =
+    "Search for text across files in the project. method is text, extended, or regex.";
+inline constexpr std::string_view kSearchTextSchema =
+    "arguments:\n"
+    "      query: string (text to find)\n"
+    "      path: string (optional directory or file to search in, default '.')\n"
+    "      file_pattern: string (optional filename filter or extension, e.g. '.cpp')\n"
+    "      case_sensitive: boolean (optional, default false)\n"
+    "      method: string (optional, text, extended, or regex; default text. extended treats text1|text2 as either alternative)\n"
+    "      before: integer (optional lines before each hit, default 3. A line covered by several hits is listed once)\n"
+    "      context: integer (optional lines after each hit, default 2, max 5)\n"
+    "      max_matches: integer (optional, default 100)";
+
 Tool create_search_text_tool();
 
 /**

@@ -436,32 +436,31 @@ int main(int argc, char **argv)
     job_get->add_option("id", job_get_session, "Session id")->required();
     job_get->add_option("job", job_get_key, "Job key")->required();
     job_get->callback([&] {
-        const json status =
+        const MessageStatusResponse status =
             connect(options).get_job(parse_session_id(job_get_session), parse_session_id(job_get_key));
         if (options.json)
         {
-            std::println("{}", status.dump(2));
+            std::println("{}", status.to_json().dump(2));
             return;
         }
-        std::println("job {}", status.value("key", 0));
-        std::println("state {}", status.value("state", ""));
-        if (status.contains("error") && !status["error"].get<std::string>().empty())
+        std::println("job {}", status.key);
+        std::println("state {}", status.state.to_string());
+        if (!status.error.empty())
         {
-            std::println("error {}", status["error"].get<std::string>());
+            std::println("error {}", status.error);
         }
-        if (status.contains("error_code"))
+        if (!status.error_code.empty())
         {
-            std::println("error_code {}", status["error_code"].get<std::string>());
+            std::println("error_code {}", status.error_code);
         }
-        if (status.contains("reasoning_content"))
+        if (!status.reasoning.empty())
         {
             std::println("thinking:");
-            std::println("{}", status["reasoning_content"].get<std::string>());
+            std::println("{}", status.reasoning);
         }
-        const std::string content = status.value("content", "");
-        if (!content.empty())
+        if (!status.content.empty())
         {
-            std::println("{}", content);
+            std::println("{}", status.content);
         }
     });
 
@@ -523,8 +522,8 @@ int main(int argc, char **argv)
                                                tools_denied, tools_from_flags);
         RestClient client = connect(options);
         const SessionID id = parse_session_id(tools_session);
-        const json queued = client.post_tool_results(id, results);
-        stream_turn(client, id, queued.at("key").get<JobKey>());
+        const SessionMessageResponse queued = client.post_tool_results(id, results);
+        stream_turn(client, id, queued.key);
     });
 
     app.callback([&] {

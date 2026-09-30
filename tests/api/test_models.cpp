@@ -137,6 +137,45 @@ static int test_create_session_request_json() {
 }
 
 /**
+ * A job status round-trips. Tool-call arguments stay a JSON object.
+ */
+static int test_message_status_response_json() {
+    MessageStatusResponse status;
+    status.key = 7;
+    status.state = JobState::Done;
+    status.done = true;
+    status.content = "hello";
+    status.error = "nope";
+    status.error_code = "context_full";
+    status.reasoning = "because";
+    ParsedToolCall call;
+    call.id = "1";
+    call.name = "read_file";
+    call.arguments = json{{"path", "src/cli/tui.cpp"}};
+    status.tool_calls.push_back(call);
+    ParsedQuestion question;
+    question.text = "Which?";
+    question.answers = {"a", "b"};
+    status.question = question;
+
+    const auto back = MessageStatusResponse::from_json(status.to_json());
+    assertEquals(static_cast<JobKey>(7), back.key);
+    assertTrue(back.state == JobState::Done);
+    assertTrue(back.done);
+    assertEquals("hello", back.content);
+    assertEquals("nope", back.error);
+    assertEquals("context_full", back.error_code);
+    assertEquals("because", back.reasoning);
+    assertEquals(1, static_cast<int>(back.tool_calls.size()));
+    assertEquals("read_file", back.tool_calls[0].name);
+    assertEquals("src/cli/tui.cpp", back.tool_calls[0].arguments.value("path", ""));
+    assertTrue(back.question.has_value());
+    assertEquals("Which?", back.question->text);
+    assertEquals(2, static_cast<int>(back.question->answers.size()));
+    return EXIT_SUCCESS;
+}
+
+/**
  * Error responses keep the code and the message.
  */
 static int test_error_response_json() {
@@ -157,6 +196,7 @@ int test_models() {
     RUN_TEST(test_session_message_request);
     RUN_TEST(test_chat_tool_and_message_json);
     RUN_TEST(test_create_session_request_json);
+    RUN_TEST(test_message_status_response_json);
     RUN_TEST(test_error_response_json);
     return EXIT_SUCCESS;
 }

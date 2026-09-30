@@ -12,8 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 USER 1000
 
-ADD cmake-build-debug/callisto_server /callisto_server
-ADD cmake-build-debug/callisto_cli /callisto_cli
+ADD cmake-build-release/callisto_cli /callisto_cli
 ADD LICENSE /LICENSE
 ADD THIRD_PARTY_NOTICES.md /THIRD_PARTY_NOTICES.md
 

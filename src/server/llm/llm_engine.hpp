@@ -3,6 +3,7 @@
 #include "../api/messages.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -17,6 +18,7 @@ struct llama_context;
 struct llama_sampler;
 struct llama_vocab;
 struct common_chat_templates;
+class KvTrim;
 
 // Process-wide model settings. Per-request overrides live on LlamaRequest.
 struct LlamaConfig
@@ -105,6 +107,8 @@ struct LlamaRequest
 // saves the live sequence and restores the next one, so a session change is not a full prefill.
 //
 // A turn tokenizes its whole prompt and decodes only the tail that differs from active_tokens_.
+// message_ends_ records where each rendered message ends in that sequence. The next turn reuses
+// the longest end that still matches, then compares the generated tail token by token.
 // Matching tokens, not formatted bytes, is what keeps end-of-turn markers in the cache: the
 // model stops on EOG without decoding it, and the next prompt's template emits that marker again.
 //
@@ -112,7 +116,7 @@ struct LlamaRequest
 class LlamaEngine
 {
   public:
-    LlamaEngine() = default;
+    LlamaEngine();
     ~LlamaEngine();
 
     LlamaEngine(const LlamaEngine &) = delete;
@@ -164,6 +168,8 @@ class LlamaEngine
     {
         std::string id;
         std::vector<int32_t> tokens;
+        // End offset of each message inside tokens. The client never sees these.
+        std::vector<size_t> message_ends;
         std::vector<uint8_t> state;
         std::chrono::steady_clock::time_point used{};
     };
@@ -194,9 +200,8 @@ class LlamaEngine
     // Load a parked snapshot into sequence 0. False when this session has nothing saved.
     bool unpark_session(const std::string &session_id);
     void erase_stored(const std::string &session_id);
-    // Keep the first n_tokens of the live sequence and drop the rest from both KV and active_tokens_.
-    // False means this model cannot drop a suffix. The live sequence is cleared instead, and the
-    // caller decodes its prompt from the start.
+    // Keep the first n_tokens of the live sequence. The family's KvTrim decides whether a suffix
+    // can be dropped. False clears the sequence, and the caller decodes its prompt from the start.
     [[nodiscard]] bool trim_kv_to(size_t n_tokens);
     // Decode tokens onto the live sequence. Appends each accepted batch to active_tokens_.
     void decode_tokens(std::span<const int32_t> tokens, std::move_only_function<bool()> &should_stop);
@@ -212,9 +217,21 @@ class LlamaEngine
     std::unique_ptr<llama_sampler, SamplerDeleter> smpl_;
     // Parsed Jinja. Owned here; llama.cpp's C chat API does not execute Jinja.
     std::unique_ptr<common_chat_templates, TemplatesDeleter> templates_;
+    // How this model's cache drops a suffix. Chosen from the loaded architecture.
+    std::unique_ptr<KvTrim> trim_;
 
     std::string active_session_id_;
     // Token ids currently stored in KV sequence 0, in order.
     std::vector<int32_t> active_tokens_;
+    // End offset of each message inside active_tokens_. Empty until a chat turn has measured them.
+    std::vector<size_t> message_ends_;
     std::vector<SessionKv> stored_sessions_;
+
+    // End offset of each message inside prompt_tokens. Reuses message_ends_ while that prefix still matches.
+    [[nodiscard]] std::vector<size_t> message_token_ends(std::span<const ChatMessage> messages,
+                                                         std::span<const ChatTool> tools,
+                                                         std::span<const int32_t> prompt_tokens) const;
+    // prompt_tokens is the full prompt. message_ends are this turn's measured ends, empty for a raw prompt.
+    [[nodiscard]] std::string generate_tokens(std::span<const int32_t> prompt_tokens, std::span<const size_t> message_ends,
+                                              const LlamaRequest &request);
 };

@@ -2,22 +2,23 @@
 
 #include "common/tools/tool_types.hpp"
 
+#include <atomic>
+
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "execute_command".
- *
- * This tool allows the agent to run any shell / bash command on the local system.
- * Standard output and standard error are combined (2>&1) and captured.
- * If the output is large, it is truncated at MAX_TOOL_OUTPUT_CHARS.
- *
- * JSON Parameters:
- *   - command (string, required): The shell command to run.
- *
- * Return value:
- *   - Exit code and full output (or error message).
- */
+inline constexpr std::string_view kExecuteCommandName = "execute_command";
+inline constexpr std::string_view kExecuteCommandDescription =
+    "Execute a shell / bash command on the local system and return the output and exit code.";
+inline constexpr std::string_view kExecuteCommandSchema = "arguments:\n      command: string (the shell command to run)";
+
+// First line of a result when the user aborts a running command. The duration follows.
+inline constexpr std::string_view kCommandAbortedPrefix = "error: command aborted after ";
+
 Tool create_execute_command_tool();
+
+// Polled while a command runs. The client points this at its Ctrl-C flag.
+// Null leaves the command running until it exits or hits the timeout.
+void set_execute_command_cancel(const std::atomic<bool> *cancel);
 
 /**
  * @brief Direct execution function for "execute_command".

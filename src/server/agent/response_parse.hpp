@@ -63,7 +63,8 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text, const Mode
 ParsedAssistantActions parse_assistant_actions(std::string_view text);
 
 /**
- * System prompt for the active model. Tool names and parameters come from the client.
+ * System prompt for the active model. The example matches the adapter's call syntax.
+ * Tool schemas go to the chat template with the request, not into this text again.
  * extra is appended as additional instructions.
  */
 string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools,

@@ -145,14 +145,12 @@ std::string web_search(const nlohmann::json & args) {
 
 Tool create_web_search_tool() {
     return {
-        .name = "web_search",
-        .description = "Search the internet for queries, web pages, and information.",
-        .schema_doc = "arguments:\n      query: string (search keywords or question)\n      limit: integer "
-                          "(optional maximum results to return, default 5)\n      categories: string (optional SearXNG "
-                          "categories such as general, science, it)\n      language: string (optional language code "
-                          "such as sv or en)\n      time_range: string (optional day, week, month, or year)",
+        .name = std::string(kWebSearchName),
+        .description = std::string(kWebSearchDescription),
+        .schema_doc = std::string(kWebSearchSchema),
         .execute = web_search,
-            .aliases = {"searxng_search", "searx_search", "internet_search", "search"}};
+        .present = [](const nlohmann::json &args) { return tool_arg_first(args, {"query", "q", "search_query", "input"}); },
+        .aliases = {"searxng_search", "searx_search", "internet_search", "search"}};
 }
 
 } // namespace Tools

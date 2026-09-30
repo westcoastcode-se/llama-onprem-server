@@ -1,5 +1,7 @@
 #include "tool_history.hpp"
 
+#include "common/tools/tool_subagent.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <format>
@@ -218,7 +220,7 @@ std::string shrink_tool_responses(std::string_view text)
         const std::string_view name = attribute(tag, "name");
         const std::string_view detail = attribute(tag, "detail");
         const bool small = body.size() <= kKeepChars && line_count(body) <= kKeepLines;
-        if (already_record(body, name) || small)
+        if (Tools::is_subagent_name(name) || already_record(body, name) || small)
         {
             out.append(text.substr(start, end + kClose.size() - start));
         }

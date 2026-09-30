@@ -551,29 +551,16 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
     return parse_assistant_actions(text, qwen);
 }
 
-string describe_tool(const ChatTool &tool)
-{
-    string text = std::format("- {}: {}\n", tool.name, tool.description);
-    for (const ToolParameter &parameter : tool_parameters(tool))
-    {
-        text += std::format("    {}: {}", parameter.name, parameter.type.empty() ? "value" : parameter.type);
-        if (!parameter.required)
-        {
-            text += ", optional";
-        }
-        if (!parameter.description.empty())
-        {
-            text += std::format(" ({})", parameter.description);
-        }
-        text.push_back('\n');
-    }
-    return text;
-}
-
 string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools, std::string_view extra,
                                    bool allow_questions, bool compress_tools)
 {
-    string prompt = "You are a coding agent. Solve the user's task carefully.\n\n"
+    string prompt = "You are a coding agent. Solve the user's task one step at a time.\n\n"
+                    "A turn is a few lines of reasoning and the tool calls for the next piece, then stop. "
+                    "Do not plan, draft, or paste the rest of the solution in reasoning. "
+                    "Reasoning must not contain source code. "
+                    "When creating or changing a program, inspect what is already there, change one piece, "
+                    "and wait for the tool result before the next piece. "
+                    "Do not write the whole program in one turn. On later turns, do not restate the plan.\n\n"
                     "You cannot run commands yourself. When you need the client to run something, "
                     "emit one or more tool calls. The client executes them and returns results.\n\n";
     if (tools.empty())
@@ -582,13 +569,8 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
     }
     else
     {
+        // Names and parameters travel with the chat template. This example is the syntax the adapter parses.
         prompt += adapter.example_call(tools);
-        prompt += "Available tools:\n";
-        for (const ChatTool &tool : tools)
-        {
-            prompt += describe_tool(tool);
-        }
-        prompt.push_back('\n');
     }
 
     if (allow_questions)
@@ -611,9 +593,10 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
 
     if (compress_tools)
     {
-        prompt += "Older tool results are replaced with one line naming the tool and its target, "
-                  "for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
-                  "Read the file or repeat the search when you need that text again.\n";
+        prompt += "Older tool results are replaced with one line naming the tool and its target "
+                  "when the next user message arrives, for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
+                  "They stay in full while tool calls are still in progress. Read the file or repeat the search "
+                  "if you need that text again after it was replaced. A sub_agent result stays in full.\n";
     }
 
     if (!extra.empty())
@@ -623,5 +606,6 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
         prompt.push_back('\n');
     }
 
+    prompt += "One step per turn. Do not draft the whole solution in reasoning.\n";
     return prompt;
 }

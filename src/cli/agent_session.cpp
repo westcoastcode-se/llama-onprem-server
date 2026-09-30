@@ -1,5 +1,6 @@
 #include "cli/agent_session.hpp"
 
+#include "cli/context_pressure.hpp"
 #include "cli/project_context.hpp"
 #include "cli/reply_stream.hpp"
 #include "cli/session_store.hpp"
@@ -14,7 +15,9 @@
 #include <cctype>
 #include <cstdio>
 #include <format>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -92,7 +95,66 @@ bool same_label(std::string_view left, std::string_view right)
     return true;
 }
 
-TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
+bool interactive_client(const AgentState &state)
+{
+    if (state.ui == nullptr || state.subagent)
+    {
+        return false;
+    }
+    if (state.exec && !isatty(STDIN_FILENO))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool server_waiting(const SessionResponse &session)
+{
+    if (session.state.value == SessionState::AwaitingTools)
+    {
+        return true;
+    }
+    return session.state.value == SessionState::AwaitingQuestion && session.pending_question.has_value();
+}
+
+// The server is paused for a client reply. Past 80% the user can compact before that POST.
+std::optional<TurnStatus> offer_compact(AgentState &state, const SessionResponse &session,
+                                        const std::function<TurnStatus()> &compact)
+{
+    if (!compact || !should_offer_compact(session.context_used, session.context_size, server_waiting(session),
+                                          interactive_client(state)))
+    {
+        return std::nullopt;
+    }
+    const auto picked = state.ui->choose(
+        std::format("Context is {}%. Compact before the next request?",
+                    context_percent(session.context_used, session.context_size)),
+        {"Continue", "Compact"}, 0);
+    if (!picked || *picked != 1)
+    {
+        return std::nullopt;
+    }
+    const SessionID before = state.session;
+    const TurnStatus status = compact();
+    if (status == TurnStatus::Cancelled || status == TurnStatus::ContextFull)
+    {
+        return status;
+    }
+    if (state.session != before || state.client == nullptr)
+    {
+        return TurnStatus::Idle;
+    }
+    const SessionResponse now = state.client->get_session(state.session);
+    show_context(state, now);
+    if (!server_waiting(now))
+    {
+        return TurnStatus::Idle;
+    }
+    return std::nullopt;
+}
+
+TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools,
+                    const std::function<TurnStatus()> &compact = {})
 {
     RestClient &client = *state.client;
     for (int round = 0; round < state.max_rounds; ++round)
@@ -133,6 +195,10 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
         {
             return TurnStatus::Idle;
         }
+        if (const std::optional<TurnStatus> stopped = offer_compact(state, session, compact))
+        {
+            return *stopped;
+        }
         if (session.state.value == SessionState::AwaitingTools)
         {
             auto results = ToolRunner{state}.run(session, tools);
@@ -140,8 +206,8 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             {
                 return TurnStatus::Cancelled;
             }
-            const json queued = client.post_tool_results(session_id, *results);
-            key = queued.at("key").get<JobKey>();
+            const SessionMessageResponse queued = client.post_tool_results(session_id, *results);
+            key = queued.key;
             continue;
         }
         if (session.state.value == SessionState::AwaitingQuestion && session.pending_question)
@@ -202,7 +268,8 @@ std::string context_full_reply(bool inherit)
                           "can be shorter. Do not repeat the same question.";
     if (inherit)
     {
-        message += " The copied conversation filled the window. Leave inherit false unless the task needs that history.";
+        message +=
+            " The copied conversation filled the window. Leave inherit false unless the task needs that history.";
     }
     return message;
 }
@@ -262,7 +329,7 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
             return "sub-agent stopped before it finished";
         }
         message.content = "Summarize the result for the parent. Cite file:line for each finding. "
-                          "Include files changed and commands run. Do not call tools.";
+                          "Include files changed and commands run. Do not paste file contents. Do not call tools.";
         queued = client.post_message(child, message);
         const TurnStatus summary_turn = run_turn(child_state, queued.key, base_tools_);
         if (summary_turn == TurnStatus::ContextFull)
@@ -297,7 +364,12 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
 
 TurnStatus AgentSession::drive(JobKey key)
 {
-    return run_turn(state_, key, tools_);
+    std::function<TurnStatus()> compact;
+    if (!compacting_)
+    {
+        compact = [this] { return this->compact(); };
+    }
+    return run_turn(state_, key, tools_, compact);
 }
 
 TurnStatus AgentSession::submit(const std::string &prompt)
@@ -315,7 +387,7 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
     request.questions = config.questions;
     request.compress_tools = config.compress_tools;
     std::string extra;
-    const std::string instructions = load_ai_instructions(state_.cwd.string());
+    const std::string instructions = load_agents_markdown(state_.cwd.string());
     if (!instructions.empty())
     {
         extra += "\nProject instructions:\n" + instructions + "\n";
@@ -331,11 +403,12 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
             extra += std::format("- {}: {} ({})\n", skill.name, skill.summary, skill.path);
         }
     }
-    request.system = std::format(
-        "You are a coding agent working in {}.\n"
-        "Use tools to inspect and change the project. Keep edits limited to the task.\n"
-        "Do not claim a command or a file change succeeded unless a tool result says so.\n{}",
-        state_.cwd.string(), extra);
+    request.system = std::format("You are a coding agent working in {}.\n"
+                                 "Use tools to inspect and change the project. Keep edits limited to the task.\n"
+                                 "Build and change programs one piece at a time. Do not think out or write the whole "
+                                 "solution in one turn.\n"
+                                 "Do not claim a command or a file change succeeded unless a tool result says so.\n{}",
+                                 state_.cwd.string(), extra);
     return request;
 }
 
@@ -395,6 +468,7 @@ SessionID AgentSession::open(const AgentConfig &config)
     }
     const SessionResponse created = state_.client->create_session(request);
     store.remember(stored, created.id, state_.cwd);
+    present_system(created);
     return created.id;
 }
 
@@ -412,7 +486,17 @@ SessionID AgentSession::open_with_history(std::vector<ChatMessage> history)
     request.messages = std::move(history);
     const SessionResponse created = state_.client->create_session(request);
     SessionStore{}.remember(endpoint_config(fresh), created.id, state_.cwd);
+    present_system(created);
     return created.id;
+}
+
+void AgentSession::present_system(const SessionResponse &created) const
+{
+    if (created.system_prompt.empty() || state_.ui == nullptr)
+    {
+        return;
+    }
+    state_.ui->show_system(created.system_prompt);
 }
 
 void AgentSession::refresh_status()
@@ -424,44 +508,69 @@ void AgentSession::refresh_status()
         return;
     }
     const ServerTarget &server = state_.servers.empty() ? ServerTarget{} : slot().target;
-    const std::string model = state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
-    state_.ui->set_status(std::format("{}   session {}   {}   {}", model, state_.session, approval_name(state_.approval),
-                                     state_.cwd.string()));
+    const std::string model =
+        state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
+    state_.ui->set_status(std::format("{}   session {}   {}   {}", model, state_.session,
+                                      approval_name(state_.approval), state_.cwd.string()));
     show_context(state_, state_.client->get_session(state_.session));
 }
 
-void AgentSession::compact()
+TurnStatus AgentSession::compact()
 {
-    const TurnStatus status = submit(
-        "Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
-        "files changed, commands that mattered, and what is still unfinished. Do not call tools.");
-    if (status != TurnStatus::Idle)
+    if (compacting_)
     {
-        return;
+        return TurnStatus::Idle;
     }
-    const std::string summary = last_assistant(state_.client->get_session(state_.session));
-    if (summary.empty())
+    std::string summary;
     {
-        state_.ui->note("compact produced no summary");
-        return;
+        compacting_ = true;
+        struct Clear
+        {
+            bool &flag;
+            ~Clear()
+            {
+                flag = false;
+            }
+        } clear{compacting_};
+
+        const TurnStatus status =
+            submit("Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
+                   "files changed, commands that mattered, and what is still unfinished. Do not call tools.");
+        if (status != TurnStatus::Idle)
+        {
+            return status;
+        }
+        summary = last_assistant(state_.client->get_session(state_.session));
+        if (summary.empty())
+        {
+            state_.ui->note("compact produced no summary");
+            return TurnStatus::Idle;
+        }
+        CreateSessionRequest request = make_request(config_);
+        for (const Tool &tool : tools_)
+        {
+            request.tools.push_back(ToolSchema::chat_tool(tool));
+        }
+        ChatMessage prior;
+        prior.role = "user";
+        prior.content = "Conversation so far:\n" + summary;
+        ChatMessage ack;
+        ack.role = "assistant";
+        ack.content = "I'll continue from that summary.";
+        request.messages = {std::move(prior), std::move(ack)};
+        const SessionResponse created = state_.client->create_session(request);
+        bind_session(created.id);
+        SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
+        present_system(created);
+        refresh_status();
+        state_.ui->note("compacted into session " + std::to_string(created.id));
     }
-    CreateSessionRequest request = make_request(config_);
-    for (const Tool &tool : tools_)
-    {
-        request.tools.push_back(ToolSchema::chat_tool(tool));
-    }
-    ChatMessage prior;
-    prior.role = "user";
-    prior.content = "Conversation so far:\n" + summary;
-    ChatMessage ack;
-    ack.role = "assistant";
-    ack.content = "I'll continue from that summary.";
-    request.messages = {std::move(prior), std::move(ack)};
-    const SessionResponse created = state_.client->create_session(request);
-    bind_session(created.id);
-    SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
-    refresh_status();
-    state_.ui->note("compacted into session " + std::to_string(created.id));
+
+    constexpr std::string_view kContinue = "Continue the unfinished work from the summary. Use tools.";
+    state_.ui->begin("you");
+    state_.ui->append(std::string(kContinue));
+    state_.ui->end();
+    return submit(std::string(kContinue));
 }
 
 void AgentSession::help() const
@@ -472,11 +581,12 @@ void AgentSession::help() const
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
                     "/map                  write .callisto/map.md from the tree\n"
-                    "/compact              summarize the chat into a new session\n"
+                    "/compact              summarize the chat into a new session and continue the work\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
-                    "Ctrl-C cancels the current generation.\n"
-                    "Click a thinking or tool line, or press Ctrl-O, to open or close it.");
+                    "Ctrl-C cancels the current generation. A running command is aborted, and the server is told how long it ran.\n"
+                    "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it.\n"
+                    "When context is over 80% and the server is waiting, you can compact before the next request.");
 }
 
 void AgentSession::diff() const
@@ -513,14 +623,16 @@ bool AgentSession::slash(const std::string &line)
         if (state_.session == 0 || state_.client == nullptr)
         {
             state_.ui->note(std::format("{}\napproval {}\ncwd {}", offline_message(), approval_name(state_.approval),
-                                       state_.cwd.string()));
+                                        state_.cwd.string()));
             return true;
         }
         const ServerTarget &server = state_.servers.empty() ? ServerTarget{} : slot().target;
-        const std::string model = state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
-        const std::string url = state_.servers.empty() ? std::format("http://{}:{}", config_.host, config_.port) : server.url();
+        const std::string model =
+            state_.servers.empty() ? std::format("{}:{}", config_.host, config_.port) : server.label();
+        const std::string url =
+            state_.servers.empty() ? std::format("http://{}:{}", config_.host, config_.port) : server.url();
         state_.ui->note(std::format("model {}\nserver {}\nsession {}\napproval {}\ncwd {}", model, url, state_.session,
-                                   approval_name(state_.approval), state_.cwd.string()));
+                                    approval_name(state_.approval), state_.cwd.string()));
         return true;
     }
     if (line == "/diff")
@@ -574,7 +686,7 @@ bool AgentSession::slash(const std::string &line)
             state_.ui->note(offline_message());
             return true;
         }
-        compact();
+        (void)compact();
         refresh_status();
         return true;
     }
@@ -800,7 +912,8 @@ bool AgentSession::model_command(std::string_view argument)
     }
     for (std::size_t i = 0; i < state_.servers.size(); ++i)
     {
-        if (same_label(state_.servers[i].target.label(), argument) || same_label(state_.servers[i].target.url(), argument) ||
+        if (same_label(state_.servers[i].target.label(), argument) ||
+            same_label(state_.servers[i].target.url(), argument) ||
             same_label(std::format("{}:{}", state_.servers[i].target.host, state_.servers[i].target.port), argument))
         {
             ++matches;

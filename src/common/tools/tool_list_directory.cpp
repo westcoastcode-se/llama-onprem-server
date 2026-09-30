@@ -68,10 +68,11 @@ std::string list_directory(const nlohmann::json & args) {
 
 Tool create_list_directory_tool() {
     return {
-        .name = "list_directory",
-        .description = "List files and subdirectories in a directory path.",
-        .schema_doc = "arguments:\n      path: string (optional directory path, defaults to '.')",
-        .execute = list_directory
+        .name = std::string(kListDirectoryName),
+        .description = std::string(kListDirectoryDescription),
+        .schema_doc = std::string(kListDirectorySchema),
+        .execute = list_directory,
+        .present = [](const nlohmann::json &args) { return tool_arg(args, "path"); }
     };
 }
 

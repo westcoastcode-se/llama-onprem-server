@@ -159,16 +159,21 @@ class RestClient
         return resp;
     }
 
-    json post_tool_results(const SessionID &session_id, const json &tool_results)
+    // tool_results stays JSON. The server names the calls, and each call's output is open-ended.
+    SessionMessageResponse post_tool_results(const SessionID &session_id, const json &tool_results)
     {
-        return request_json("POST", "/v1/sessions/" + std::to_string(session_id) + "/tools",
-                            json{{"tool_results", tool_results}}, 200);
+        auto resp = SessionMessageResponse::from_json(request_json(
+            "POST", "/v1/sessions/" + std::to_string(session_id) + "/tools", json{{"tool_results", tool_results}}, 200));
+        resp.validate();
+        return resp;
     }
 
-    json get_job(const SessionID session_id, const JobKey key)
+    MessageStatusResponse get_job(const SessionID session_id, const JobKey key)
     {
-        return request_json("GET", "/v1/sessions/" + std::to_string(session_id) + "/jobs/" +
-            std::to_string(key), std::nullopt, 200);
+        auto resp = MessageStatusResponse::from_json(request_json(
+            "GET", "/v1/sessions/" + std::to_string(session_id) + "/jobs/" + std::to_string(key), std::nullopt, 200));
+        resp.validate();
+        return resp;
     }
 
     /**

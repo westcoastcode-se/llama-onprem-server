@@ -4,19 +4,11 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "list_directory".
- *
- * Lists files and subdirectories in a specified directory path.
- * Shows item type indicators ([DIR] or [FILE]) and size in bytes for regular files.
- * Limits the number of returned entries to 250 to avoid overly large outputs.
- *
- * JSON Parameters:
- *   - path (string, optional, defaults to "."): Directory path to list.
- *
- * Return value:
- *   - Formatted directory listing, or error message.
- */
+inline constexpr std::string_view kListDirectoryName = "list_directory";
+inline constexpr std::string_view kListDirectoryDescription = "List files and subdirectories in a directory path.";
+inline constexpr std::string_view kListDirectorySchema =
+    "arguments:\n      path: string (optional directory path, defaults to '.')";
+
 Tool create_list_directory_tool();
 
 /**

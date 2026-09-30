@@ -4,24 +4,16 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "web_search".
- *
- * Searches the web via a local SearXNG meta-search engine (http://localhost:4488).
- * Supports search queries, categories, language/time filters, and result count limits.
- * Parses SearXNG JSON responses and formats direct answers, infoboxes,
- * search results (with titles, URLs, and snippets), and query suggestions.
- *
- * JSON Parameters:
- *   - query / q / search_query / input (string, required): Search query or keywords.
- *   - limit / count / max_results (integer, optional, defaults to 5, max 20): Result count.
- *   - categories (string, optional): SearXNG categories (e.g. "general", "science", "it").
- *   - language (string, optional): Language code (e.g. "sv", "en").
- *   - time_range (string, optional): Time filter (e.g. "day", "week", "month", "year").
- *
- * Return value:
- *   - Formatted list of search results or an error message.
- */
+inline constexpr std::string_view kWebSearchName = "web_search";
+inline constexpr std::string_view kWebSearchDescription = "Search the internet for queries, web pages, and information.";
+inline constexpr std::string_view kWebSearchSchema =
+    "arguments:\n"
+    "      query: string (search keywords or question)\n"
+    "      limit: integer (optional maximum results to return, default 5)\n"
+    "      categories: string (optional SearXNG categories such as general, science, it)\n"
+    "      language: string (optional language code such as sv or en)\n"
+    "      time_range: string (optional day, week, month, or year)";
+
 Tool create_web_search_tool();
 
 /**
