@@ -521,48 +521,56 @@ TurnStatus AgentSession::compact()
     {
         return TurnStatus::Idle;
     }
-    compacting_ = true;
-    struct Clear
+    std::string summary;
     {
-        bool &flag;
-        ~Clear()
+        compacting_ = true;
+        struct Clear
         {
-            flag = false;
-        }
-    } clear{compacting_};
+            bool &flag;
+            ~Clear()
+            {
+                flag = false;
+            }
+        } clear{compacting_};
 
-    const TurnStatus status =
-        submit("Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
-               "files changed, commands that mattered, and what is still unfinished. Do not call tools.");
-    if (status != TurnStatus::Idle)
-    {
-        return status;
+        const TurnStatus status =
+            submit("Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
+                   "files changed, commands that mattered, and what is still unfinished. Do not call tools.");
+        if (status != TurnStatus::Idle)
+        {
+            return status;
+        }
+        summary = last_assistant(state_.client->get_session(state_.session));
+        if (summary.empty())
+        {
+            state_.ui->note("compact produced no summary");
+            return TurnStatus::Idle;
+        }
+        CreateSessionRequest request = make_request(config_);
+        for (const Tool &tool : tools_)
+        {
+            request.tools.push_back(ToolSchema::chat_tool(tool));
+        }
+        ChatMessage prior;
+        prior.role = "user";
+        prior.content = "Conversation so far:\n" + summary;
+        ChatMessage ack;
+        ack.role = "assistant";
+        ack.content = "I'll continue from that summary.";
+        request.messages = {std::move(prior), std::move(ack)};
+        const SessionResponse created = state_.client->create_session(request);
+        bind_session(created.id);
+        SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
+        present_system(created);
+        refresh_status();
+        state_.ui->note("compacted into session " + std::to_string(created.id));
     }
-    const std::string summary = last_assistant(state_.client->get_session(state_.session));
-    if (summary.empty())
-    {
-        state_.ui->note("compact produced no summary");
-        return TurnStatus::Idle;
-    }
-    CreateSessionRequest request = make_request(config_);
-    for (const Tool &tool : tools_)
-    {
-        request.tools.push_back(ToolSchema::chat_tool(tool));
-    }
-    ChatMessage prior;
-    prior.role = "user";
-    prior.content = "Conversation so far:\n" + summary;
-    ChatMessage ack;
-    ack.role = "assistant";
-    ack.content = "I'll continue from that summary.";
-    request.messages = {std::move(prior), std::move(ack)};
-    const SessionResponse created = state_.client->create_session(request);
-    bind_session(created.id);
-    SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
-    present_system(created);
-    refresh_status();
-    state_.ui->note("compacted into session " + std::to_string(created.id));
-    return TurnStatus::Idle;
+
+    constexpr std::string_view kContinue = "Continue the unfinished work from the summary. Use tools.";
+    state_.ui->begin("you");
+    state_.ui->append(std::string(kContinue));
+    state_.ui->end();
+    return submit(std::string(kContinue));
 }
 
 void AgentSession::help() const
@@ -573,7 +581,7 @@ void AgentSession::help() const
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
                     "/map                  write .callisto/map.md from the tree\n"
-                    "/compact              summarize the chat into a new session\n"
+                    "/compact              summarize the chat into a new session and continue the work\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
                     "Ctrl-C cancels the current generation. A running command is aborted, and the server is told how long it ran.\n"

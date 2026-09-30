@@ -9,7 +9,8 @@ inline constexpr std::string_view kEditFileDescription =
     "Create a file or change an existing one by applying a unified diff. "
     "A new file is a patch of only + lines, with or without a --- /dev/null header. "
     "An existing file is changed by hunks found from their context lines. "
-    "The @@ line numbers are only a hint, so a stale number still applies when the surrounding lines match. "
+    "Every hunk starts with @@ -start,count +start,count @@. "
+    "Wrong numbers still apply when the surrounding lines match. "
     "A context line starts with a space, a removed line with '-', and an added line with '+'. "
     "Keep a few unchanged lines around every change. One call changes one file and may contain several hunks.\n"
     "New file:\n"
@@ -27,7 +28,7 @@ inline constexpr std::string_view kEditFileDescription =
 inline constexpr std::string_view kEditFileSchema =
     "arguments:\n"
     "      path: string (file to create or change)\n"
-    "      patch: string (unified diff. A new file has only + lines. Context lines start with a space)";
+    "      patch: string (unified diff. Each hunk starts with @@ -start,count +start,count @@. A new file has only + lines. Context lines start with a space)";
 
 Tool create_edit_file_tool();
 
