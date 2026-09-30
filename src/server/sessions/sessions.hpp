@@ -234,9 +234,8 @@ class Session
         }
 
         arm_rollback_unlocked();
-        // The new result stays intact. Earlier bodies become one line before this prompt is built,
-        // so a long review does not keep every file it already acted on.
-        shrink_stored_tool_results_unlocked();
+        // Leave earlier tool bodies unchanged. Rewriting them changes tokens already in the KV cache.
+        // Qwen3.5 cannot drop that suffix, so the whole prompt would be prefilled again.
         messages_.push_back(ChatMessage{.role = string(ChatMessage::ROLE_USER),
                                         .content = format_tool_results(body, compress_tools_),
                                         .reasoning_content = {}});

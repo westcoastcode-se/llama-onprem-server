@@ -78,6 +78,7 @@ add_executable(callisto_server
         src/server/agent/model_adapter.cpp
         src/common/log.cpp
         src/server/llm/llm_engine.cpp
+        src/server/llm/kv_trim.cpp
         src/common/tool_history.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
@@ -167,6 +168,7 @@ add_executable(callisto_tests
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp
+        src/server/llm/kv_trim.cpp
         src/common/tool_history.cpp)
 configure_localai_target(callisto_tests)
 target_compile_definitions(callisto_tests PRIVATE)

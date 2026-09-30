@@ -588,11 +588,9 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
     if (compress_tools)
     {
         prompt += "Older tool results are replaced with one line naming the tool and its target "
-                  "when a newer tool result arrives, for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
-                  "The latest result stays in full. A later read of the same file, or a file read after a diff, "
-                  "removes the earlier text before you see the new result. Write the conclusion that needs the "
-                  "earlier text before that next tool call. Read the file or repeat the search if you need those "
-                  "lines again. A sub_agent result stays in full.\n";
+                  "when the next user message arrives, for example `read_file src/cli/tui.cpp, lines 1-80 of 420`. "
+                  "They stay in full while tool calls are still in progress. Read the file or repeat the search "
+                  "if you need that text again after it was replaced. A sub_agent result stays in full.\n";
     }
 
     if (!extra.empty())

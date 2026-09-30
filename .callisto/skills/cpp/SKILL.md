@@ -99,6 +99,7 @@ You are an expert in modern C++ development with deep knowledge of C++23 standar
 
 ## Concurrency
 
+- Use `co_await` coroutines whenever possible
 - Use `std::thread` and `std::jthread` for threading
 - Use `std::mutex` and `std::lock_guard` for synchronization
 - Use `std::atomic` for lock-free operations

@@ -16,9 +16,7 @@ Review the change. The diff is the source. Unchanged files are not.
 
 ## What to write
 
-Write the findings for a file before the next tool call. A newer tool result replaces older file bodies with one line. That line still names the path and the line window, and `read_file` can fetch it again.
-
-Each finding is `path:line` and what is wrong: a bug, a regression, or a missing test. Skip style tours and narration of files you opened.
+Each finding is `path:line` and what is wrong: a bug, a regression, or a missing test. Skip style tours and narration of files you opened. File text from this turn stays until the user sends another message.
 
 ## Sub-agent
 

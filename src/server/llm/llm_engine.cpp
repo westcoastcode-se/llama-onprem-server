@@ -1,9 +1,9 @@
 #include "llm_engine.hpp"
 
 #include "common/log.hpp"
-#include "common/span_prefix.hpp"
 #include "context_params.hpp"
-#include "kv_match.hpp"
+#include "kv_trim.hpp"
+#include "token_offset.hpp"
 #include "utf8_stream.hpp"
 
 #include "chat.h"
@@ -65,6 +65,14 @@ std::vector<int32_t> tokenize_prompt(const llama_vocab *vocab, std::string_view 
     return out;
 }
 
+void clip_message_ends(std::vector<size_t> &ends, size_t n_tokens)
+{
+    while (!ends.empty() && ends.back() > n_tokens)
+    {
+        ends.pop_back();
+    }
+}
+
 void log_perf(llama_context *ctx)
 {
     const auto perf = llama_perf_context(ctx);
@@ -96,13 +104,16 @@ void LlamaEngine::TemplatesDeleter::operator()(common_chat_templates *templates)
     common_chat_templates_free(templates);
 }
 
+LlamaEngine::LlamaEngine() = default;
+
 LlamaEngine::~LlamaEngine() = default;
 
 LlamaEngine::LlamaEngine(LlamaEngine &&other) noexcept
     : config_(std::move(other.config_)), model_(std::move(other.model_)), vocab_(std::exchange(other.vocab_, nullptr)),
       ctx_(std::move(other.ctx_)), smpl_(std::move(other.smpl_)), templates_(std::move(other.templates_)),
+      trim_(std::move(other.trim_)),
       active_session_id_(std::move(other.active_session_id_)), active_tokens_(std::move(other.active_tokens_)),
-      stored_sessions_(std::move(other.stored_sessions_))
+      message_ends_(std::move(other.message_ends_)), stored_sessions_(std::move(other.stored_sessions_))
 {
 }
 
@@ -116,8 +127,10 @@ LlamaEngine &LlamaEngine::operator=(LlamaEngine &&other) noexcept
         ctx_ = std::move(other.ctx_);
         smpl_ = std::move(other.smpl_);
         templates_ = std::move(other.templates_);
+        trim_ = std::move(other.trim_);
         active_session_id_ = std::move(other.active_session_id_);
         active_tokens_ = std::move(other.active_tokens_);
+        message_ends_ = std::move(other.message_ends_);
         stored_sessions_ = std::move(other.stored_sessions_);
     }
     return *this;
@@ -191,6 +204,8 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
     }
 
     engine.vocab_ = llama_model_get_vocab(engine.model_.get());
+    engine.trim_ = make_kv_trim(engine.model_.get());
+    log_info("[llm] kv trim ", engine.trim_->name());
 
     std::string override_src;
     if (!config.template_path.empty())
@@ -263,6 +278,7 @@ void LlamaEngine::clone_session(const std::string &from, const std::string &to)
         }
         copy.state.resize(written);
         copy.tokens = active_tokens_;
+        copy.message_ends = message_ends_;
     }
     else
     {
@@ -272,6 +288,7 @@ void LlamaEngine::clone_session(const std::string &from, const std::string &to)
             return;
         }
         copy.tokens = it->tokens;
+        copy.message_ends = it->message_ends;
         copy.state = it->state;
     }
 
@@ -324,45 +341,17 @@ bool LlamaEngine::trim_kv_to(size_t n_tokens)
     if (!ctx_)
     {
         active_tokens_.resize(n_tokens);
+        clip_message_ends(message_ends_, active_tokens_.size());
         return true;
     }
-
-    llama_memory_t memory = llama_get_memory(ctx_.get());
-    auto clear_sequence = [&] {
-        if (!llama_memory_seq_rm(memory, 0, 0, -1))
-        {
-            llama_memory_clear(memory, true);
-        }
-        active_tokens_.clear();
-    };
-    // seq_rm can return true for a hybrid model without moving the recurrent tail. The attention
-    // cells then stay past that tail, and every new token takes another cell until none are free.
-    auto tail_ok = [&](size_t n) {
-        return kv_tail_matches(n, llama_memory_seq_pos_max(memory, 0));
-    };
-    if (n_tokens == active_tokens_.size() && tail_ok(n_tokens))
+    const bool kept = trim_->trim(ctx_.get(), active_tokens_, n_tokens, active_session_id_);
+    if (!kept)
     {
-        return true;
+        message_ends_.clear();
+        return false;
     }
-
-    if (n_tokens < active_tokens_.size())
-    {
-        // A hybrid model such as Qwen3.5 keeps one recurrent state. It can drop the whole sequence,
-        // but not an arbitrary suffix. A reported success still has to leave the tail on the last kept token.
-        const bool removed = llama_memory_seq_rm(memory, 0, static_cast<llama_pos>(n_tokens), -1);
-        if (removed)
-        {
-            active_tokens_.resize(n_tokens);
-            if (tail_ok(n_tokens))
-            {
-                return true;
-            }
-        }
-    }
-
-    log_info("[llm] session ", active_session_id_, " cannot drop a kv suffix at ", n_tokens, ", recomputing the prompt");
-    clear_sequence();
-    return false;
+    clip_message_ends(message_ends_, active_tokens_.size());
+    return true;
 }
 
 void LlamaEngine::park_active_session()
@@ -383,6 +372,7 @@ void LlamaEngine::park_active_session()
             SessionKv slot;
             slot.id = active_session_id_;
             slot.tokens = active_tokens_;
+            slot.message_ends = message_ends_;
             slot.used = std::chrono::steady_clock::now();
             slot.state.resize(bytes);
             const size_t written = llama_state_seq_get_data(ctx_.get(), slot.state.data(), slot.state.size(), 0);
@@ -423,9 +413,11 @@ bool LlamaEngine::unpark_session(const std::string &session_id)
     {
         log_error("[llm] session ", session_id, " kv restore failed");
         active_tokens_.clear();
+        message_ends_.clear();
         return false;
     }
     active_tokens_ = std::move(slot.tokens);
+    message_ends_ = std::move(slot.message_ends);
     return true;
 }
 
@@ -438,6 +430,7 @@ void LlamaEngine::activate_session(const std::string &session_id)
     park_active_session();
     active_session_id_ = session_id;
     active_tokens_.clear();
+    message_ends_.clear();
     if (!unpark_session(session_id))
     {
         (void)trim_kv_to(0);
@@ -493,9 +486,9 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
         common_chat_msg msg;
         msg.role = message.role;
         msg.content = message.content;
-        // The stored message keeps reasoning_content for the client. Putting it in the
-        // template would replay every earlier thought on the next turn. This turn still
-        // thinks: enable_thinking opens a new block in the generation prompt.
+        // The next prompt has to reproduce the <think> block that was generated. Qwen3.5
+        // cannot drop a KV suffix, so a mismatch prefills the whole prompt again.
+        msg.reasoning_content = message.reasoning_content;
         inputs.messages.push_back(std::move(msg));
     }
     inputs.tools.reserve(tools.size());
@@ -589,7 +582,59 @@ void LlamaEngine::decode_tokens(std::span<const int32_t> tokens, std::move_only_
     }
 }
 
+std::vector<size_t> LlamaEngine::message_token_ends(std::span<const ChatMessage> messages,
+                                                           std::span<const ChatTool> tools,
+                                                           std::span<const int32_t> prompt_tokens) const
+{
+    std::vector<size_t> ends;
+    size_t start = 0;
+    // A stored end that is still a prefix of this prompt belongs to an unchanged message.
+    if (!message_ends_.empty())
+    {
+        const size_t last = message_ends_.back();
+        if (last <= prompt_tokens.size() && last <= active_tokens_.size() &&
+            std::equal(active_tokens_.begin(), active_tokens_.begin() + static_cast<std::ptrdiff_t>(last),
+                       prompt_tokens.begin()))
+        {
+            ends = message_ends_;
+            start = message_ends_.size();
+        }
+    }
+
+    for (size_t i = start; i < messages.size(); ++i)
+    {
+        // add_assistant false: the generation prompt is not part of any message.
+        const std::string text = format_messages(messages.subspan(0, i + 1), false, tools);
+        const std::vector<int32_t> tokens = tokenize_prompt(vocab_, text);
+        if (tokens.size() > prompt_tokens.size())
+        {
+            break;
+        }
+        if (!std::equal(tokens.begin(), tokens.end(), prompt_tokens.begin()))
+        {
+            break;
+        }
+        if (!ends.empty() && tokens.size() < ends.back())
+        {
+            break;
+        }
+        ends.push_back(tokens.size());
+    }
+    return ends;
+}
+
 std::string LlamaEngine::generate(std::string_view prompt, const LlamaRequest &request)
+{
+    if (!ctx_ || !vocab_ || !smpl_)
+    {
+        throw LlamaRuntimeError("LlamaEngine is not initialized");
+    }
+    const std::vector<int32_t> prompt_tokens = tokenize_prompt(vocab_, prompt);
+    return generate_tokens(prompt_tokens, {}, request);
+}
+
+std::string LlamaEngine::generate_tokens(std::span<const int32_t> prompt_tokens, std::span<const size_t> message_ends,
+                                         const LlamaRequest &request)
 {
     if (!ctx_ || !vocab_ || !smpl_)
     {
@@ -613,7 +658,6 @@ std::string LlamaEngine::generate(std::string_view prompt, const LlamaRequest &r
         }
     } perf{ctx_.get()};
 
-    const std::vector<int32_t> prompt_tokens = tokenize_prompt(vocab_, prompt);
     if (prompt_tokens.empty())
     {
         throw LlamaRuntimeError("failed to tokenize prompt");
@@ -624,11 +668,9 @@ std::string LlamaEngine::generate(std::string_view prompt, const LlamaRequest &r
         throw LlamaContextFull("context size reached limit");
     }
 
-    // Anything past the shared token prefix is stale: a different reply, an edited message, or a
-    // template that rewrote an earlier turn. Drop it before decoding the new tail. A model that
-    // cannot drop a suffix clears the sequence, and this turn decodes the whole prompt.
-    size_t checkpoint = common_prefix_length(std::span<const int32_t>(active_tokens_),
-                                             std::span<const int32_t>(prompt_tokens));
+    // Stored ends name the unchanged messages. The scan after the last matching end covers the
+    // generated tail. A model that cannot drop a suffix clears the sequence instead.
+    size_t checkpoint = checkpoint_from_offsets(active_tokens_, prompt_tokens, message_ends_);
     if (!trim_kv_to(checkpoint))
     {
         checkpoint = 0;
@@ -717,6 +759,10 @@ std::string LlamaEngine::generate(std::string_view prompt, const LlamaRequest &r
                 request.token_cb(std::move(remaining));
             }
         }
+        if (!message_ends.empty())
+        {
+            message_ends_.assign(message_ends.begin(), message_ends.end());
+        }
         return response;
     }
     catch (const LlamaAbort &)
@@ -737,8 +783,10 @@ std::string LlamaEngine::chat(std::span<const ChatMessage> messages, const Llama
     {
         throw LlamaRuntimeError("LlamaEngine is not initialized");
     }
-    // The whole formatted prompt is passed through. generate() keeps the cached token prefix
-    // and decodes only the suffix, which is where the new turn and its end marker live.
+    // Offsets stay on this session. The client sends messages and never a token position.
+    activate_session(request.session_id);
     const std::string prompt = format_messages(messages, true, request.tools);
-    return generate(prompt, request);
+    const std::vector<int32_t> prompt_tokens = tokenize_prompt(vocab_, prompt);
+    const std::vector<size_t> ends = message_token_ends(messages, request.tools, prompt_tokens);
+    return generate_tokens(prompt_tokens, ends, request);
 }

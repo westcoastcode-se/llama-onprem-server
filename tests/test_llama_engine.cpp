@@ -3,6 +3,8 @@
 #include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
 #include "server/llm/kv_match.hpp"
+#include "server/llm/kv_trim.hpp"
+#include "server/llm/token_offset.hpp"
 #include "tests.hpp"
 
 #include "chat.h"
@@ -327,6 +329,38 @@ int test_system_prompt_uses_client_tools()
     return EXIT_SUCCESS;
 }
 
+int test_checkpoint_uses_server_offsets()
+{
+    const int32_t active[] = {1, 2, 3, 4, 5, 6};
+    const int32_t extended[] = {1, 2, 3, 4, 5, 6, 7};
+    const size_t ends[] = {3, 6};
+    // Both stored spans match, so the checkpoint is the whole cached sequence.
+    assertEquals(static_cast<size_t>(6), checkpoint_from_offsets(active, extended, ends));
+    // No stored ends: the same answer as a plain token scan.
+    assertEquals(common_prefix_length(std::span<const int32_t>(active), std::span<const int32_t>(extended)),
+                 checkpoint_from_offsets(active, extended, std::span<const size_t>{}));
+
+    // The span [0, 3) disagrees, so the scan stops at the tokens before that edit.
+    const int32_t edited[] = {1, 2, 9, 4, 5, 6};
+    assertEquals(static_cast<size_t>(2), checkpoint_from_offsets(active, edited, ends));
+
+    // One stored end anchors the match. A matching tail is kept; a later edit stops the scan there.
+    const size_t kept[] = {3};
+    const int32_t tail_edit[] = {1, 2, 3, 4, 9, 6};
+    assertEquals(static_cast<size_t>(4), checkpoint_from_offsets(active, tail_edit, kept));
+    assertEquals(static_cast<size_t>(6), checkpoint_from_offsets(active, extended, kept));
+    return EXIT_SUCCESS;
+}
+
+int test_kv_trim_follows_the_cache()
+{
+    const auto hybrid = make_kv_trim(true);
+    assertEquals("qwen", std::string(hybrid->name()));
+    const auto attention = make_kv_trim(false);
+    assertEquals("suffix", std::string(attention->name()));
+    return EXIT_SUCCESS;
+}
+
 int test_kv_tail_matches_hybrid_suffix()
 {
     assertTrue(kv_tail_matches(0, -1));
@@ -382,6 +416,8 @@ int test_llama_engine()
     RUN_TEST(test_tool_parse_question);
     RUN_TEST(test_system_prompt_uses_client_tools);
     RUN_TEST(test_model_adapter_selection);
+    RUN_TEST(test_checkpoint_uses_server_offsets);
+    RUN_TEST(test_kv_trim_follows_the_cache);
     RUN_TEST(test_kv_tail_matches_hybrid_suffix);
     return EXIT_SUCCESS;
 }

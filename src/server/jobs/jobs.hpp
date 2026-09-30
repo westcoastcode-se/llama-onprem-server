@@ -221,6 +221,15 @@ struct Task
     {
         return o << "Task(" << ptr.key << ")";
     }
+
+    friend std::ostream &operator<<(std::ostream &o, const shared_ptr<Task> &ptr)
+    {
+        if (!ptr)
+        {
+            return o << "Task(null)";
+        }
+        return o << *ptr;
+    }
 };
 
 /**

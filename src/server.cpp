@@ -258,7 +258,13 @@ int main(int argc, char **argv)
 
     // Add simple request logging
     svr.set_pre_routing_handler([](const auto &req, auto &) {
-        log_info(req.method, " ", req.path);
+        if (Logger::is_level(Logger::LEVEL_DEBUG))
+        {
+            log_info("Method: ", req.method, " Path: ", req.path, " Body: ", req.body);
+        } else
+        {
+            log_info("Method: ", req.method, " Path: ", req.path);
+        }
         return httplib::Server::HandlerResponse::Unhandled;
     });
 

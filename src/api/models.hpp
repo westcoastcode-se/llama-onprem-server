@@ -281,6 +281,7 @@ struct ParsedToolCall
         ParsedToolCall call;
         call.id = j["id"];
         call.name = j["name"];
+        // The server can request any tool, so the argument object stays JSON.
         call.arguments = j["arguments"];
         return call;
     }
@@ -316,6 +317,87 @@ struct ParsedQuestion
             }
         }
         return question;
+    }
+};
+
+/** GET /v1/sessions/:id/jobs/:key */
+struct MessageStatusResponse
+{
+    JobKey key = 0;
+    JobState state = JobState::Unknown;
+    bool done = false;
+    string content;
+    string error;
+    string error_code;
+    string reasoning;
+    vector<ParsedToolCall> tool_calls;
+    optional<ParsedQuestion> question;
+
+    void validate() const
+    {
+        if (key == 0)
+            throw BadRequest{"property 'key' is required"};
+        if (state.value == JobState::Unknown)
+            throw BadRequest{"property 'state' is required"};
+    }
+
+    [[nodiscard]] json to_json() const
+    {
+        json j{{"key", key}, {"state", state.to_string()}, {"done", done}, {"content", content}};
+        if (!error.empty())
+        {
+            j["error"] = error;
+        }
+        if (!error_code.empty())
+        {
+            j["error_code"] = error_code;
+        }
+        if (!reasoning.empty())
+        {
+            j["reasoning_content"] = reasoning;
+        }
+        if (!tool_calls.empty())
+        {
+            auto arr = nlohmann::json::array();
+            for (const auto &tc : tool_calls)
+            {
+                arr.push_back(tc.to_json());
+            }
+            j["tool_calls"] = arr;
+        }
+        if (question)
+        {
+            j["question"] = question->to_json();
+        }
+        return j;
+    }
+
+    static MessageStatusResponse from_json(const json &j)
+    {
+        MessageStatusResponse response;
+        response.key = j.value("key", JobKey());
+        if (j.contains("state") && j["state"].is_string())
+        {
+            response.state = JobState::to_enum(j["state"].get<string>());
+        }
+        response.done = j.value("done", false);
+        response.content = j.value("content", string());
+        response.error = j.value("error", string());
+        response.error_code = j.value("error_code", string());
+        response.reasoning = j.value("reasoning_content", string());
+        if (const auto arr = j.value("tool_calls", json::array()); arr.is_array())
+        {
+            response.tool_calls.reserve(arr.size());
+            for (const auto &item : arr)
+            {
+                response.tool_calls.push_back(ParsedToolCall::from_json(item));
+            }
+        }
+        if (j.contains("question") && j["question"].is_object())
+        {
+            response.question = ParsedQuestion::from_json(j["question"]);
+        }
+        return response;
     }
 };
 

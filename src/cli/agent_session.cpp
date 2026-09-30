@@ -140,8 +140,8 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
             {
                 return TurnStatus::Cancelled;
             }
-            const json queued = client.post_tool_results(session_id, *results);
-            key = queued.at("key").get<JobKey>();
+            const SessionMessageResponse queued = client.post_tool_results(session_id, *results);
+            key = queued.key;
             continue;
         }
         if (session.state.value == SessionState::AwaitingQuestion && session.pending_question)

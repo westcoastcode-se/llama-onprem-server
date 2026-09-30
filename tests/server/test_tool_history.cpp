@@ -111,15 +111,15 @@ int test_shrink_keeps_subagent_body()
     return EXIT_SUCCESS;
 }
 
-int test_older_tool_results_shrink_when_the_next_arrives()
+int test_tool_results_stay_until_the_next_user_turn()
 {
     QwenAdapter adapter;
     Session session(adapter);
     session.configure({});
     assertTrue(session.to_response().compress_tools);
     assertTrue(session.to_response().system_prompt.find("Older tool results") != std::string::npos);
-    assertTrue(session.to_response().system_prompt.find("The latest result stays in full.") != std::string::npos);
-    assertTrue(session.to_response().system_prompt.find("A later read of the same file") != std::string::npos);
+    assertTrue(session.to_response().system_prompt.find("while tool calls are still in progress") != std::string::npos);
+    assertTrue(session.to_response().system_prompt.find("A later read of the same file") == std::string::npos);
 
     post_user(session, "fix it");
     ParsedAssistantActions read;
@@ -147,9 +147,7 @@ int test_older_tool_results_shrink_when_the_next_arrives()
     search_item.detail = "Session::accept";
     search_item.content = long_search();
     post_tools(session, std::move(search_item));
-    assertTrue(session.to_response().messages[2].content.find("read_file src/cli/tui.cpp, lines 1-4 of 90") !=
-               std::string::npos);
-    assertTrue(session.to_response().messages[2].content.find("1: alpha") == std::string::npos);
+    assertTrue(session.to_response().messages[2].content.find("1: alpha") != std::string::npos);
     assertTrue(session.to_response().messages.back().content.find("hit one") != std::string::npos);
 
     finish(session, "edited it");
@@ -296,7 +294,7 @@ int test_tool_history()
     RUN_TEST(test_shrink_keeps_short_and_records);
     RUN_TEST(test_shrink_names_the_target);
     RUN_TEST(test_shrink_keeps_subagent_body);
-    RUN_TEST(test_older_tool_results_shrink_when_the_next_arrives);
+    RUN_TEST(test_tool_results_stay_until_the_next_user_turn);
     RUN_TEST(test_subagent_result_survives_the_next_user_turn);
     RUN_TEST(test_question_answer_keeps_the_tool_result);
     RUN_TEST(test_compress_tools_can_be_off);
