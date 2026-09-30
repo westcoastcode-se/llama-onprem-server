@@ -57,20 +57,9 @@ std::string subagent_request_text(const nlohmann::json &args)
 
 Tool create_subagent_tool(SubagentRunner runner) {
     return {
-        .name = "sub_agent",
-        .description =
-                "Delegate a task or multiple sub-tasks to an isolated sub-agent. The sub-agent runs in an independent "
-                "context with full tool access (read/write files, execute commands, search code, web search, etc.) and "
-                "returns only its final result. Supports executing a single task or multiple tasks in a controlled "
-                "sequential order. Always use sub-agents when exploring large codebases, inspecting multiple or large "
-                "files, or investigating complex components to keep large reads out of the parent session. "
-                "The result is a summary that cites file:line and does not include file contents, plus git diff --stat when "
-                "files changed. "
-                "Starts with an empty conversation unless inherit is true. If the result says the context is full, "
-                "call again with a smaller task so the answer can be shorter.",
-        .schema_doc = "arguments:\n      task: string (one sub-task, or a JSON array of sub-tasks)\n      tasks: "
-                          "array (optional list of tasks to execute in order)\n      inherit: boolean (optional, default false; "
-                          "copy this conversation into the sub-agent only when the task needs it)",
+        .name = std::string(kSubagentName),
+        .description = std::string(kSubagentDescription),
+        .schema_doc = std::string(kSubagentSchema),
         .execute = [runner](const nlohmann::json &args) -> std::string {
                 if (!runner)
                 {

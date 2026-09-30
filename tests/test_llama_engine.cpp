@@ -309,6 +309,9 @@ int test_system_prompt_uses_client_tools()
 
     const QwenAdapter qwen;
     const std::string qwen_prompt = default_agent_system_prompt(qwen, tools, "Be brief", true);
+    assertTrue(qwen_prompt.find("one step at a time") != std::string::npos);
+    assertTrue(qwen_prompt.find("Do not write the whole program in one turn.") != std::string::npos);
+    assertTrue(qwen_prompt.find("One step per turn.") != std::string::npos);
     assertTrue(qwen_prompt.find("<function=ping>") != std::string::npos);
     assertTrue(qwen_prompt.find("<parameter=host>") != std::string::npos);
     assertTrue(qwen_prompt.find("Ping a host") == std::string::npos);

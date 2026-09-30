@@ -73,11 +73,11 @@ static int test_parse_allowed_tools() {
 static int test_is_tool_allowed() {
     const std::vector<std::string> allowed = {"read_file"};
     assertTrue(is_tool_allowed("Read_File", false, allowed));
-    assertTrue(is_tool_allowed("write_file", true, allowed));
-    assertTrue(!is_tool_allowed("write_file", false, allowed));
+    assertTrue(is_tool_allowed("edit_file", true, allowed));
+    assertTrue(!is_tool_allowed("edit_file", false, allowed));
 
     const std::vector<std::string> all = {"*"};
-    assertTrue(is_tool_allowed("write_file", false, all));
+    assertTrue(is_tool_allowed("edit_file", false, all));
     return EXIT_SUCCESS;
 }
 

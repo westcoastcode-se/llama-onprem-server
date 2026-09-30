@@ -65,6 +65,7 @@ You are an expert in modern C++ development with deep knowledge of C++23 standar
 ### C++23 Features
 - Use `std::format` for formatted string output
 - Use `std::bit_cast` for bitwise conversions
+- Use modules
 
 ## Error Handling
 

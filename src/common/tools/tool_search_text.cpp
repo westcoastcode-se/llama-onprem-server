@@ -35,7 +35,7 @@ static bool should_ignore_dir_name(std::string_view name) {
     return is_skipped_directory(name);
 }
 
-// text1|text2 is either alternative, not the literal pipe, unless is_regex is set.
+// method extended: text1|text2 is either alternative, and the pipe itself is not searched for.
 static std::vector<std::string> literal_alternatives(std::string_view query)
 {
     std::vector<std::string> parts;
@@ -113,9 +113,17 @@ std::string search_text(const nlohmann::json & args) {
         case_sensitive = args["case_sensitive"].get<bool>();
     }
 
-    bool is_regex = false;
-    if (args.contains("is_regex") && args["is_regex"].is_boolean()) {
-        is_regex = args["is_regex"].get<bool>();
+    std::string method = "text";
+    if (args.contains("method") && args["method"].is_string()) {
+        method = args["method"].get<std::string>();
+    }
+    if (method.empty()) {
+        method = "text";
+    }
+    const bool is_regex = method == "regex";
+    const bool is_extended = method == "extended";
+    if (!is_regex && !is_extended && method != "text") {
+        return "error: method must be text, extended, or regex";
     }
 
     int max_matches = 100;
@@ -126,6 +134,12 @@ std::string search_text(const nlohmann::json & args) {
     }
     if (max_matches < 1) max_matches = 1;
 
+    int before = 3;
+    if (args.contains("before") && args["before"].is_number()) {
+        before = args["before"].get<int>();
+    }
+    if (before < 0) before = 0;
+
     int context = 2;
     if (args.contains("context") && args["context"].is_number()) {
         context = args["context"].get<int>();
@@ -133,7 +147,7 @@ std::string search_text(const nlohmann::json & args) {
     if (context < 0) context = 0;
     if (context > 5) context = 5;
 
-    // Prepare regex or literal alternatives. A pipe separates alternatives unless is_regex is set.
+    // text is a literal. extended splits on |. regex is an ECMAScript pattern.
     std::regex reg_pattern;
     std::vector<std::string> needles;
     if (is_regex) {
@@ -147,7 +161,7 @@ std::string search_text(const nlohmann::json & args) {
             return std::string("error: invalid regular expression: ") + e.what();
         }
     } else {
-        needles = literal_alternatives(query);
+        needles = is_extended ? literal_alternatives(query) : std::vector<std::string>{query};
         if (needles.empty()) {
             return "error: missing required string argument 'query' or 'pattern'";
         }
@@ -227,15 +241,23 @@ std::string search_text(const nlohmann::json & args) {
 
         std::vector<char> show(lines.size(), 0);
         for (const int hit : hits) {
-            const int from = std::max(0, hit - context);
+            const int from = hit > before ? hit - before : 0;
             const int to = std::min(static_cast<int>(lines.size()) - 1, hit + context);
             for (int i = from; i <= to; ++i) {
                 show[static_cast<std::size_t>(i)] = 1;
             }
         }
+        bool named = false;
         for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
             if (show[static_cast<std::size_t>(i)] == 0) continue;
-            result += file_path.string() + ":" + std::to_string(i + 1) + ": " + lines[static_cast<std::size_t>(i)] + "\n";
+            if (!named) {
+                if (!result.empty()) {
+                    result += "\n";
+                }
+                result += file_path.string() + "\n";
+                named = true;
+            }
+            result += std::to_string(i + 1) + ": " + lines[static_cast<std::size_t>(i)] + "\n";
             if (result.size() > MAX_TOOL_OUTPUT_CHARS) {
                 truncated = true;
                 return;
@@ -283,13 +305,9 @@ std::string search_text(const nlohmann::json & args) {
 
 Tool create_search_text_tool() {
     return {
-        .name = "search_text",
-        .description = "Search for text or regular expressions across files in the project.",
-        .schema_doc =
-            "arguments:\n      query: string (text to find; text1|text2 matches either alternative. Set is_regex for a regular expression)\n      path: string "
-            "(optional directory or file to search in, default '.')\n      file_pattern: string (optional filename "
-            "filter or extension, e.g. '.cpp')\n      case_sensitive: boolean (optional, default false)\n      "
-            "is_regex: boolean (optional, default false)\n      context: integer (optional lines before and after each hit, default 2, max 5)\n      max_matches: integer (optional, default 100)",
+        .name = std::string(kSearchTextName),
+        .description = std::string(kSearchTextDescription),
+        .schema_doc = std::string(kSearchTextSchema),
         .execute = search_text,
         .present = [](const nlohmann::json &args) {
             return tool_arg_first(args, {"query", "pattern", "text", "search", "path"});

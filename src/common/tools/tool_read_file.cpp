@@ -73,11 +73,9 @@ std::string read_file(const nlohmann::json & args) {
 
 Tool create_read_file_tool() {
     return {
-        .name = "read_file",
-        .description = "Read file contents with line numbers. The first line states the window, for example lines 1-80 of 420.",
-        .schema_doc =
-                "arguments:\n      path: string (path to the file)\n      offset: integer (optional start line, "
-                "1-indexed, default 1)\n      limit: integer (optional maximum lines to read, default 500)",
+        .name = std::string(kReadFileName),
+        .description = std::string(kReadFileDescription),
+        .schema_doc = std::string(kReadFileSchema),
         .execute = read_file,
         .present = [](const nlohmann::json &args) { return tool_arg(args, "path"); }
     };

@@ -4,21 +4,14 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "web_fetch".
- *
- * Fetches the content of a web page via HTTP or HTTPS.
- * By default, HTML is automatically converted into clean, readable text
- * (scripts, styles, and tags are removed). Raw HTML can be requested if needed.
- * Output is truncated at MAX_TOOL_OUTPUT_CHARS.
- *
- * JSON Parameters:
- *   - url (string, required): The full web address (http:// or https://).
- *   - type (string, optional, defaults to "text"): "text" for cleaned text or "html" for raw HTML.
- *
- * Return value:
- *   - HTTP status code followed by web page content or an error message.
- */
+inline constexpr std::string_view kWebFetchName = "web_fetch";
+inline constexpr std::string_view kWebFetchDescription =
+    "Fetch the readable text or html content of a web page via HTTP(S).";
+inline constexpr std::string_view kWebFetchSchema =
+    "arguments:\n"
+    "      url: string (absolute http/https url)\n"
+    "      type: string (optional, text or html, defaults to text)";
+
 Tool create_web_fetch_tool();
 
 /**

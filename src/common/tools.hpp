@@ -13,7 +13,7 @@
 #include "common/tools/tool_execute_command.hpp"
 #include "common/tools/tool_read_file.hpp"
 #include "common/tools/tool_write_file.hpp"
-#include "common/tools/tool_apply_patch.hpp"
+#include "common/tools/tool_edit_file.hpp"
 #include "common/tools/tool_list_directory.hpp"
 #include "common/tools/tool_file_search.hpp"
 #include "common/tools/tool_search_text.hpp"

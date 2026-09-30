@@ -1,5 +1,6 @@
 #include "cli/agent_session.hpp"
 
+#include "cli/context_pressure.hpp"
 #include "cli/project_context.hpp"
 #include "cli/reply_stream.hpp"
 #include "cli/session_store.hpp"
@@ -14,7 +15,9 @@
 #include <cctype>
 #include <cstdio>
 #include <format>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -92,7 +95,66 @@ bool same_label(std::string_view left, std::string_view right)
     return true;
 }
 
-TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
+bool interactive_client(const AgentState &state)
+{
+    if (state.ui == nullptr || state.subagent)
+    {
+        return false;
+    }
+    if (state.exec && !isatty(STDIN_FILENO))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool server_waiting(const SessionResponse &session)
+{
+    if (session.state.value == SessionState::AwaitingTools)
+    {
+        return true;
+    }
+    return session.state.value == SessionState::AwaitingQuestion && session.pending_question.has_value();
+}
+
+// The server is paused for a client reply. Past 80% the user can compact before that POST.
+std::optional<TurnStatus> offer_compact(AgentState &state, const SessionResponse &session,
+                                        const std::function<TurnStatus()> &compact)
+{
+    if (!compact || !should_offer_compact(session.context_used, session.context_size, server_waiting(session),
+                                          interactive_client(state)))
+    {
+        return std::nullopt;
+    }
+    const auto picked = state.ui->choose(
+        std::format("Context is {}%. Compact before the next request?",
+                    context_percent(session.context_used, session.context_size)),
+        {"Continue", "Compact"}, 0);
+    if (!picked || *picked != 1)
+    {
+        return std::nullopt;
+    }
+    const SessionID before = state.session;
+    const TurnStatus status = compact();
+    if (status == TurnStatus::Cancelled || status == TurnStatus::ContextFull)
+    {
+        return status;
+    }
+    if (state.session != before || state.client == nullptr)
+    {
+        return TurnStatus::Idle;
+    }
+    const SessionResponse now = state.client->get_session(state.session);
+    show_context(state, now);
+    if (!server_waiting(now))
+    {
+        return TurnStatus::Idle;
+    }
+    return std::nullopt;
+}
+
+TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools,
+                    const std::function<TurnStatus()> &compact = {})
 {
     RestClient &client = *state.client;
     for (int round = 0; round < state.max_rounds; ++round)
@@ -132,6 +194,10 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools)
         if (session.state.value == SessionState::Idle || session.state.value == SessionState::Unknown)
         {
             return TurnStatus::Idle;
+        }
+        if (const std::optional<TurnStatus> stopped = offer_compact(state, session, compact))
+        {
+            return *stopped;
         }
         if (session.state.value == SessionState::AwaitingTools)
         {
@@ -298,7 +364,12 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
 
 TurnStatus AgentSession::drive(JobKey key)
 {
-    return run_turn(state_, key, tools_);
+    std::function<TurnStatus()> compact;
+    if (!compacting_)
+    {
+        compact = [this] { return this->compact(); };
+    }
+    return run_turn(state_, key, tools_, compact);
 }
 
 TurnStatus AgentSession::submit(const std::string &prompt)
@@ -334,6 +405,8 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
     }
     request.system = std::format("You are a coding agent working in {}.\n"
                                  "Use tools to inspect and change the project. Keep edits limited to the task.\n"
+                                 "Build and change programs one piece at a time. Do not think out or write the whole "
+                                 "solution in one turn.\n"
                                  "Do not claim a command or a file change succeeded unless a tool result says so.\n{}",
                                  state_.cwd.string(), extra);
     return request;
@@ -442,20 +515,34 @@ void AgentSession::refresh_status()
     show_context(state_, state_.client->get_session(state_.session));
 }
 
-void AgentSession::compact()
+TurnStatus AgentSession::compact()
 {
+    if (compacting_)
+    {
+        return TurnStatus::Idle;
+    }
+    compacting_ = true;
+    struct Clear
+    {
+        bool &flag;
+        ~Clear()
+        {
+            flag = false;
+        }
+    } clear{compacting_};
+
     const TurnStatus status =
         submit("Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
                "files changed, commands that mattered, and what is still unfinished. Do not call tools.");
     if (status != TurnStatus::Idle)
     {
-        return;
+        return status;
     }
     const std::string summary = last_assistant(state_.client->get_session(state_.session));
     if (summary.empty())
     {
         state_.ui->note("compact produced no summary");
-        return;
+        return TurnStatus::Idle;
     }
     CreateSessionRequest request = make_request(config_);
     for (const Tool &tool : tools_)
@@ -475,6 +562,7 @@ void AgentSession::compact()
     present_system(created);
     refresh_status();
     state_.ui->note("compacted into session " + std::to_string(created.id));
+    return TurnStatus::Idle;
 }
 
 void AgentSession::help() const
@@ -488,8 +576,9 @@ void AgentSession::help() const
                     "/compact              summarize the chat into a new session\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
-                    "Ctrl-C cancels the current generation.\n"
-                    "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it.");
+                    "Ctrl-C cancels the current generation. A running command is aborted, and the server is told how long it ran.\n"
+                    "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it.\n"
+                    "When context is over 80% and the server is waiting, you can compact before the next request.");
 }
 
 void AgentSession::diff() const
@@ -589,7 +678,7 @@ bool AgentSession::slash(const std::string &line)
             state_.ui->note(offline_message());
             return true;
         }
-        compact();
+        (void)compact();
         refresh_status();
         return true;
     }

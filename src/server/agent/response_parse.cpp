@@ -554,7 +554,13 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text)
 string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools, std::string_view extra,
                                    bool allow_questions, bool compress_tools)
 {
-    string prompt = "You are a coding agent. Solve the user's task carefully.\n\n"
+    string prompt = "You are a coding agent. Solve the user's task one step at a time.\n\n"
+                    "A turn is a few lines of reasoning and the tool calls for the next piece, then stop. "
+                    "Do not plan, draft, or paste the rest of the solution in reasoning. "
+                    "Reasoning must not contain source code. "
+                    "When creating or changing a program, inspect what is already there, change one piece, "
+                    "and wait for the tool result before the next piece. "
+                    "Do not write the whole program in one turn. On later turns, do not restate the plan.\n\n"
                     "You cannot run commands yourself. When you need the client to run something, "
                     "emit one or more tool calls. The client executes them and returns results.\n\n";
     if (tools.empty())
@@ -600,5 +606,6 @@ string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const 
         prompt.push_back('\n');
     }
 
+    prompt += "One step per turn. Do not draft the whole solution in reasoning.\n";
     return prompt;
 }

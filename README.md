@@ -148,7 +148,7 @@ Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one
 
 `AGENTS.md` is added to the system prompt when it exists, otherwise `AI_INSTRUCTIONS.md` or `.github/copilot-instructions.md`. The text is capped at 2000 characters. On startup the client rewrites `.callisto/map.md`, a short index of the tree, including the first level of `vendors`. Build hints come from a root `CMakeLists.txt`, `package.json`, `Cargo.toml`, or `pom.xml`. `/map` rewrites the index too. The model is told to read that file before searching an unfamiliar area. A skill is `.callisto/skills/<name>/SKILL.md`. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
 
-Tools the client can run: `read_file`, `write_file`, `apply_patch`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `apply_patch` replaces one unique stretch in an existing file. `write_file` creates a file or replaces all of it.
+Tools the client can run: `read_file`, `edit_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed.
 
 # Credits
 

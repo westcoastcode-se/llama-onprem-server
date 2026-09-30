@@ -10,6 +10,7 @@
 #include "client/rest_client.hpp"
 #include "common/log.hpp"
 #include "common/tools.hpp"
+#include "common/tools/tool_execute_command.hpp"
 
 #include <csignal>
 #include <memory>
@@ -30,6 +31,7 @@ void on_interrupt(int)
 int run_agent(const AgentConfig &incoming)
 {
     std::signal(SIGINT, on_interrupt);
+    Tools::set_execute_command_cancel(&g_agent_interrupt);
     Logger::set_level(Logger::LEVEL_ERROR);
 
     std::vector<ServerTarget> targets = incoming.servers;

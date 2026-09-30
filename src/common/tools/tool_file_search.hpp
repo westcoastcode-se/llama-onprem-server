@@ -4,21 +4,14 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "file_search".
- *
- * Recursively searches directory structures for files or subdirectories
- * whose name contains a substring. Vendor and build directories are skipped.
- * Skips inaccessible directories via `skip_permission_denied` and limits
- * search results to a maximum of 100 matches.
- *
- * JSON Parameters:
- *   - pattern (string, required): Substring pattern to match in filenames/paths.
- *   - path (string, optional, defaults to "."): Starting root directory.
- *
- * Return value:
- *   - List of matching paths (with [DIR] suffix for directories), or "no matching files found".
- */
+inline constexpr std::string_view kFileSearchName = "file_search";
+inline constexpr std::string_view kFileSearchDescription =
+    "Recursively search for files or directories whose name contains a substring. Skips vendors and build directories.";
+inline constexpr std::string_view kFileSearchSchema =
+    "arguments:\n"
+    "      pattern: string (substring matched against the file or directory name)\n"
+    "      path: string (optional starting directory, defaults to '.')";
+
 Tool create_file_search_tool();
 
 /**

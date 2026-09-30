@@ -57,7 +57,7 @@ set(COMMON_TOOL_SOURCES
     src/common/tools/tool_execute_command.cpp
     src/common/tools/tool_read_file.cpp
     src/common/tools/tool_write_file.cpp
-    src/common/tools/tool_apply_patch.cpp
+    src/common/tools/tool_edit_file.cpp
     src/common/tools/tool_list_directory.cpp
     src/common/tools/tool_file_search.cpp
     src/common/tools/tool_search_text.cpp
@@ -147,6 +147,7 @@ add_executable(tests
     tests/cli/test_session_store.cpp
     tests/cli/test_transcript_scroll.cpp
     tests/cli/test_system_block.cpp
+    tests/cli/test_context_pressure.cpp
     src/cli/transcript_scroll.cpp
     src/cli/system_block.cpp
     tests/server/test_utf8_stream.cpp

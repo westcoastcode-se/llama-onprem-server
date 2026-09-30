@@ -4,21 +4,15 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "read_file".
- *
- * Reads the content of a specified text file and prefixes each line with its
- * line number so that the language model can reference exact line numbers.
- * Supports pagination via `offset` (starting line) and `limit` (max lines).
- *
- * JSON Parameters:
- *   - path (string, required): Path to the file to read.
- *   - offset (integer, optional, defaults to 1): 1-indexed line number to start reading from.
- *   - limit (integer, optional, defaults to 500): Maximum number of lines to read.
- *
- * Return value:
- *   - Numbered lines ("1: line text\n2: line text\n..."), or error message.
- */
+inline constexpr std::string_view kReadFileName = "read_file";
+inline constexpr std::string_view kReadFileDescription =
+    "Read file contents with line numbers. The first line states the window, for example lines 1-80 of 420.";
+inline constexpr std::string_view kReadFileSchema =
+    "arguments:\n"
+    "      path: string (path to the file)\n"
+    "      offset: integer (optional start line, 1-indexed, default 1)\n"
+    "      limit: integer (optional maximum lines to read, default 500)";
+
 Tool create_read_file_tool();
 
 /**

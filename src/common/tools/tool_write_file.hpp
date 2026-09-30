@@ -4,20 +4,13 @@
 
 namespace Tools {
 
-/**
- * @brief Creates and returns the tool definition for "write_file".
- *
- * Writes or overwrites a file on the filesystem with the provided text.
- * Parent directories are automatically created if they do not exist
- * via `std::filesystem::create_directories`.
- *
- * JSON Parameters:
- *   - path (string, required): Path to the file to create/overwrite.
- *   - content (string, required): The full text content to write.
- *
- * Return value:
- *   - Confirmation string with written byte count, or an error message.
- */
+inline constexpr std::string_view kWriteFileName = "write_file";
+inline constexpr std::string_view kWriteFileDescription = "Create a file or replace its entire contents. To change part of an existing file, use apply_patch.";
+inline constexpr std::string_view kWriteFileSchema =
+    "arguments:\n"
+    "      path: string (path to the file)\n"
+    "      content: string (the full content to write)";
+
 Tool create_write_file_tool();
 
 /**

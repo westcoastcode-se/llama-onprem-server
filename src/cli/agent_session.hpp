@@ -24,6 +24,8 @@ class AgentSession
     const AgentConfig &config_;
     std::vector<Tool> base_tools_;
     std::vector<Tool> tools_;
+    // Set while /compact is summarizing, so that turn does not offer compaction again.
+    bool compacting_ = false;
 
     [[nodiscard]] std::string subagent(std::string_view task, bool inherit);
     [[nodiscard]] TurnStatus drive(JobKey key);
@@ -44,7 +46,7 @@ class AgentSession
     [[nodiscard]] static std::string last_assistant(const SessionResponse &session);
     void present_system(const SessionResponse &created) const;
     void refresh_status();
-    void compact();
+    [[nodiscard]] TurnStatus compact();
     void help() const;
     void diff() const;
     [[nodiscard]] bool slash(const std::string &line);

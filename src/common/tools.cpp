@@ -23,7 +23,7 @@ std::vector<Tool> get_base_tools() {
         Tools::create_execute_command_tool(),
         Tools::create_read_file_tool(),
         Tools::create_write_file_tool(),
-        Tools::create_apply_patch_tool(),
+        Tools::create_edit_file_tool(),
         Tools::create_list_directory_tool(),
         Tools::create_file_search_tool(),
         Tools::create_search_text_tool(),
