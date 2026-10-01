@@ -95,7 +95,7 @@ static int test_session_store_corrupt() {
     defer(std::filesystem::remove_all(home));
     const HomeGuard guard(home);
     const auto cwd = home / "work";
-    write_test_file(home / ".callisto" / "last-session", "127.0.0.1\nabc\n" + cwd.string() + "\n1\n");
+    write_test_file(home / ".agents" / "last-session", "127.0.0.1\nabc\n" + cwd.string() + "\n1\n");
 
     AgentConfig config;
     SessionStore store;

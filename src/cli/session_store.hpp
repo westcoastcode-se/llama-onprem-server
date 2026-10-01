@@ -5,7 +5,7 @@
 #include <filesystem>
 #include <optional>
 
-// Remembers the last session id for this directory and server in ~/.callisto.
+// Remembers the last session id for this directory and server in ~/.agents.
 class SessionStore
 {
   public:

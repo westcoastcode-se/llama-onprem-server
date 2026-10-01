@@ -165,7 +165,7 @@ struct Front
 std::vector<SkillNote> list_skills(const std::filesystem::path &cwd)
 {
     std::vector<SkillNote> notes;
-    const auto root = cwd / get_intelligence_root_dir() / "skills";
+    const auto root = cwd / skills_directory();
     std::error_code ec;
     if (!std::filesystem::is_directory(root, ec))
     {

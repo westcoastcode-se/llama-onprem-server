@@ -55,7 +55,7 @@ void AgentSession::help() const
                     "/approval [mode]      read-only, auto, or full\n"
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
-                    "/map                  write .callisto/map.md from the tree\n"
+                    "/map                  write .agents/map.md from the tree\n"
                     "/compact              summarize the chat into a new session and stop\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
@@ -146,7 +146,7 @@ bool AgentSession::slash(const std::string &line)
         {
             if (refresh_project_map(state_.cwd, true))
             {
-                state_.ui->note("wrote .callisto/map.md");
+                state_.ui->note("wrote .agents/map.md");
             }
         }
         catch (const std::exception &error)

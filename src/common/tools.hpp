@@ -110,6 +110,6 @@ std::vector<Tool> get_registered_tools(bool include_subagents = true, SubagentRu
 std::string run_tool(std::span<const Tool> tools, std::string_view name, const nlohmann::json & arguments);
 
 /**
- * @brief Loads AGENTS.md instructions from the project directory
+ * @brief Loads AGENTS.md from the project root. Empty and missing files yield "".
  */
 std::string load_agents_markdown(std::filesystem::path base_dir);

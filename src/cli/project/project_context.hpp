@@ -18,34 +18,42 @@ struct SkillNote
 };
 
 /**
- *
- * @return Root directory for intelligence files, such as skills
+ * @return Directory for generated project files, such as map.md
  */
 static constexpr std::filesystem::path get_intelligence_root_dir()
 {
-    return {".callisto"};
+    return {".agents"};
 }
 
 /**
- * Get a list of all skills found following pattern: .callisto/skills/<name>/SKILL.md
+ * Project skills, relative to the project root.
+ * Pattern: .agents/skills/<name>/SKILL.md
+ */
+static constexpr std::filesystem::path skills_directory()
+{
+    return get_intelligence_root_dir() / std::filesystem::path{"skills"};
+}
+
+/**
+ * Skills under the project root at .agents/skills/<name>/SKILL.md.
  *
- * Only the skill name, summary and path to the skills file are included
+ * Only the skill name, summary and path to the skills file are included.
  *
- * @param cwd Directory
+ * @param cwd Project root
  * @return A list of all skills
  */
 [[nodiscard]] std::vector<SkillNote> list_skills(const std::filesystem::path &cwd);
 
 /**
  * Try to list all programming languages used in this project. Those languages should be a hint on what skills
- * the project should load and supply to the AI agent. Basically it should collect all file extensions found in the project
- * and create a summary on languages used.
+ * the project should load and supply to the AI agent. Basically it should collect all file extensions found in the
+ * project and create a summary on languages used.
  *
  * @param cwd Directory
  * @return A list of all programming languages used in this project
  */
 [[nodiscard]] std::vector<std::string> list_extensions(const std::filesystem::path &cwd);
 
-// Write .callisto/map.md from the tree. Rewrites when git HEAD changes, or when force is set.
+// Write .agents/map.md from the tree. Rewrites when git HEAD changes, or when force is set.
 // Returns true when the file was written.
 [[nodiscard]] bool refresh_project_map(const std::filesystem::path &cwd, bool force);

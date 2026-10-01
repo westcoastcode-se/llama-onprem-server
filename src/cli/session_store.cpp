@@ -7,7 +7,7 @@
 std::filesystem::path SessionStore::file() const
 {
     const char *home = std::getenv("HOME");
-    std::filesystem::path dir = home != nullptr ? std::filesystem::path(home) / ".callisto" : std::filesystem::path(".callisto");
+    std::filesystem::path dir = home != nullptr ? std::filesystem::path(home) / ".agents" : std::filesystem::path(".agents");
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     return dir / "last-session";

@@ -148,6 +148,10 @@ static int test_load_ai_instructions() {
     defer(std::filesystem::remove_all(dir));
     assertEquals("", load_agents_markdown(dir.string()));
 
+    write_test_file(dir / ".agents" / "AGENTS.md", "from callisto\n");
+    write_test_file(dir / ".agents" / "AGENTS.md", "from agents\n");
+    assertEquals("", load_agents_markdown(dir.string()));
+
     write_test_file(dir / "AGENTS.md", "  \n");
     assertEquals("", load_agents_markdown(dir.string()));
 

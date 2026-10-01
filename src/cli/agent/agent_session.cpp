@@ -374,7 +374,7 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
     {
         extra += "\nProject instructions:\n" + instructions + "\n";
     }
-    extra += "\nIf .callisto/map.md exists, read it with read_file before searching an unfamiliar area. "
+    extra += "\nIf .agents/map.md exists, read it with read_file before searching an unfamiliar area. "
              "It is an index, not the source.\n";
     const std::vector<SkillNote> skills = list_skills(state_.cwd);
     if (!skills.empty())
@@ -600,7 +600,7 @@ int AgentSession::loop()
     {
         if (refresh_project_map(state_.cwd, false))
         {
-            state_.ui->note("wrote .callisto/map.md");
+            state_.ui->note("wrote .agents/map.md");
         }
     }
     catch (const std::exception &error)

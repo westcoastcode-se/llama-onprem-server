@@ -21,7 +21,7 @@ std::string write_file(const nlohmann::json & args) {
         if (p.has_parent_path()) {
             std::filesystem::create_directories(p.parent_path());
         }
-        const std::filesystem::path tmp = p.string() + ".callisto-tmp";
+        const std::filesystem::path tmp = p.string() + ".agents-tmp";
         {
             std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
             if (!out.is_open()) {

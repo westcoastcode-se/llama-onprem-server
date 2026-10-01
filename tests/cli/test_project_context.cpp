@@ -9,7 +9,7 @@ namespace
 
 [[nodiscard]] std::string read_map(const std::filesystem::path &dir)
 {
-    std::ifstream in(dir / ".callisto" / "map.md");
+    std::ifstream in(dir / ".agents" / "map.md");
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
@@ -37,14 +37,16 @@ int test_list_skills_uses_front_matter()
 {
     const auto dir = make_temp_dir("skills");
     defer(std::filesystem::remove_all(dir));
-    write_test_file(dir / ".callisto" / "skills" / "build" / "SKILL.md",
+    write_test_file(dir / ".agents" / "skills" / "build" / "SKILL.md",
                     "---\nname: build\ndescription: Build the debug binaries.\n---\n"
                     "Run cmake, then the tests. This sentence must stay out of the index.\n");
+    write_test_file(dir / ".agents" / "skills" / "old" / "SKILL.md",
+                    "---\nname: old\ndescription: The previous skills directory.\n---\n");
     const auto skills = list_skills(dir);
     assertEquals(static_cast<std::size_t>(1), skills.size());
     assertEquals(std::string("build"), skills[0].name);
     assertEquals(std::string("Build the debug binaries."), skills[0].summary);
-    assertEquals(std::string(".callisto/skills/build/SKILL.md"), skills[0].path);
+    assertEquals(std::string(".agents/skills/build/SKILL.md"), skills[0].path);
     assertTrue(skills[0].summary.find("must stay out") == std::string::npos);
     return 0;
 }
