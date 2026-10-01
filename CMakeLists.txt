@@ -54,7 +54,6 @@ endfunction()
 set(COMMON_TOOL_SOURCES
     src/common/tools.cpp
     src/common/tool_approval.cpp
-    src/common/response_blocks.cpp
     src/common/tools/web_utils.cpp
     src/common/tools/tool_execute_command.cpp
     src/common/tools/tool_read_file.cpp

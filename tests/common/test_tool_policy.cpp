@@ -3,7 +3,6 @@
 //
 
 #include "common/defer.hpp"
-#include "common/response_blocks.hpp"
 #include "common/tools.hpp"
 #include "../tests.hpp"
 
@@ -24,62 +23,11 @@ static int test_is_tool_allowed() {
 }
 
 /**
- * Think tags are removed and the remaining text is trimmed.
- */
-static int test_strip_think_tags() {
-    assertEquals("answer", strip_think_tags("<think>secret</think>\nanswer"));
-    assertEquals("answer", strip_think_tags("<THINK>x</THINK> answer"));
-    assertEquals("answer", strip_think_tags("</think>answer"));
-    assertEquals("", strip_think_tags("<think>only"));
-    assertEquals("plain", strip_think_tags("  plain  "));
-    return EXIT_SUCCESS;
-}
-
-/**
  * string_view_trim drops whitespace on both ends.
  */
 static int test_string_view_trim() {
     assertEquals("hi", string_view_trim(" \n\thi\t "));
     assertTrue(string_view_trim(" \n\t").empty());
-    return EXIT_SUCCESS;
-}
-
-/**
- * A closed tool_call tag becomes one call.
- */
-static int test_parse_tool_calls_tag() {
-    std::vector<ToolCall> calls;
-    const bool ok = parse_tool_calls(
-        R"(<tool_call>{"name":"read_file","arguments":{"path":"/tmp/a.txt"}}</tool_call>)", calls);
-    assertTrue(ok);
-    assertEquals(1, static_cast<int>(calls.size()));
-    assertEquals("read_file", calls[0].name);
-    assertEquals("/tmp/a.txt", calls[0].arguments.value("path", ""));
-    return EXIT_SUCCESS;
-}
-
-/**
- * Prose after the last tool tag means the tags are not a trailing call.
- */
-static int test_parse_tool_calls_trailing_prose() {
-    std::vector<ToolCall> calls;
-    const bool ok = parse_tool_calls(
-        "<tool_call>{\"name\":\"read_file\",\"arguments\":{}}</tool_call>\nThanks.", calls);
-    assertTrue(!ok);
-    assertTrue(calls.empty());
-    return EXIT_SUCCESS;
-}
-
-/**
- * A bare JSON object is one call when nothing follows it.
- */
-static int test_parse_tool_call_raw_json() {
-    std::string name;
-    nlohmann::json arguments;
-    const bool ok = parse_tool_call(R"({"name":"read_file","arguments":{"path":"a"}})", name, arguments);
-    assertTrue(ok);
-    assertEquals("read_file", name);
-    assertEquals("a", arguments.value("path", ""));
     return EXIT_SUCCESS;
 }
 
@@ -161,46 +109,14 @@ static int test_load_ai_instructions() {
 }
 
 /**
- * A short think block is separated from the answer. An empty block is dropped.
- */
-static int test_thinking_stream_filter() {
-    std::string normal;
-    std::string thinking;
-    ThinkingStreamFilter filter([&](std::string_view piece, bool is_thinking) {
-        (is_thinking ? thinking : normal).append(piece);
-    });
-    filter.process("<think>hello</think>answer");
-    filter.flush();
-    assertEquals("answer", normal);
-    assertEquals("💭 hello\n", thinking);
-
-    normal.clear();
-    thinking.clear();
-    ThinkingStreamFilter empty([&](std::string_view piece, bool is_thinking) {
-        (is_thinking ? thinking : normal).append(piece);
-    });
-    empty.process("<thi");
-    empty.process("nk>  </think>ok");
-    empty.flush();
-    assertEquals("ok", normal);
-    assertEquals("", thinking);
-    return EXIT_SUCCESS;
-}
-
-/**
  * Run all tool-policy tests
  */
 int test_tool_policy() {
     RUN_TEST(test_is_tool_allowed);
-    RUN_TEST(test_strip_think_tags);
     RUN_TEST(test_string_view_trim);
-    RUN_TEST(test_parse_tool_calls_tag);
-    RUN_TEST(test_parse_tool_calls_trailing_prose);
-    RUN_TEST(test_parse_tool_call_raw_json);
     RUN_TEST(test_run_tool_name_and_alias);
     RUN_TEST(test_run_tool_exception);
     RUN_TEST(test_registered_tools);
     RUN_TEST(test_load_ai_instructions);
-    RUN_TEST(test_thinking_stream_filter);
     return EXIT_SUCCESS;
 }
