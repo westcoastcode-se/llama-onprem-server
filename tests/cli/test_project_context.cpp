@@ -43,7 +43,7 @@ int test_list_skills_uses_front_matter()
     write_test_file(dir / ".agents" / "skills" / "old" / "SKILL.md",
                     "---\nname: old\ndescription: The previous skills directory.\n---\n");
     const auto skills = list_skills(dir);
-    assertEquals(static_cast<std::size_t>(1), skills.size());
+    assertEquals(static_cast<std::size_t>(2), skills.size());
     assertEquals(std::string("build"), skills[0].name);
     assertEquals(std::string("Build the debug binaries."), skills[0].summary);
     assertEquals(std::string(".agents/skills/build/SKILL.md"), skills[0].path);

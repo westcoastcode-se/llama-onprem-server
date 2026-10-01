@@ -1,45 +1,36 @@
 #pragma once
 
 #include <filesystem>
-#include <string>
-#include <string_view>
-#include <span>
-#include <vector>
 #include <functional>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 // Include individual tool definitions and utility modules
-#include "common/tools/tool_types.hpp"
-#include "common/tools/tool_execute_command.hpp"
-#include "common/tools/tool_read_file.hpp"
-#include "common/tools/tool_write_file.hpp"
 #include "common/tools/tool_edit_file.hpp"
-#include "common/tools/tool_list_directory.hpp"
+#include "common/tools/tool_execute_command.hpp"
 #include "common/tools/tool_file_search.hpp"
+#include "common/tools/tool_list_directory.hpp"
+#include "common/tools/tool_read_file.hpp"
 #include "common/tools/tool_search_text.hpp"
+#include "common/tools/tool_subagent.hpp"
+#include "common/tools/tool_types.hpp"
 #include "common/tools/tool_web_fetch.hpp"
 #include "common/tools/tool_web_search.hpp"
-#include "common/tools/tool_subagent.hpp"
+#include "common/tools/tool_write_file.hpp"
 
 /**
  * @brief Approval status for tool execution.
  */
-enum class ToolApproval {
-    ALLOW,   ///< Allow tool execution this time
-    DENY,    ///< Deny execution
-    ALWAYS,  ///< Always allow tool execution during this session
-    CLOSED   ///< stdin hit EOF; stop the turn instead of denying and continuing
-};
-
-/**
- * @brief Parsing result for user input during tool approval prompt.
- */
-enum class ToolApprovalParseResult {
-    ALLOW,
-    DENY,
-    ALWAYS,
-    INVALID
+enum class ToolApproval
+{
+    ALLOW,  ///< Allow tool execution this time
+    DENY,   ///< Deny execution
+    ALWAYS, ///< Always allow tool execution during this session
+    CLOSED  ///< stdin hit EOF; stop the turn instead of denying and continuing
 };
 
 /**
@@ -68,21 +59,21 @@ enum class ToolKind
 constexpr std::string_view string_view_trim(std::string_view text)
 {
     constexpr std::string_view exclude = " \n\t\r\0";
-    if (const size_t leftShift = text.find_first_not_of(exclude);
-        leftShift != std::string_view::npos
-    ) {
+    if (const size_t leftShift = text.find_first_not_of(exclude); leftShift != std::string_view::npos)
+    {
         text.remove_prefix(leftShift);
     }
-    else {
+    else
+    {
         return {};
     }
 
-    if (const size_t rightShift = text.find_last_not_of(exclude);
-        rightShift != std::string_view::npos
-    ) {
+    if (const size_t rightShift = text.find_last_not_of(exclude); rightShift != std::string_view::npos)
+    {
         text.remove_suffix(text.size() - rightShift - 1);
     }
-    else {
+    else
+    {
         return {};
     }
     return text;
@@ -107,7 +98,7 @@ std::vector<Tool> get_registered_tools(bool include_subagents = true, SubagentRu
 // The tool with this name, or with this alias. Null when nothing matches.
 [[nodiscard]] const Tool *find_tool(std::span<const Tool> tools, std::string_view name);
 
-std::string run_tool(std::span<const Tool> tools, std::string_view name, const nlohmann::json & arguments);
+std::string run_tool(std::span<const Tool> tools, std::string_view name, const nlohmann::json &arguments);
 
 /**
  * @brief Loads AGENTS.md from the project root. Empty and missing files yield "".
