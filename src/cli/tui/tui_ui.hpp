@@ -7,7 +7,9 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -26,6 +28,11 @@ struct Block
     std::string text;
     std::string caption = {};
     bool expanded = false;
+    // True while thinking tokens are still arriving. The view then shows the last three lines.
+    bool thinking_live = false;
+    // Elapsed thinking time, set when the block closes. Negative until then.
+    std::int64_t think_ms = -1;
+    std::chrono::steady_clock::time_point think_started{};
 };
 
 // Full-screen session. Transcript updates, the composer, and the menus are
@@ -80,6 +87,8 @@ class TuiUi final : public AgentUi
     void begin(std::string kind) override;
     void append(std::string text) override;
     void end() override;
+    // Caller holds mutex. Closes a live thinking block and records how long it ran.
+    void seal_open_block();
     void expand(std::string_view kind) override;
     void collapse(std::string_view kind) override;
     void caption(std::string text) override;

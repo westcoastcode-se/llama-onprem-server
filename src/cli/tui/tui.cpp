@@ -1,6 +1,7 @@
 #include "cli/tui/tui_ui.hpp"
 #include "cli/tui/tui.hpp"
 #include "cli/tui/system_block.hpp"
+#include "cli/tui/thinking_block.hpp"
 #include "cli/tui/transcript_scroll.hpp"
 
 #include <ftxui/screen/color.hpp>
@@ -107,13 +108,6 @@ std::string fit_label(std::string label, int columns, bool more)
     return fit_columns(label, columns);
 }
 
-std::string collapsed_thinking_label(const std::string &text, int columns)
-{
-    const ThinkPreview preview = think_preview(text);
-    const std::string label = preview.line.empty() ? "thinking" : "thinking  " + preview.line;
-    return fit_label(label, columns, preview.more);
-}
-
 std::string without_cr(std::string text)
 {
     std::erase(text, '\r');
@@ -141,40 +135,6 @@ ftxui::Element weighted(ftxui::Element element, const Theme &theme)
 int text_columns()
 {
     return std::max(16, ftxui::Terminal::Size().dimx - 2);
-}
-
-ftxui::Element thinking_block(const Block &block, bool reveal, ftxui::Box &hit, const Theme &theme)
-{
-    using namespace ftxui;
-    const Color ink = paint(theme.thinking_text);
-    const std::string title = block.caption.empty() ? "thinking" : block.caption;
-    Elements lines;
-    if (!block.expanded)
-    {
-        const int columns = text_columns();
-        std::string label = collapsed_thinking_label(block.text, columns);
-        if (!block.caption.empty())
-        {
-            const ThinkPreview preview = think_preview(block.text);
-            label = fit_label(block.caption + (preview.line.empty() ? "" : "  " + preview.line), columns, preview.more);
-        }
-        lines.push_back(text("▶ " + label) | color(ink));
-    }
-    else
-    {
-        Element header = weighted(text("▼ " + title), theme) | color(ink);
-        if (reveal)
-        {
-            header = header | focus;
-        }
-        lines.push_back(std::move(header));
-        const std::string clean = without_cr(block.text);
-        if (!clean.empty())
-        {
-            lines.push_back(paragraph(clean) | color(ink));
-        }
-    }
-    return vbox(std::move(lines)) | reflect(hit);
 }
 
 bool foldable(const Block &block)
@@ -345,7 +305,10 @@ ftxui::Element TuiUi::transcript()
             const bool reveal = block.expanded && revealed == i;
             if (block.kind == "thinking")
             {
-                rows.push_back(thinking_block(block, reveal, think_boxes[i], theme));
+                const std::string title = block.caption.empty() ? "thinking" : block.caption;
+                rows.push_back(thinking_transcript_block(title, block.text, block.expanded, block.thinking_live,
+                                                         block.think_ms, reveal, theme.bold, paint(theme.thinking_text),
+                                                         think_boxes[i]));
             }
             else if (block.kind == "system")
             {

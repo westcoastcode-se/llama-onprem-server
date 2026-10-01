@@ -3,6 +3,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 std::size_t TuiUi::latest(std::string_view kind) const
@@ -50,10 +51,7 @@ void TuiUi::note(std::string text)
 {
     {
         std::lock_guard lock(mutex);
-        if (open)
-        {
-            open = false;
-        }
+        seal_open_block();
         blocks.push_back(Block{"note", std::move(text)});
     }
     wake();
@@ -70,14 +68,18 @@ void TuiUi::begin(std::string kind)
 {
     {
         std::lock_guard lock(mutex);
-        if (open)
-        {
-            open = false;
-        }
+        seal_open_block();
+        const bool thinking = kind == "thinking";
         blocks.push_back(Block{std::move(kind), {}});
         if (subagent_live)
         {
             blocks.back().caption = "sub-agent";
+        }
+        if (thinking)
+        {
+            blocks.back().expanded = true;
+            blocks.back().thinking_live = true;
+            blocks.back().think_started = std::chrono::steady_clock::now();
         }
         open = true;
     }
@@ -106,9 +108,36 @@ void TuiUi::end()
 {
     {
         std::lock_guard lock(mutex);
-        open = false;
+        seal_open_block();
     }
     wake();
+}
+
+void TuiUi::seal_open_block()
+{
+    if (!open || blocks.empty())
+    {
+        open = false;
+        return;
+    }
+    open = false;
+    Block &block = blocks.back();
+    if (block.kind != "thinking" || !block.thinking_live)
+    {
+        return;
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                               block.think_started);
+    block.think_ms = std::max<std::int64_t>(elapsed.count(), 0);
+    block.thinking_live = false;
+    block.expanded = false;
+    const std::size_t index = blocks.size() - 1;
+    if (revealed == index)
+    {
+        revealed = static_cast<std::size_t>(-1);
+        scroll.follow_reveal = false;
+        scroll.follow_bottom = true;
+    }
 }
 
 void TuiUi::expand(std::string_view kind)
@@ -164,7 +193,7 @@ void TuiUi::show_system(std::string text)
     }
     {
         std::lock_guard lock(mutex);
-        open = false;
+        seal_open_block();
         blocks.push_back(Block{"system", std::move(text)});
     }
     wake();

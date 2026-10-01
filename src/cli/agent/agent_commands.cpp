@@ -58,7 +58,8 @@ void AgentSession::help() const
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
                     "Ctrl-C cancels the current generation. A running command is aborted, and the server is told how long it ran.\n"
-                    "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it.\n"
+                    "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it. "
+                    "Thinking shows its last three lines while it runs, then closes with how long it took.\n"
                     "When context is over 80% and the server is waiting, you can compact before the next request.\n"
                     "Compact and continue keeps working from the summary. Compact and stop leaves you at the prompt.");
 }

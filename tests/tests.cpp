@@ -20,6 +20,7 @@ extern int test_theme();
 extern int test_session_store();
 extern int test_transcript_scroll();
 extern int test_system_block();
+extern int test_thinking_block();
 extern int test_context_pressure();
 extern int test_utf8_stream();
 extern int test_token_buffer();
@@ -100,6 +101,10 @@ int main()
         return rc;
     }
     if (const int rc = test_system_block())
+    {
+        return rc;
+    }
+    if (const int rc = test_thinking_block())
     {
         return rc;
     }
