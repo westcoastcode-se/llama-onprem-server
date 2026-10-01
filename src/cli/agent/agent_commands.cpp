@@ -1,6 +1,5 @@
 #include "cli/agent/agent_session.hpp"
 
-#include "cli/project/project_context.hpp"
 #include "cli/servers.hpp"
 
 #include <algorithm>
@@ -55,7 +54,6 @@ void AgentSession::help() const
                     "/approval [mode]      read-only, auto, or full\n"
                     "/status               session id, approval, and server\n"
                     "/diff                 git diff --stat for this directory\n"
-                    "/map                  write .agents/map.md from the tree\n"
                     "/compact              summarize the chat into a new session and stop\n"
                     "/clear                start a new session\n"
                     "/exit                 leave\n"
@@ -139,21 +137,6 @@ bool AgentSession::slash(const std::string &line)
         std::string_view argument(line);
         argument.remove_prefix(std::string_view("/model").size());
         return model_command(string_view_trim(argument));
-    }
-    if (line == "/map")
-    {
-        try
-        {
-            if (refresh_project_map(state_.cwd, true))
-            {
-                state_.ui->note("wrote .agents/map.md");
-            }
-        }
-        catch (const std::exception &error)
-        {
-            state_.ui->note(error.what());
-        }
-        return true;
     }
     if (line == "/compact")
     {

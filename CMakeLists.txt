@@ -108,9 +108,6 @@ add_executable(callisto_cli
         src/cli/agent/agent_session.cpp
         src/cli/agent/agent_commands.cpp
         src/cli/project/project_context.cpp
-        src/cli/project/project_git.cpp
-        src/cli/project/project_hints.cpp
-        src/cli/project/project_ignore.cpp
         src/cli/agent/reply_stream.cpp
         src/cli/servers.cpp
         src/cli/session_store.cpp
@@ -171,9 +168,6 @@ add_executable(tests
     src/api/models.cpp
     src/cli/agent/tool_schema.cpp
     src/cli/project/project_context.cpp
-    src/cli/project/project_git.cpp
-    src/cli/project/project_hints.cpp
-    src/cli/project/project_ignore.cpp
     src/cli/servers.cpp
     src/cli/session_store.cpp
     src/common/log.cpp

@@ -10,7 +10,3 @@ __pycache__
 
 # Ignore model if downloaded in the project directory
 Qwen3.8-27B-GGUF
-
-# Generated project index. Skills under .agents/skills stay in git.
-.agents/map.md
-.agents/map.head

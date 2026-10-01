@@ -18,7 +18,7 @@ struct SkillNote
 };
 
 /**
- * @return Directory for generated project files, such as map.md
+ * @return Directory for agent files under the project root, such as skills
  */
 static constexpr std::filesystem::path get_intelligence_root_dir()
 {
@@ -53,7 +53,3 @@ static constexpr std::filesystem::path skills_directory()
  * @return A list of all programming languages used in this project
  */
 [[nodiscard]] std::vector<std::string> list_extensions(const std::filesystem::path &cwd);
-
-// Write .agents/map.md from the tree. Rewrites when git HEAD changes, or when force is set.
-// Returns true when the file was written.
-[[nodiscard]] bool refresh_project_map(const std::filesystem::path &cwd, bool force);

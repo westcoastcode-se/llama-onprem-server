@@ -374,8 +374,11 @@ CreateSessionRequest AgentSession::make_request(const AgentConfig &config) const
     {
         extra += "\nProject instructions:\n" + instructions + "\n";
     }
-    extra += "\nIf .agents/map.md exists, read it with read_file before searching an unfamiliar area. "
-             "It is an index, not the source.\n";
+    extra += "\nLook at the files in the project root and determine what kind of project this is before working in an "
+             "unfamiliar area.\n"
+             "A sub_agent can gather that information when the question needs more than the root listing. "
+             "Its result should describe what the question needs: the kind of project, how it is built and tested, "
+             "and the paths that matter. Use that description to carry out the question.\n";
     const std::vector<SkillNote> skills = list_skills(state_.cwd);
     if (!skills.empty())
     {
@@ -595,17 +598,6 @@ int AgentSession::loop()
     {
         state_.ui->note(offline_message());
         refresh_status();
-    }
-    try
-    {
-        if (refresh_project_map(state_.cwd, false))
-        {
-            state_.ui->note("wrote .agents/map.md");
-        }
-    }
-    catch (const std::exception &error)
-    {
-        state_.ui->note(error.what());
     }
     if (!config_.exec)
     {

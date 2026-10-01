@@ -140,12 +140,11 @@ Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one
 | `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
 | `/status` | Session id, approval mode, and server |
 | `/diff` | `git diff --stat` for the working directory |
-| `/map` | Rewrite `.agents` from the tree |
 | `/compact` | Summarize the chat into a new session and stop |
 | `/clear` | Start a new session |
 | `/exit` | Leave |
 
-`AGENTS.md` in the project root is added to the system prompt when it has text. On startup the client rewrites `.agents`, a short index of the tree, including the first level of `vendors`. Build hints come from a root `CMakeLists.txt`, `package.json`, `Cargo.toml`, or `pom.xml`. `/map` rewrites the index too. The model is told to read that file before searching an unfamiliar area. A skill is `.agents/skills/<name>/SKILL.md`. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
+`AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md`. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
 
 Tools the client can run: `read_file`, `edit_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed.
 

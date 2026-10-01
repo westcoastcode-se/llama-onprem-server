@@ -1,70 +1,30 @@
 #include "cli/project/project_context.hpp"
 
-#include "cli/project/project_detail.hpp"
-
 #include "common/tools.hpp"
 
 #include <algorithm>
+#include <fstream>
 #include <set>
-
-using namespace project_detail;
+#include <sstream>
 
 namespace
 {
 
-[[nodiscard]] std::string relative_path(const std::filesystem::path &root, const std::filesystem::path &path)
+[[nodiscard]] std::string read_text(const std::filesystem::path &path)
 {
-    std::error_code ec;
-    const auto relative = std::filesystem::relative(path, root, ec);
-    if (ec)
+    std::ifstream in(path);
+    if (!in)
     {
-        return path.filename().generic_string();
+        return {};
     }
-    auto text = relative.generic_string();
-    while (text.starts_with("./"))
-    {
-        text.erase(0, 2);
-    }
-    return text;
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
 }
 
-[[nodiscard]] std::string child_names(const std::filesystem::path &dir, const std::filesystem::path &root,
-                                      const GitIgnore &ignore)
+[[nodiscard]] std::string trim_copy(std::string_view text)
 {
-    std::vector<std::string> names;
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
-    {
-        if (ec)
-        {
-            break;
-        }
-        const auto name = entry.path().filename().string();
-        const bool directory = entry.is_directory(ec);
-        if (name.empty() || name[0] == '.' || ignored(ignore, relative_path(root, entry.path()), directory))
-        {
-            continue;
-        }
-        names.push_back(directory ? name + "/" : name);
-    }
-    std::ranges::sort(names);
-    std::string line;
-    int shown = 0;
-    for (const auto &name : names)
-    {
-        if (shown == kChildCap)
-        {
-            line += ", …";
-            break;
-        }
-        if (!line.empty())
-        {
-            line += ", ";
-        }
-        line += name;
-        ++shown;
-    }
-    return line;
+    return std::string(string_view_trim(text));
 }
 
 [[nodiscard]] std::string one_line(std::string_view text, std::size_t cap)
@@ -225,75 +185,10 @@ static void list_extensions(const std::filesystem::path &cwd, std::set<std::stri
 
 std::vector<std::string> list_extensions(const std::filesystem::path &cwd)
 {
-    std::error_code ec;
     std::set<std::string> extensions;
     list_extensions(cwd, extensions);
     std::vector result(extensions.begin(), extensions.end());
     std::ranges::sort(result, [](const std::string &left, const std::string &right) { return left < right; });
     return result;
-}
-
-bool refresh_project_map(const std::filesystem::path &cwd, bool force)
-{
-    const auto dir = cwd / get_intelligence_root_dir();
-    const auto map_path = dir / "map.md";
-    const auto head_path = dir / "map.head";
-    const std::string head = git_head(cwd);
-    std::error_code ec;
-    if (!force && std::filesystem::is_regular_file(map_path, ec) && std::filesystem::is_regular_file(head_path, ec) &&
-        trim_copy(read_text(head_path)) == head)
-    {
-        return false;
-    }
-
-    const GitIgnore ignore = load_gitignore(cwd);
-    std::string map = "# Project map\n\n";
-    map += "Short index. Read this before searching an unfamiliar area. It is not the source.\n\n";
-    map += "## Build and test\n";
-    const std::string hints = build_hints(cwd);
-    map += hints.empty() ? "- See the build files in the project root.\n" : hints;
-    map += "\n## Layout\n";
-
-    std::vector<std::filesystem::directory_entry> tops;
-    for (const auto &entry : std::filesystem::directory_iterator(cwd, ec))
-    {
-        if (ec)
-        {
-            break;
-        }
-        const auto name = entry.path().filename().string();
-        const bool directory = entry.is_directory(ec);
-        if (name.empty() || name[0] == '.' || ignored(ignore, name, directory))
-        {
-            continue;
-        }
-        tops.push_back(entry);
-    }
-    std::ranges::sort(
-        tops, [](const auto &left, const auto &right) { return left.path().filename() < right.path().filename(); });
-    for (const auto &entry : tops)
-    {
-        const auto name = entry.path().filename().string();
-        if (entry.is_directory(ec))
-        {
-            const auto children = child_names(entry.path(), cwd, ignore);
-            map += "- " + name + "/";
-            if (!children.empty())
-            {
-                map += ": " + children;
-            }
-            map += "\n";
-        }
-        else
-        {
-            map += "- " + name + "\n";
-        }
-    }
-    map += "\n## Skip\n";
-    map += skip_note(ignore);
-
-    write_text(map_path, map);
-    write_text(head_path, head);
-    return true;
 }
 
