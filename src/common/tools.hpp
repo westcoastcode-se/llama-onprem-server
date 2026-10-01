@@ -43,21 +43,6 @@ enum class ToolApprovalParseResult {
 };
 
 /**
- * @brief Parses user response to approval prompt ('y', 'yes', 'n', 'no', 'a', 'always', etc.).
- */
-ToolApprovalParseResult parse_tool_approval_input(std::string_view input);
-
-/**
- * @brief Displays an interactive prompt in the terminal asking user for tool approval.
- */
-ToolApproval prompt_tool_approval(std::string_view tool_name, const nlohmann::json & tool_args, std::istream & in = std::cin, std::ostream & out = std::cout);
-
-/**
- * @brief Parses a comma-separated list of allowed tool names.
- */
-std::vector<std::string> parse_allowed_tools(std::string_view tools_str);
-
-/**
  * @brief Checks if a specific tool is allowed to run automatically based on CLI flags.
  */
 bool is_tool_allowed(std::string_view tool_name, bool auto_approve, std::span<const std::string> allowed_tools);

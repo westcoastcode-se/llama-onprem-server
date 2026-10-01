@@ -10,65 +10,6 @@
 #include <sstream>
 
 /**
- * Approval words in Swedish and English map to the same results.
- */
-static int test_parse_tool_approval_input_words() {
-    assertTrue(parse_tool_approval_input("  Ja  ") == ToolApprovalParseResult::ALLOW);
-    assertTrue(parse_tool_approval_input("n") == ToolApprovalParseResult::DENY);
-    assertTrue(parse_tool_approval_input("ALLTID JA") == ToolApprovalParseResult::ALWAYS);
-    assertTrue(parse_tool_approval_input("") == ToolApprovalParseResult::INVALID);
-    assertTrue(parse_tool_approval_input("maybe") == ToolApprovalParseResult::INVALID);
-    return EXIT_SUCCESS;
-}
-
-/**
- * The approval prompt reads one line and returns the matching decision.
- */
-static int test_prompt_tool_approval_allow() {
-    std::istringstream in("j\n");
-    std::ostringstream out;
-    const auto result = prompt_tool_approval("read_file", {{"path", "a"}}, in, out);
-    assertTrue(result == ToolApproval::ALLOW);
-    assertTrue(out.str().find("read_file") != std::string::npos);
-    return EXIT_SUCCESS;
-}
-
-/**
- * An invalid line is rejected, and the next valid line is accepted.
- */
-static int test_prompt_tool_approval_retry() {
-    std::istringstream in("maybe\ny\n");
-    std::ostringstream out;
-    const auto result = prompt_tool_approval("read_file", nlohmann::json::object(), in, out);
-    assertTrue(result == ToolApproval::ALLOW);
-    assertTrue(out.str().find("Ogiltigt val") != std::string::npos);
-    return EXIT_SUCCESS;
-}
-
-/**
- * End of input closes the prompt.
- */
-static int test_prompt_tool_approval_closed() {
-    std::istringstream in;
-    std::ostringstream out;
-    const auto result = prompt_tool_approval("read_file", nlohmann::json::object(), in, out);
-    assertTrue(result == ToolApproval::CLOSED);
-    return EXIT_SUCCESS;
-}
-
-/**
- * A comma-separated allow-list is trimmed and lowercased.
- */
-static int test_parse_allowed_tools() {
-    const auto tools = parse_allowed_tools(" Read_File, , execute_command ");
-    assertEquals(2, static_cast<int>(tools.size()));
-    assertEquals("read_file", tools[0]);
-    assertEquals("execute_command", tools[1]);
-    assertTrue(parse_allowed_tools("").empty());
-    return EXIT_SUCCESS;
-}
-
-/**
  * Auto-approve, a wildcard, and a listed name allow a tool. Anything else does not.
  */
 static int test_is_tool_allowed() {
@@ -246,11 +187,6 @@ static int test_thinking_stream_filter() {
  * Run all tool-policy tests
  */
 int test_tool_policy() {
-    RUN_TEST(test_parse_tool_approval_input_words);
-    RUN_TEST(test_prompt_tool_approval_allow);
-    RUN_TEST(test_prompt_tool_approval_retry);
-    RUN_TEST(test_prompt_tool_approval_closed);
-    RUN_TEST(test_parse_allowed_tools);
     RUN_TEST(test_is_tool_allowed);
     RUN_TEST(test_strip_think_tags);
     RUN_TEST(test_string_view_trim);
