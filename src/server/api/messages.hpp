@@ -9,9 +9,9 @@
  */
 struct MessagesRequest
 {
-    string system;
-    vector<ChatMessage> messages;
-    string session_id;
+    std::string system;
+    std::vector<ChatMessage> messages;
+    std::string session_id;
     int max_tokens = -1;
-    vector<ChatTool> tools;
+    std::vector<ChatTool> tools;
 };

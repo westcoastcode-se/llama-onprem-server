@@ -1,4 +1,4 @@
-#include "cli/tool_schema.hpp"
+#include "cli/agent/tool_schema.hpp"
 
 #include <string>
 #include <string_view>
@@ -20,10 +20,10 @@ std::string_view trim_line(std::string_view text)
 
 } // namespace
 
-json ToolSchema::from_prose(std::string_view schema_doc)
+nlohmann::json ToolSchema::from_prose(std::string_view schema_doc)
 {
-    json properties = json::object();
-    json required = json::array();
+    nlohmann::json properties = nlohmann::json::object();
+    nlohmann::json required = nlohmann::json::array();
     std::size_t pos = 0;
     while (pos < schema_doc.size())
     {
@@ -69,7 +69,7 @@ json ToolSchema::from_prose(std::string_view schema_doc)
         {
             type = "object";
         }
-        json spec = {{"type", type}};
+        nlohmann::json spec = {{"type", type}};
         const std::size_t open = rest.find('(');
         const std::size_t close = rest.rfind(')');
         if (open != std::string_view::npos && close != std::string_view::npos && close > open)
@@ -82,7 +82,7 @@ json ToolSchema::from_prose(std::string_view schema_doc)
             required.push_back(std::string(name));
         }
     }
-    json schema = {{"type", "object"}, {"properties", std::move(properties)}};
+    nlohmann::json schema = {{"type", "object"}, {"properties", std::move(properties)}};
     if (!required.empty())
     {
         schema["required"] = std::move(required);
@@ -95,7 +95,7 @@ ChatTool ToolSchema::chat_tool(const Tool &tool)
     ChatTool spec;
     spec.name = tool.name;
     spec.description = tool.description;
-    const json schema = from_prose(tool.schema_doc);
+    const nlohmann::json schema = from_prose(tool.schema_doc);
     if (schema["properties"].empty() && !tool.schema_doc.empty())
     {
         spec.description.push_back('\n');

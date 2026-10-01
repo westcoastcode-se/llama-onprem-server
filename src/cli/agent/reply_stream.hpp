@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cli/agent_state.hpp"
+#include "cli/agent/agent_state.hpp"
 
 #include "api/sessions.hpp"
 

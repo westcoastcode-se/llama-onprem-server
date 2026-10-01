@@ -1,7 +1,5 @@
 #pragma once
 
-#include "std.hpp"
-
 #include <ostream>
 #include <sstream>
 #include <utility>

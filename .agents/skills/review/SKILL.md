@@ -12,7 +12,7 @@ Review the change. The diff is the source. Unchanged files are not.
 1. For uncommitted work, run `git diff` and `git diff --cached` with `execute_command`. For a branch, run `git diff <base>...HEAD`.
 2. `execute_command` keeps about 8000 characters. When the output says it was truncated, review one path at a time with `git diff -- path`. Write that file's findings before opening the next path.
 3. Open a source file only when a hunk is not enough to judge a bug. Call `read_file` with `offset` at the hunk and a `limit` of about 40 lines. Do not use the default 500-line window.
-4. Do not read `.callisto/map.md`, and do not read another skill, to locate the change. The diff names the files.
+4. Do not read `../..`, and do not read another skill, to locate the change. The diff names the files.
 
 ## What to write
 

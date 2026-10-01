@@ -15,7 +15,7 @@
  */
 inline constexpr size_t MAX_TOOL_OUTPUT_CHARS = 8000;
 
-// Directories omitted from file search and search_text. The project map still names the first level of vendors.
+// Directories omitted from file search and search_text.
 inline bool is_skipped_directory(std::string_view name)
 {
     return name == ".git" || name == ".svn" || name == ".hg" || name == ".idea" || name == "node_modules" ||

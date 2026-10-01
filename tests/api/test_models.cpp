@@ -74,7 +74,7 @@ static int test_session_message_request() {
  * Chat tools and messages survive a JSON round trip.
  */
 static int test_chat_tool_and_message_json() {
-    const json tool_json = {{"type", "function"},
+    const nlohmann::json tool_json = {{"type", "function"},
                             {"function",
                              {{"name", "read_file"},
                               {"description", "Read"},
@@ -87,7 +87,7 @@ static int test_chat_tool_and_message_json() {
     bool threw = false;
     try
     {
-        ChatTool::from_json(json::object());
+        ChatTool::from_json(nlohmann::json::object());
     }
     catch (const BadRequest &)
     {
@@ -131,7 +131,7 @@ static int test_create_session_request_json() {
     off.compress_tools = false;
     const auto off_back = CreateSessionRequest::from_json(off.to_json());
     assertTrue(!off_back.compress_tools);
-    const auto omitted = CreateSessionRequest::from_json(json::object());
+    const auto omitted = CreateSessionRequest::from_json(nlohmann::json::object());
     assertTrue(omitted.compress_tools);
     return EXIT_SUCCESS;
 }
@@ -151,7 +151,7 @@ static int test_message_status_response_json() {
     ParsedToolCall call;
     call.id = "1";
     call.name = "read_file";
-    call.arguments = json{{"path", "src/cli/tui.cpp"}};
+    call.arguments = nlohmann::json{{"path", "src/cli/tui.cpp"}};
     status.tool_calls.push_back(call);
     ParsedQuestion question;
     question.text = "Which?";

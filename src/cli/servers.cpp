@@ -1,7 +1,8 @@
 #include "cli/servers.hpp"
 
-#include "common/std.hpp"
 #include "common/tools.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <cstdlib>
 #include <fstream>
@@ -67,13 +68,13 @@ namespace
     return server;
 }
 
-[[nodiscard]] int json_port(const json &item)
+[[nodiscard]] int json_port(const nlohmann::json &item)
 {
     if (!item.contains("port"))
     {
         return 8080;
     }
-    const json &port = item.at("port");
+    const nlohmann::json &port = item.at("port");
     if (!port.is_number_integer())
     {
         throw std::runtime_error("port must be an integer from 1 to 65535");
@@ -86,7 +87,7 @@ namespace
     return value;
 }
 
-[[nodiscard]] std::string json_string(const json &item, const char *key)
+[[nodiscard]] std::string json_string(const nlohmann::json &item, const char *key)
 {
     if (!item.contains(key) || !item.at(key).is_string())
     {
@@ -168,16 +169,16 @@ std::vector<ServerTarget> parse_server_list(const std::vector<std::string> &spec
 
 std::vector<ServerTarget> servers_from_json(std::string_view text)
 {
-    json doc;
+    nlohmann::json doc;
     try
     {
-        doc = json::parse(text);
+        doc = nlohmann::json::parse(text);
     }
-    catch (const json::exception &error)
+    catch (const nlohmann::json::exception &error)
     {
         throw std::runtime_error(std::string("invalid JSON (") + error.what() + ")");
     }
-    const json *list = &doc;
+    const nlohmann::json *list = &doc;
     if (doc.is_object())
     {
         if (!doc.contains("servers"))
@@ -196,7 +197,7 @@ std::vector<ServerTarget> servers_from_json(std::string_view text)
     }
     std::vector<ServerTarget> servers;
     servers.reserve(list->size());
-    for (const json &item : *list)
+    for (const nlohmann::json &item : *list)
     {
         if (item.is_string())
         {

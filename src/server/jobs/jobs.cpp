@@ -8,6 +8,166 @@
 #include <ranges>
 #include <utility>
 
+// Task
+/**
+ * Move out on_finished under lock so the callback can run without holding mutex.
+ */
+[[nodiscard]] std::move_only_function<void(const std::shared_ptr<Task> &)> Task::take_on_finished()
+{
+    std::lock_guard lock(mutex);
+    return std::exchange(on_finished, nullptr);
+}
+
+[[nodiscard]] JobState Task::get_state() const
+{
+    std::lock_guard lock(mutex);
+    return state;
+}
+
+/**
+ * Set the error message
+ *
+ * @param msg The error message
+ */
+void Task::set_error_state(std::string msg, std::string code)
+{
+    std::lock_guard lock(mutex);
+    error = std::move(msg);
+    error_code = std::move(code);
+    state = JobState::Error;
+    finished_at = std::chrono::steady_clock::now();
+}
+
+/**
+ * Set the result from the LLM
+ *
+ * @param text The resulting text
+ * @param new_state The state of the job
+ */
+void Task::set_result(std::string text, const JobState new_state, ParsedAssistantActions actions)
+{
+    std::lock_guard lock(mutex);
+    result = std::move(text);
+    reasoning = std::move(actions.reasoning);
+    state = new_state;
+    tool_calls = std::move(actions.tool_calls);
+    question = std::move(actions.question);
+
+    // Job is finished. The token stream stays open until release_stream(), so a
+    // session can record context usage before the client observes done.
+    if (new_state.is_finished())
+    {
+        finished_at = std::chrono::steady_clock::now();
+    }
+}
+
+void Task::release_stream()
+{
+    if (!buffer)
+    {
+        return;
+    }
+    if (is_cancel_requested() || get_state() == JobState::Cancelled)
+    {
+        buffer->cancel();
+    }
+    else
+    {
+        buffer->set_done();
+    }
+}
+
+[[nodiscard]] std::string Task::get_result() const
+{
+    std::lock_guard lock(mutex);
+    return result;
+}
+
+[[nodiscard]] std::string Task::get_error() const
+{
+    std::lock_guard lock(mutex);
+    return error;
+}
+
+void Task::request_cancel()
+{
+    cancel_requested.store(true, std::memory_order_relaxed);
+    if (buffer)
+    {
+        buffer->cancel();
+    }
+}
+
+[[nodiscard]] bool Task::is_cancel_requested() const
+{
+    return cancel_requested.load(std::memory_order_relaxed);
+}
+
+// Latest KV size for this job's session. Written on the worker, read by the token stream.
+void Task::note_context(int used, int size)
+{
+    context_used_.store(std::max(0, used), std::memory_order_relaxed);
+    context_size_.store(std::max(0, size), std::memory_order_relaxed);
+}
+
+[[nodiscard]] int Task::context_used() const
+{
+    return context_used_.load(std::memory_order_relaxed);
+}
+
+[[nodiscard]] int Task::context_size() const
+{
+    return context_size_.load(std::memory_order_relaxed);
+}
+
+[[nodiscard]] MessageStatusResponse Task::to_status_unsafe() const
+{
+    MessageStatusResponse r;
+    r.key = key;
+    r.state = state;
+    r.done = state.is_finished();
+    r.content = result;
+    r.error = error;
+    r.error_code = error_code;
+    r.reasoning = reasoning;
+    r.tool_calls = tool_calls;
+    r.question = question;
+    return r;
+}
+
+[[nodiscard]] MessageStatusResponse Task::to_status() const
+{
+    std::lock_guard lock(mutex);
+    MessageStatusResponse r;
+    r.key = key;
+    r.state = state;
+    r.done = state.is_finished();
+    r.content = result;
+    r.error = error;
+    r.error_code = error_code;
+    r.reasoning = reasoning;
+    r.tool_calls = tool_calls;
+    r.question = question;
+    return r;
+}
+
+/**
+ * Set this task as cancelled
+ */
+void Task::set_cancelled()
+{
+    std::lock_guard lock(mutex);
+    state = JobState::Cancelled;
+    finished_at = std::chrono::steady_clock::now();
+    buffer->cancel();
+}
+
+void Task::set_running()
+{
+    std::lock_guard lock(mutex);
+    state = JobState::Running;
+}
+
 int Jobs::context_size() const
 {
     return std::max(0, engine_.get_config().n_ctx);
@@ -72,8 +232,8 @@ void Jobs::unsafe_gc()
     });
 }
 
-shared_ptr<Task> Jobs::submit(MessagesRequest &&request,
-                              std::move_only_function<void(const shared_ptr<Task> &)> on_finished)
+std::shared_ptr<Task> Jobs::submit(MessagesRequest &&request,
+                              std::move_only_function<void(const std::shared_ptr<Task> &)> on_finished)
 {
     const auto task = std::make_shared<Task>();
     task->request = std::move(request);
@@ -81,7 +241,7 @@ shared_ptr<Task> Jobs::submit(MessagesRequest &&request,
     return enqueue(task);
 }
 
-shared_ptr<Task> Jobs::enqueue(shared_ptr<Task> task)
+std::shared_ptr<Task> Jobs::enqueue(std::shared_ptr<Task> task)
 {
     if (!task)
     {
@@ -114,7 +274,7 @@ std::shared_ptr<Task> Jobs::get_task(const JobKey key) const
 namespace
 {
 
-void notify_finished(const shared_ptr<Task> &task)
+void notify_finished(const std::shared_ptr<Task> &task)
 {
     // Invoke without holding task->mutex so session callbacks can call Task getters.
     auto cb = task->take_on_finished();
@@ -133,7 +293,7 @@ void notify_finished(const shared_ptr<Task> &task)
     }
 }
 
-void finish_task(const shared_ptr<Task> &task)
+void finish_task(const std::shared_ptr<Task> &task)
 {
     notify_finished(task);
     task->release_stream();
@@ -141,10 +301,10 @@ void finish_task(const shared_ptr<Task> &task)
 
 } // namespace
 
-shared_ptr<Task> Jobs::cancel(JobKey const id)
+std::shared_ptr<Task> Jobs::cancel(JobKey const id)
 {
     log_info("Task(", id, ") | cancelling task");
-    shared_ptr<Task> task;
+    std::shared_ptr<Task> task;
     bool notify_immediately = false;
     {
         std::lock_guard lock(mutex_);
@@ -299,7 +459,7 @@ void Jobs::worker_loop(std::stop_token stop)
         if (!system.empty())
         {
             msgs.insert(msgs.begin(),
-                        ChatMessage{.role = string(ChatMessage::ROLE_SYSTEM), .content = std::move(system), .reasoning_content = {}});
+                        ChatMessage{.role = std::string(ChatMessage::ROLE_SYSTEM), .content = std::move(system), .reasoning_content = {}});
         }
 
         // Start stream the LLM response
@@ -344,7 +504,7 @@ void Jobs::worker_loop(std::stop_token stop)
                 std::lock_guard lock(mutex_);
                 current_task_.reset();
             }
-            task->set_error_state("context full: the latest message was rolled back", string(kContextFull));
+            task->set_error_state("context full: the latest message was rolled back", std::string(kContextFull));
             finish_task(task);
             continue;
         }
@@ -360,7 +520,7 @@ void Jobs::worker_loop(std::stop_token stop)
             continue;
         }
 
-        const string full = buffer->full_result();
+        const std::string full = buffer->full_result();
         {
             std::lock_guard lock(mutex_);
             current_task_.reset();

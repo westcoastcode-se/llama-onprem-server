@@ -1,21 +1,17 @@
-#include "cli/visible_text.hpp"
+#include "cli/tui/visible_text.hpp"
 #include "common/span_prefix.hpp"
 #include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
 #include "server/llm/kv_match.hpp"
 #include "server/llm/kv_trim.hpp"
 #include "server/llm/token_offset.hpp"
-#include "tests.hpp"
+#include "../tests.hpp"
 
 #include "chat.h"
 
 #include <fstream>
 #include <sstream>
 #include <string>
-
-extern int test_context_params();
-extern int test_session_gc();
-extern int test_tool_history();
 
 namespace
 {
@@ -423,25 +419,4 @@ int test_llama_engine()
     RUN_TEST(test_kv_trim_follows_the_cache);
     RUN_TEST(test_kv_tail_matches_hybrid_suffix);
     return EXIT_SUCCESS;
-}
-
-int main()
-{
-    if (const int rc = test_llama_engine())
-    {
-        return rc;
-    }
-    if (const int rc = test_context_params())
-    {
-        return rc;
-    }
-    if (const int rc = test_session_gc())
-    {
-        return rc;
-    }
-    if (const int rc = test_tool_history())
-    {
-        return rc;
-    }
-    return 0;
 }

@@ -2,7 +2,7 @@
 // File containing tests for prose tool schemas
 //
 
-#include "cli/tool_schema.hpp"
+#include "cli/agent/tool_schema.hpp"
 #include "../tests.hpp"
 
 /**

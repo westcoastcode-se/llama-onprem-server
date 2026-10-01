@@ -32,7 +32,7 @@ struct AppState
     /**
      * Resolve a job that belongs to a session (active or last finished).
      */
-    [[nodiscard]] shared_ptr<Task> require_session_job(const SessionID session_id, const JobKey job_key) const
+    [[nodiscard]] std::shared_ptr<Task> require_session_job(const SessionID session_id, const JobKey job_key) const
     {
         const auto session = sessions.get(session_id);
         if (!session)

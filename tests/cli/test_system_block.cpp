@@ -1,4 +1,4 @@
-#include "cli/system_block.hpp"
+#include "cli/tui/system_block.hpp"
 #include "../tests.hpp"
 
 #include <ftxui/dom/elements.hpp>

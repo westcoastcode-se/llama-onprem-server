@@ -1,27 +1,26 @@
 #pragma once
 
-#include "../../common/std.hpp"
-#include "../../api/models.hpp"
+#include "api/models.hpp"
 #include "model_adapter.hpp"
 
 #include <span>
 
 struct ParsedAssistantActions
 {
-    vector<ParsedToolCall> tool_calls;
-    optional<ParsedQuestion> question;
+    std::vector<ParsedToolCall> tool_calls;
+    std::optional<ParsedQuestion> question;
     // Think body from this completion. Empty when the model was not reasoning.
-    string reasoning;
+    std::string reasoning;
 
     /** Visible text with think/tool/question tags stripped (best-effort). */
-    string visible_text;
+    std::string visible_text;
 
     [[nodiscard]] bool has_client_work() const
     {
         return !tool_calls.empty() || question.has_value();
     }
 
-    [[nodiscard]] json to_json() const
+    [[nodiscard]] nlohmann::json to_json() const
     {
         auto j = nlohmann::json::object();
         if (!tool_calls.empty())
@@ -52,8 +51,8 @@ struct ParsedAssistantActions
 // empty and must not be scanned for tool calls.
 struct ThinkingSplit
 {
-    string reasoning;
-    string visible;
+    std::string reasoning;
+    std::string visible;
     bool closed = true;
 };
 
@@ -67,6 +66,6 @@ ParsedAssistantActions parse_assistant_actions(std::string_view text);
  * Tool schemas go to the chat template with the request, not into this text again.
  * extra is appended as additional instructions.
  */
-string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools,
+std::string default_agent_system_prompt(const ModelAdapter &adapter, std::span<const ChatTool> tools,
                                    std::string_view extra = "", bool allow_questions = true,
                                    bool compress_tools = true);

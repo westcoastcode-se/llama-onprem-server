@@ -497,7 +497,7 @@ std::string format_diff(const std::string &path, const std::vector<std::string> 
 
 bool write_atomic(const std::filesystem::path &path, const std::string &content, std::string &error)
 {
-    const std::filesystem::path tmp = path.string() + ".callisto-tmp";
+    const std::filesystem::path tmp = path.string() + ".agents-tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out.is_open())

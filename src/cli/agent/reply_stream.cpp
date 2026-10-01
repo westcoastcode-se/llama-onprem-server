@@ -1,8 +1,8 @@
-#include "cli/reply_stream.hpp"
+#include "cli/agent/reply_stream.hpp"
 
-#include "cli/visible_text.hpp"
+#include "cli/tui/visible_text.hpp"
 
-#include "client/rest_client.hpp"
+#include "cli/rest_client.hpp"
 
 #include <string>
 #include <string_view>
@@ -99,7 +99,7 @@ void ReplyStream::read(JobKey key)
 
     try
     {
-        client.stream_tokens(session_id, key, [&](const string &piece) {
+        client.stream_tokens(session_id, key, [&](const std::string &piece) {
             if (g_agent_interrupt.load(std::memory_order_relaxed))
             {
                 return false;

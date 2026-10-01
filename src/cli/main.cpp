@@ -1,10 +1,9 @@
-#include "cli/agent.hpp"
+#include "cli/agent/agent.hpp"
 #include "cli/servers.hpp"
-#include "common/std.hpp"
 #include "api/errors.hpp"
 #include "api/models.hpp"
 #include "api/sessions.hpp"
-#include "client/rest_client.hpp"
+#include "cli/rest_client.hpp"
 #include "common/log.hpp"
 
 #include <CLI11.hpp>
@@ -154,7 +153,7 @@ void stream_turn(RestClient &client, SessionID session_id, JobKey key)
 {
     try
     {
-        client.stream_tokens(session_id, key, [](const string &piece) {
+        client.stream_tokens(session_id, key, [](const std::string &piece) {
             std::print("{}", piece);
             return true;
         });
@@ -186,7 +185,7 @@ ChatMessage parse_history_item(std::string_view text)
     return message;
 }
 
-json load_tool_results(const std::string &path, const std::string &id, const std::string &name,
+nlohmann::json load_tool_results(const std::string &path, const std::string &id, const std::string &name,
                        const std::string &content, const std::string &detail, bool denied, bool from_flags)
 {
     if (!path.empty())
@@ -198,7 +197,7 @@ json load_tool_results(const std::string &path, const std::string &id, const std
         }
         std::ostringstream buffer;
         buffer << in.rdbuf();
-        const json parsed = json::parse(buffer.str());
+        const nlohmann::json parsed = nlohmann::json::parse(buffer.str());
         if (parsed.is_array())
         {
             return parsed;
@@ -217,12 +216,12 @@ json load_tool_results(const std::string &path, const std::string &id, const std
     {
         throw std::runtime_error("pass --file or --name and --content");
     }
-    json item{{"id", id}, {"name", name}, {"content", content}, {"denied", denied}};
+    nlohmann::json item{{"id", id}, {"name", name}, {"content", content}, {"denied", denied}};
     if (!detail.empty())
     {
         item["detail"] = detail;
     }
-    return json::array({std::move(item)});
+    return nlohmann::json::array({std::move(item)});
 }
 
 void add_connection(CLI::App &app, Options &options)
@@ -363,7 +362,7 @@ int main(int argc, char **argv)
         }
         for (const auto &item : tool_json)
         {
-            request.tools.push_back(ChatTool::from_json(json::parse(item)));
+            request.tools.push_back(ChatTool::from_json(nlohmann::json::parse(item)));
         }
         print_session(connect(options).create_session(request), options.json);
     });
@@ -384,7 +383,7 @@ int main(int argc, char **argv)
         connect(options).delete_session(id);
         if (options.json)
         {
-            std::println("{}", json{{"deleted", true}}.dump(2));
+            std::println("{}", nlohmann::json{{"deleted", true}}.dump(2));
         }
         else
         {
@@ -491,7 +490,7 @@ int main(int argc, char **argv)
         }
         if (options.json)
         {
-            std::println("{}", json{{"cancelled", true}}.dump(2));
+            std::println("{}", nlohmann::json{{"cancelled", true}}.dump(2));
         }
         else
         {
@@ -518,7 +517,7 @@ int main(int argc, char **argv)
     tools->add_flag("--denied", tools_denied, "The user denied this call");
     tools->callback([&] {
         tools_from_flags = !tools_name.empty() || !tools_content.empty() || tools_denied || !tools_detail.empty();
-        const json results = load_tool_results(tools_file, tools_id, tools_name, tools_content, tools_detail,
+        const nlohmann::json results = load_tool_results(tools_file, tools_id, tools_name, tools_content, tools_detail,
                                                tools_denied, tools_from_flags);
         RestClient client = connect(options);
         const SessionID id = parse_session_id(tools_session);
