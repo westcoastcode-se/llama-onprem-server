@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cli/agent.hpp"
+#include "cli/agent/agent.hpp"
 
 #include <filesystem>
 #include <optional>

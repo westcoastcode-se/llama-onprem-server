@@ -1,4 +1,4 @@
-#include "common/tool_history.hpp"
+#include "server/sessions/tool_history.hpp"
 #include "server/agent/model_adapter.hpp"
 #include "server/sessions/sessions.hpp"
 #include "../tests.hpp"

@@ -1,4 +1,4 @@
-#include "cli/tool_runner.hpp"
+#include "cli/agent/tool_runner.hpp"
 
 #include "common/tools/tool_subagent.hpp"
 
@@ -13,36 +13,6 @@
 
 namespace
 {
-
-enum class ToolKind
-{
-    Read,
-    Write,
-    Shell,
-    Network,
-    Other
-};
-
-ToolKind tool_kind(std::string_view name)
-{
-    if (name == "read_file" || name == "list_directory" || name == "file_search" || name == "search_text")
-    {
-        return ToolKind::Read;
-    }
-    if (name == "edit_file")
-    {
-        return ToolKind::Write;
-    }
-    if (name == "execute_command")
-    {
-        return ToolKind::Shell;
-    }
-    if (name == "web_fetch" || name == "web_search")
-    {
-        return ToolKind::Network;
-    }
-    return ToolKind::Other;
-}
 
 bool path_in_workspace(const std::filesystem::path &raw, const std::filesystem::path &cwd)
 {
@@ -75,7 +45,7 @@ bool path_in_workspace(const std::filesystem::path &raw, const std::filesystem::
     return text != ".." && !text.starts_with("../");
 }
 
-std::string arg_text(const json &args, const char *key)
+std::string arg_text(const nlohmann::json &args, const char *key)
 {
     if (!args.is_object() || !args.contains(key) || args[key].is_null())
     {
@@ -93,7 +63,7 @@ bool tool_is_always(const AgentState &state, std::string_view name)
     return is_tool_allowed(name, false, state.always_tools);
 }
 
-bool needs_approval(const AgentState &state, std::string_view name, const json &args)
+bool needs_approval(const AgentState &state, std::string_view name, const nlohmann::json &args)
 {
     if (state.approval == ApprovalMode::Full || tool_is_always(state, name))
     {
@@ -119,7 +89,7 @@ bool needs_approval(const AgentState &state, std::string_view name, const json &
 
 // The collapsed tool line: the name the model used, then the text that tool chose.
 // The brief is capped so the row stays one line.
-std::string tool_summary(std::span<const Tool> tools, std::string_view name, const json &args)
+std::string tool_summary(std::span<const Tool> tools, std::string_view name, const nlohmann::json &args)
 {
     std::string brief;
     if (const Tool *tool = find_tool(tools, name); tool != nullptr && tool->present)
@@ -140,7 +110,7 @@ std::string tool_summary(std::span<const Tool> tools, std::string_view name, con
     return summary;
 }
 
-std::string first_arg(const json &args, std::initializer_list<const char *> keys)
+std::string first_arg(const nlohmann::json &args, std::initializer_list<const char *> keys)
 {
     for (const char *key : keys)
     {
@@ -154,7 +124,7 @@ std::string first_arg(const json &args, std::initializer_list<const char *> keys
 }
 
 // Target stored with the tool result so a later one-line record can name it.
-std::string tool_subject(std::string_view name, const json &args)
+std::string tool_subject(std::string_view name, const nlohmann::json &args)
 {
     std::string brief;
     if (name == "execute_command")
@@ -198,7 +168,7 @@ std::string tool_subject(std::string_view name, const json &args)
     return brief;
 }
 
-std::string approval_detail(std::string_view name, const json &args)
+std::string approval_detail(std::string_view name, const nlohmann::json &args)
 {
     if (name == "edit_file")
     {
@@ -336,14 +306,14 @@ Ask ask_approval(std::string_view name, AgentState &state)
 
 } // namespace
 
-std::optional<json> ToolRunner::run(const SessionResponse &session, std::span<const Tool> tools)
+std::optional<nlohmann::json> ToolRunner::run(const SessionResponse &session, std::span<const Tool> tools)
 {
-    json results = json::array();
+    nlohmann::json results = nlohmann::json::array();
     for (const ParsedToolCall &call : session.pending_tool_calls)
     {
-        json args = call.arguments.is_object() ? call.arguments : json::object();
+        nlohmann::json args = call.arguments.is_object() ? call.arguments : nlohmann::json::object();
         const std::string summary = tool_summary(tools, call.name, args);
-        json item{{"id", call.id},
+        nlohmann::json item{{"id", call.id},
                   {"name", call.name},
                   {"detail", tool_subject(call.name, args)},
                   {"denied", false},

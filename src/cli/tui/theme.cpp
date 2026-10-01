@@ -1,6 +1,6 @@
-#include "cli/theme.hpp"
+#include "cli/tui/theme.hpp"
 
-#include "common/std.hpp"
+#include <nlohmann/json.hpp>
 
 #include <cstdlib>
 #include <format>
@@ -257,7 +257,7 @@ bool known_key(std::string_view key)
            key == "bold";
 }
 
-void apply_bool(const json &body, const char *key, bool &slot)
+void apply_bool(const nlohmann::json &body, const char *key, bool &slot)
 {
     if (!body.contains(key))
     {
@@ -270,7 +270,7 @@ void apply_bool(const json &body, const char *key, bool &slot)
     slot = body.at(key).get<bool>();
 }
 
-void apply_color(const json &body, const char *key, ThemeColor &slot)
+void apply_color(const nlohmann::json &body, const char *key, ThemeColor &slot)
 {
     if (!body.contains(key))
     {
@@ -336,10 +336,10 @@ Theme theme_builtin(std::string_view name)
 
 Theme theme_from_json(std::string_view text)
 {
-    json body;
+    nlohmann::json body;
     try
     {
-        body = json::parse(text);
+        body = nlohmann::json::parse(text);
     }
     catch (const std::exception &error)
     {

@@ -40,7 +40,6 @@ That produces:
 
 - `cmake-build-debug/callisto_server`
 - `cmake-build-debug/callisto_cli`
-- `cmake-build-debug/callisto_tests`
 - `cmake-build-debug/tests`
 
 A Release build is the one to run a model with:
@@ -142,7 +141,7 @@ Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one
 | `/status` | Session id, approval mode, and server |
 | `/diff` | `git diff --stat` for the working directory |
 | `/map` | Rewrite `.callisto/map.md` from the tree |
-| `/compact` | Summarize the chat into a new session |
+| `/compact` | Summarize the chat into a new session and stop |
 | `/clear` | Start a new session |
 | `/exit` | Leave |
 

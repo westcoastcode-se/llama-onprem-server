@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cli/agent_state.hpp"
+#include "cli/agent/agent_state.hpp"
 
 #include "common/tools.hpp"
 
@@ -46,7 +46,8 @@ class AgentSession
     [[nodiscard]] static std::string last_assistant(const SessionResponse &session);
     void present_system(const SessionResponse &created) const;
     void refresh_status();
-    [[nodiscard]] TurnStatus compact();
+    // resume posts a follow-up so the new session keeps working. Otherwise the summary is the last step.
+    [[nodiscard]] TurnStatus compact(bool resume);
     void help() const;
     void diff() const;
     [[nodiscard]] bool slash(const std::string &line);

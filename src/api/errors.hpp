@@ -1,7 +1,9 @@
 #pragma once
 
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 /**
  * Error thrown when a REST API is not found
@@ -30,12 +32,12 @@ struct ErrorResponse
     // Error code
     int error_code;
     // Error message
-    string message;
+    std::string message;
 
-    [[nodiscard]] json to_json() const
+    [[nodiscard]] nlohmann::json to_json() const
     {
         // clang-format off
-        return json
+        return nlohmann::json
         {
             { "error_code", error_code },
             { "message", message }
@@ -43,13 +45,13 @@ struct ErrorResponse
         // clang-format on
     }
 
-    static ErrorResponse from_json(const json &j)
+    static ErrorResponse from_json(const nlohmann::json &j)
     {
         // clang-format off
         return ErrorResponse
         {
             .error_code = j.value("error_code", -1),
-            .message = j.value("message", string()),
+            .message = j.value("message", std::string()),
         };
         // clang-format on
     }

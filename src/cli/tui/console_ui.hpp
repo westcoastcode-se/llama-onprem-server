@@ -1,7 +1,7 @@
 #pragma once
 
-#include "cli/theme.hpp"
-#include "cli/ui.hpp"
+#include "cli/tui/theme.hpp"
+#include "cli/tui/ui.hpp"
 
 #include <cctype>
 #include <iostream>

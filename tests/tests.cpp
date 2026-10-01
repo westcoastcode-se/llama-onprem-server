@@ -24,6 +24,10 @@ extern int test_context_pressure();
 extern int test_utf8_stream();
 extern int test_token_buffer();
 extern int test_models();
+extern int test_llama_engine();
+extern int test_context_params();
+extern int test_session_gc();
+extern int test_tool_history();
 
 int main()
 {
@@ -112,6 +116,22 @@ int main()
         return rc;
     }
     if (const int rc = test_models())
+    {
+        return rc;
+    }
+    if (const int rc = test_llama_engine())
+    {
+        return rc;
+    }
+    if (const int rc = test_context_params())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_gc())
+    {
+        return rc;
+    }
+    if (const int rc = test_tool_history())
     {
         return rc;
     }

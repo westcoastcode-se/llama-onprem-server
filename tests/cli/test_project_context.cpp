@@ -1,4 +1,4 @@
-#include "cli/project_context.hpp"
+#include "cli/project/project_context.hpp"
 #include "common/defer.hpp"
 #include "../tests.hpp"
 

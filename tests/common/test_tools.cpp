@@ -2,6 +2,7 @@
 // File containing tests for generic tools functions
 //
 
+#include "common/response_blocks.hpp"
 #include "common/tools.hpp"
 #include "../tests.hpp"
 

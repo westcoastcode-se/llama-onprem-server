@@ -1,4 +1,4 @@
-#include "cli/theme.hpp"
+#include "cli/tui/theme.hpp"
 #include "../tests.hpp"
 
 #include <filesystem>

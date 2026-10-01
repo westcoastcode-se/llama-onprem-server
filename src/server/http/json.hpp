@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../common/std.hpp"
 #include <httplib.h>
 
 #include "common/log.hpp"

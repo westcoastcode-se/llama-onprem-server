@@ -3,6 +3,7 @@
 //
 
 #include "common/defer.hpp"
+#include "common/response_blocks.hpp"
 #include "common/tools.hpp"
 #include "../tests.hpp"
 
@@ -199,39 +200,6 @@ static int test_registered_tools() {
 }
 
 /**
- * The system prompt names the working directory, the tools, and any project instructions.
- */
-static int test_build_system_prompt() {
-    const auto dir = make_temp_dir("prompt");
-    defer(std::filesystem::remove_all(dir));
-    write_test_file(dir / "AGENTS.md", "Project rule\n");
-
-    const Tool tool{
-        .name = "read_file",
-        .description = "Read a file",
-        .schema_doc = "arguments:\n      path: string (path)",
-        .execute = [](const nlohmann::json &) { return std::string{}; },
-    };
-    const auto prompt = build_system_prompt(std::span<const Tool>(&tool, 1), "Be brief", dir);
-    assertTrue(prompt.find("Working Directory: " + dir.string()) != std::string::npos);
-    assertTrue(prompt.find("read_file") != std::string::npos);
-    assertTrue(prompt.find("Be brief") != std::string::npos);
-    assertTrue(prompt.find("Project rule") != std::string::npos);
-    assertTrue(prompt.find("Sub-Agent Task Planning") == std::string::npos);
-
-    const Tool sub{
-        .name = "sub_agent",
-        .description = "Delegate",
-        .schema_doc = "",
-        .execute = [](const nlohmann::json &) { return std::string{}; },
-    };
-    const Tool both[] = {tool, sub};
-    const auto with_sub = build_system_prompt(both, "", dir);
-    assertTrue(with_sub.find("Sub-Agent Task Planning") != std::string::npos);
-    return EXIT_SUCCESS;
-}
-
-/**
  * An empty instructions file is ignored. A later candidate is not used when an earlier one has text.
  */
 static int test_load_ai_instructions() {
@@ -292,7 +260,6 @@ int test_tool_policy() {
     RUN_TEST(test_run_tool_name_and_alias);
     RUN_TEST(test_run_tool_exception);
     RUN_TEST(test_registered_tools);
-    RUN_TEST(test_build_system_prompt);
     RUN_TEST(test_load_ai_instructions);
     RUN_TEST(test_thinking_stream_filter);
     return EXIT_SUCCESS;

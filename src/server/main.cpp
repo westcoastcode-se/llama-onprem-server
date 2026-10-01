@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     Logger::set_level(Logger::LEVEL_DEBUG);
 
     LlamaConfig config;
-    string host = "127.0.0.1";
+    std::string host = "127.0.0.1";
     int port = 8080;
 
     for (int i = 1; i < argc; ++i)
@@ -289,7 +289,7 @@ int main(int argc, char **argv)
         {
             send_json(res, 400, ErrorResponse{400, e.what()});
         }
-        catch (const json::exception &e)
+        catch (const nlohmann::json::exception &e)
         {
             log_error("unhandled JSON exception: ", e.what());
             send_json(res, 400, ErrorResponse{400, e.what()});

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "cli/agent.hpp"
-#include "cli/ui.hpp"
+#include "cli/agent/agent.hpp"
+#include "cli/tui/ui.hpp"
 
 #include "api/models.hpp"
-#include "client/rest_client.hpp"
+#include "cli/rest_client.hpp"
 
 #include <filesystem>
 #include <vector>

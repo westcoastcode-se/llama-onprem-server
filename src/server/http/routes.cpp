@@ -70,7 +70,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
 {
     // Create a new session
     s.Post("/v1/sessions", [&state](const httplib::Request &req, httplib::Response &res) {
-        const auto body = json::parse(req.body.empty() ? "{}" : req.body);
+        const auto body = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
         const auto created = state.sessions.create(CreateSessionRequest::from_json(body));
         log_info(req.remote_addr, ":", req.remote_port, " created ", created);
         send_json(res, 201, created->to_response());
@@ -108,7 +108,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     s.Post("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
         const auto session_id = static_cast<SessionID>(std::stoll(req.path_params.at("id")));
         log_info("Getting messages from session: ", session_id);
-        const auto body = json::parse(req.body);
+        const auto body = nlohmann::json::parse(req.body);
         const auto msg = SessionMessageRequest::from_json(body);
         const auto key = state.sessions.post_message(session_id, msg);
         if (!key)
@@ -119,7 +119,7 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
     // Post tool responses to the active session
     s.Post("/v1/sessions/:id/tools", [&state](const httplib::Request &req, httplib::Response &res) {
         const SessionID id = std::stoll(req.path_params.at("id"));
-        auto body = json::parse(req.body.empty() ? "{}" : req.body);
+        auto body = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
         auto key = state.sessions.post_tool_results(id, SessionToolResultsRequest::from_json(body));
         if (!key)
             throw Busy("job queue is full");

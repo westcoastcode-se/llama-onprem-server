@@ -53,6 +53,8 @@ endfunction()
 #
 set(COMMON_TOOL_SOURCES
     src/common/tools.cpp
+    src/common/tool_approval.cpp
+    src/common/response_blocks.cpp
     src/common/tools/web_utils.cpp
     src/common/tools/tool_execute_command.cpp
     src/common/tools/tool_read_file.cpp
@@ -70,7 +72,8 @@ set(COMMON_TOOL_SOURCES
 # HTTP server. One model, sessions, and a job queue.
 #
 add_executable(callisto_server
-        src/server.cpp
+        src/api/models.cpp
+        src/server/main.cpp
         src/server/http/routes.cpp
         src/server/jobs/jobs.cpp
         src/server/sessions/sessions.cpp
@@ -79,7 +82,7 @@ add_executable(callisto_server
         src/common/log.cpp
         src/server/llm/llm_engine.cpp
         src/server/llm/kv_trim.cpp
-        src/common/tool_history.cpp)
+        src/server/sessions/tool_history.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
@@ -101,19 +104,28 @@ FetchContent_Declare(ftxui
 FetchContent_MakeAvailable(ftxui)
 
 add_executable(callisto_cli
-        src/cli.cpp
-        src/cli/agent.cpp
-        src/cli/agent_session.cpp
-        src/cli/project_context.cpp
-        src/cli/reply_stream.cpp
+        src/cli/main.cpp
+        src/cli/agent/agent.cpp
+        src/cli/agent/agent_session.cpp
+        src/cli/agent/agent_commands.cpp
+        src/cli/project/project_context.cpp
+        src/cli/project/project_git.cpp
+        src/cli/project/project_hints.cpp
+        src/cli/project/project_ignore.cpp
+        src/cli/agent/reply_stream.cpp
         src/cli/servers.cpp
         src/cli/session_store.cpp
-        src/cli/system_block.cpp
-        src/cli/tool_runner.cpp
-        src/cli/theme.cpp
-        src/cli/tool_schema.cpp
-        src/cli/transcript_scroll.cpp
-        src/cli/tui.cpp
+        src/cli/tui/system_block.cpp
+        src/cli/agent/tool_runner.cpp
+        src/cli/tui/theme.cpp
+        src/cli/agent/tool_schema.cpp
+        src/cli/tui/transcript_scroll.cpp
+        src/cli/tui/tui.cpp
+        src/cli/tui/tui_input.cpp
+        src/cli/tui/tui_menu.cpp
+        src/cli/tui/tui_transcript.cpp
+        src/cli/rest_client.cpp
+        src/api/models.cpp
         src/common/log.cpp
         ${COMMON_TOOL_SOURCES})
 configure_localai_target(callisto_cli)
@@ -123,8 +135,8 @@ target_include_directories(callisto_cli BEFORE PRIVATE
 target_link_libraries(callisto_cli PRIVATE ftxui::component CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
-# Unit tests. No model required. callisto_tests also links llama for the chat template.
-# Both binaries use tests/tests.hpp (RUN_TEST, assertEquals, assertTrue).
+# Unit tests. No model weights required. llama is linked for the chat template.
+# tests/tests.hpp provides RUN_TEST, assertEquals, and assertTrue.
 #
 add_executable(tests
     tests/tests.cpp
@@ -141,40 +153,41 @@ add_executable(tests
     tests/common/tools/test_tool_subagent.cpp
     tests/cli/test_theme.cpp
     tests/cli/test_tool_schema.cpp
-    src/cli/theme.cpp
+    src/cli/tui/theme.cpp
     tests/cli/test_servers.cpp
     tests/cli/test_project_context.cpp
     tests/cli/test_session_store.cpp
     tests/cli/test_transcript_scroll.cpp
     tests/cli/test_system_block.cpp
     tests/cli/test_context_pressure.cpp
-    src/cli/transcript_scroll.cpp
-    src/cli/system_block.cpp
+    src/cli/tui/transcript_scroll.cpp
+    src/cli/tui/system_block.cpp
     tests/server/test_utf8_stream.cpp
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
-    src/cli/tool_schema.cpp
-    src/cli/project_context.cpp
+    tests/server/test_llama_engine.cpp
+    tests/server/test_context_params.cpp
+    tests/server/test_session_gc.cpp
+    tests/server/test_tool_history.cpp
+    src/api/models.cpp
+    src/cli/agent/tool_schema.cpp
+    src/cli/project/project_context.cpp
+    src/cli/project/project_git.cpp
+    src/cli/project/project_hints.cpp
+    src/cli/project/project_ignore.cpp
     src/cli/servers.cpp
     src/cli/session_store.cpp
+    src/common/log.cpp
+    src/server/sessions/tool_history.cpp
+    src/server/agent/model_adapter.cpp
+    src/server/agent/response_parse.cpp
+    src/server/jobs/jobs.cpp
+    src/server/llm/kv_trim.cpp
+    src/server/llm/llm_engine.cpp
+    src/server/sessions/sessions.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
-target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
-
-add_executable(callisto_tests
-        tests/test_llama_engine.cpp
-        tests/server/test_context_params.cpp
-        tests/server/test_session_gc.cpp
-        tests/server/test_tool_history.cpp
-        src/server/agent/response_parse.cpp
-        src/server/agent/model_adapter.cpp
-        src/common/log.cpp
-        src/server/llm/kv_trim.cpp
-        src/common/tool_history.cpp)
-configure_localai_target(callisto_tests)
-target_compile_definitions(callisto_tests PRIVATE)
-target_link_libraries(callisto_tests PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 enable_testing()
 add_test(NAME tests COMMAND $<TARGET_FILE:tests>)
-add_test(NAME callisto_tests COMMAND $<TARGET_FILE:callisto_tests>)

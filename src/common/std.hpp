@@ -2,42 +2,7 @@
 
 #include <condition_variable>
 #include <cstddef>
-#include <cstdint>
-#include <deque>
-#include <latch>
-#include <list>
-#include <memory>
 #include <mutex>
-#include <nlohmann/json.hpp>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <thread>
-#include <vector>
-
-using json = nlohmann::json;
-
-using string = std::string;
-using string_view = std::string_view;
-
-template <typename T> using vector = std::vector<T>;
-template <typename T> using deque = std::deque<T>;
-template <typename T> using list = std::list<T>;
-
-template <typename T> using span = std::span<T>;
-
-template <typename T> using unique_ptr = std::unique_ptr<T>;
-template <typename T> using shared_ptr = std::shared_ptr<T>;
-
-using bytes = std::span<std::byte>;
-
-using mutex = std::mutex;
-using latch = std::latch;
-using thread = std::jthread;
-using condition_variable = std::condition_variable;
-
-template <typename T> using optional = std::optional<T>;
 
 // Counting latch whose count can rise. std::latch is fixed at construction.
 class dynamic_latch

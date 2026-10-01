@@ -7,14 +7,14 @@
 
 struct ToolResultItem
 {
-    string id;
-    string name;
-    string content;
+    std::string id;
+    std::string name;
+    std::string content;
     // Path, command, query, or URL. Stored on the tool tag so a later one-line record can name the target.
-    string detail;
+    std::string detail;
     bool denied = false;
 
-    static ToolResultItem from_json(const json &j)
+    static ToolResultItem from_json(const nlohmann::json &j)
     {
         ToolResultItem item;
         item.id = j.value("id", "");
@@ -28,12 +28,12 @@ struct ToolResultItem
 
 struct SessionToolResultsRequest
 {
-    vector<ToolResultItem> results;
+    std::vector<ToolResultItem> results;
 
-    static SessionToolResultsRequest from_json(const json &j)
+    static SessionToolResultsRequest from_json(const nlohmann::json &j)
     {
         SessionToolResultsRequest req;
-        json arr = json::array();
+        nlohmann::json arr = nlohmann::json::array();
         if (j.contains("tool_results") && j["tool_results"].is_array())
         {
             arr = j["tool_results"];

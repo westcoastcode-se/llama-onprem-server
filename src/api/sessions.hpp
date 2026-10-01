@@ -1,9 +1,10 @@
 #pragma once
 
-#include "../common/std.hpp"
 #include "errors.hpp"
 
 #include <format>
+#include <nlohmann/json.hpp>
+#include <string>
 #include <utility>
 
 using SessionID = uint64_t;
@@ -70,7 +71,7 @@ struct SessionState
         }
     }
 
-    static SessionState to_enum(const string &s)
+    static SessionState to_enum(const std::string &s)
     {
         if (s == "idle")
         {
@@ -94,8 +95,8 @@ struct SessionState
 
 struct SessionMessageRequest
 {
-    string content;
-    string role;
+    std::string content;
+    std::string role;
     // < 0 inherits the session cap.
     int max_tokens = -1;
 
@@ -110,7 +111,7 @@ struct SessionMessageRequest
             throw BadRequest{"property 'role' is required"};
     }
 
-    static SessionMessageRequest from_json(const json &j)
+    static SessionMessageRequest from_json(const nlohmann::json &j)
     {
         SessionMessageRequest req;
         req.content = j.value("content", "");
@@ -120,10 +121,10 @@ struct SessionMessageRequest
         return req;
     }
 
-    [[nodiscard]] json to_json() const
+    [[nodiscard]] nlohmann::json to_json() const
     {
         // clang-format off
-        return json
+        return nlohmann::json
         {
             {"content", content},
             {"role", role},
@@ -149,7 +150,7 @@ struct SessionMessageResponse
             throw BadRequest{"property 'key' is required"};
     }
 
-    static SessionMessageResponse from_json(const json &j)
+    static SessionMessageResponse from_json(const nlohmann::json &j)
     {
         SessionMessageResponse resp;
         resp.session_id = j.value("session_id", SessionID());
@@ -157,10 +158,10 @@ struct SessionMessageResponse
         return resp;
     }
 
-    [[nodiscard]] json to_json() const
+    [[nodiscard]] nlohmann::json to_json() const
     {
         // clang-format off
-        return json
+        return nlohmann::json
         {
             {"session_id", session_id},
             {"key", key}
@@ -172,19 +173,19 @@ struct SessionMessageResponse
 /** NDJSON line for GET /v1/sessions/:id/jobs/:key/tokens */
 struct MessageTokensResponse
 {
-    string tokens;
+    std::string tokens;
     bool done = false;
     // Present on the terminal line. "done", "error", or "cancelled".
-    string state;
-    string error;
-    string error_code;
+    std::string state;
+    std::string error;
+    std::string error_code;
     // Session KV tokens and window length. Zero size means the line does not report usage.
     int context_used = 0;
     int context_size = 0;
 
-    [[nodiscard]] json to_json() const
+    [[nodiscard]] nlohmann::json to_json() const
     {
-        json j{{"tokens", tokens}, {"done", done}};
+        nlohmann::json j{{"tokens", tokens}, {"done", done}};
         if (!state.empty())
         {
             j["state"] = state;
@@ -205,14 +206,14 @@ struct MessageTokensResponse
         return j;
     }
 
-    static MessageTokensResponse from_json(json &j)
+    static MessageTokensResponse from_json(nlohmann::json &j)
     {
         MessageTokensResponse response;
-        response.tokens = j.value("tokens", string());
+        response.tokens = j.value("tokens", std::string());
         response.done = j.value("done", false);
-        response.state = j.value("state", string());
-        response.error = j.value("error", string());
-        response.error_code = j.value("error_code", string());
+        response.state = j.value("state", std::string());
+        response.error = j.value("error", std::string());
+        response.error_code = j.value("error_code", std::string());
         response.context_used = j.value("context_used", 0);
         response.context_size = j.value("context_size", 0);
         return response;

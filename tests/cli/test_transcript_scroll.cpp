@@ -1,4 +1,4 @@
-#include "cli/transcript_scroll.hpp"
+#include "cli/tui/transcript_scroll.hpp"
 #include "../tests.hpp"
 
 #include <ftxui/dom/elements.hpp>

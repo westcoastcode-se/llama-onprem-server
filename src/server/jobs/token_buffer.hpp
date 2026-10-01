@@ -1,6 +1,11 @@
 #pragma once
 
-#include "../../common/std.hpp"
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <vector>
 
 /**
  * Thread-safe bridge: LLM producer pushes token pieces; HTTP consumer pulls them.
@@ -9,7 +14,7 @@
 class TokenBuffer
 {
   public:
-    void push(string piece)
+    void push(std::string piece)
     {
         {
             std::lock_guard lock(mutex_);
@@ -58,7 +63,7 @@ class TokenBuffer
      *
      * @return nullopt when EOF (done and empty); empty string should not be returned for EOF.
      */
-    optional<string> wait_pull()
+    std::optional<std::string> wait_pull()
     {
         std::unique_lock lock(mutex_);
         cv_.wait(lock, [this] { return !pieces_.empty() || done_ || cancelled_; });
@@ -75,10 +80,10 @@ class TokenBuffer
      * Non-blocking pull of all currently available pieces.
      * @param out_done set true when generation finished and buffer drained.
      */
-    vector<string> pull_available(bool &out_done)
+    std::vector<std::string> pull_available(bool &out_done)
     {
         std::lock_guard lock(mutex_);
-        vector<string> out;
+        std::vector<std::string> out;
         out.reserve(pieces_.size());
         while (!pieces_.empty())
         {
@@ -89,13 +94,13 @@ class TokenBuffer
         return out;
     }
 
-    void set_full_result(string text)
+    void set_full_result(std::string text)
     {
         std::lock_guard lock(mutex_);
         full_result_ = std::move(text);
     }
 
-    [[nodiscard]] string full_result() const
+    [[nodiscard]] std::string full_result() const
     {
         std::lock_guard lock(mutex_);
         return full_result_;
@@ -103,9 +108,9 @@ class TokenBuffer
 
   private:
     mutable std::mutex mutex_;
-    condition_variable cv_;
-    deque<string> pieces_;
-    string full_result_;
+    std::condition_variable cv_;
+    std::deque<std::string> pieces_;
+    std::string full_result_;
     bool done_ = false;
     bool cancelled_ = false;
 };
