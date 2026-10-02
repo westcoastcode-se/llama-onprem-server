@@ -29,6 +29,8 @@ extern int test_llama_engine();
 extern int test_context_params();
 extern int test_session_gc();
 extern int test_tool_history();
+extern int test_session_kv_store();
+extern int test_session_disk();
 
 int main()
 {
@@ -137,6 +139,14 @@ int main()
         return rc;
     }
     if (const int rc = test_tool_history())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_kv_store())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_disk())
     {
         return rc;
     }

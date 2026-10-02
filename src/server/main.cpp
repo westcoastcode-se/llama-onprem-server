@@ -11,15 +11,79 @@
 #include <cstdint>
 #include <cstdlib>
 #include <format>
+#include <optional>
 #include <httplib.h>
 #include <poll.h>
 #include <print>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unistd.h>
 
 namespace
 {
+
+std::optional<uint64_t> parse_byte_size(const std::string_view text)
+{
+    if (text.empty())
+    {
+        return std::nullopt;
+    }
+    std::size_t index = 0;
+    uint64_t value = 0;
+    for (; index < text.size() && text[index] >= '0' && text[index] <= '9'; ++index)
+    {
+        const uint64_t digit = static_cast<uint64_t>(text[index] - '0');
+        if (value > (UINT64_MAX - digit) / 10)
+        {
+            return std::nullopt;
+        }
+        value = value * 10 + digit;
+    }
+    if (index == 0)
+    {
+        return std::nullopt;
+    }
+    std::string suffix(text.substr(index));
+    for (char &ch : suffix)
+    {
+        if (ch >= 'A' && ch <= 'Z')
+        {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    uint64_t scale = 1;
+    if (suffix.empty() || suffix == "b")
+    {
+        scale = 1;
+    }
+    else if (suffix == "k" || suffix == "kb")
+    {
+        scale = 1024ull;
+    }
+    else if (suffix == "m" || suffix == "mb")
+    {
+        scale = 1024ull * 1024;
+    }
+    else if (suffix == "g" || suffix == "gb")
+    {
+        scale = 1024ull * 1024 * 1024;
+    }
+    else if (suffix == "t" || suffix == "tb")
+    {
+        scale = 1024ull * 1024 * 1024 * 1024;
+    }
+    else
+    {
+        return std::nullopt;
+    }
+    if (scale != 1 && value > UINT64_MAX / scale)
+    {
+        return std::nullopt;
+    }
+    return value * scale;
+}
+
 int g_wake_fd = -1;
 volatile sig_atomic_t g_stop_flag = 0;
 
@@ -63,7 +127,9 @@ void print_usage(const char *argv0)
                  "  --cache-type-v TYPE    KV cache V type (default f16)\n"
                  "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
                  "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
-                 "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
+                 "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
+                 "  --session-dir PATH     parked session files (default /tmp/.callisto/sessions)\n"
+                 "  --session-cache-size SIZE  max bytes for that directory (K/M/G/T, 0 = no limit)\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)",
                  argv0);
@@ -181,6 +247,20 @@ int main(int argc, char **argv)
         {
             config.kv_sessions = std::stoi(need("--kv-sessions"));
         }
+        else if (arg == "--session-dir")
+        {
+            config.session_dir = need("--session-dir");
+        }
+        else if (arg == "--session-cache-size")
+        {
+            const auto size = parse_byte_size(need("--session-cache-size"));
+            if (!size)
+            {
+                std::println(stderr, "invalid --session-cache-size");
+                return 1;
+            }
+            config.session_cache_bytes = *size;
+        }
         else if (arg == "--host")
         {
             host = need("--host");
@@ -223,6 +303,9 @@ int main(int argc, char **argv)
     log_info("[llm] assistant format ", adapter->name());
     Jobs jobs(engine, *adapter);
     Sessions sessions(jobs, *adapter);
+    // The conversation is on disk. KV stays there until a turn activates the session.
+    sessions.load(engine.get_config().session_dir, engine.get_config().session_cache_bytes);
+    jobs.set_session_cache_hook([&sessions] { sessions.enforce_cache_limit(0); });
     httplib::Server svr;
 
     int wake[2] = {-1, -1};
@@ -316,6 +399,7 @@ int main(int argc, char **argv)
     if (!svr.listen(host, port))
     {
         log_error("failed to listen on ", host, ":", port);
+        jobs.stop();
         return 1;
     }
 

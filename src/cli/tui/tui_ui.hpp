@@ -93,6 +93,8 @@ class TuiUi final : public AgentUi
     void collapse(std::string_view kind) override;
     void caption(std::string text) override;
     void show_system(std::string text) override;
+    void clear() override;
+    void show_saved_thinking(std::string text) override;
     Ask ask(std::string title, std::string) override;
     std::optional<std::string> question(std::string prompt, std::vector<std::string> choices) override;
     std::optional<std::size_t> choose(std::string prompt, std::vector<std::string> choices, std::size_t selected) override;

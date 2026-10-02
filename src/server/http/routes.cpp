@@ -76,13 +76,25 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         send_json(res, 201, created->to_response());
     });
 
-    // Get all information of the supplied session
+    // Headers only. The transcript of one session is GET /v1/sessions/:id/messages.
+    s.Get("/v1/sessions", [&state](const httplib::Request &, httplib::Response &res) {
+        SessionListResponse body;
+        const auto sessions = state.sessions.list();
+        body.sessions.reserve(sessions.size());
+        for (const auto &session : sessions)
+        {
+            body.sessions.push_back(session->to_response(false));
+        }
+        send_json(res, 200, body);
+    });
+
+    // Session header. The transcript is GET /v1/sessions/:id/messages.
     s.Get("/v1/sessions/:id", [&state](const httplib::Request &req, httplib::Response &res) {
         const SessionID id = std::stoll(req.path_params.at("id"));
         const auto session = state.sessions.get(id);
         if (!session)
             throw NotFound("session not found");
-        send_json(res, 200, session->to_response());
+        send_json(res, 200, session->to_response(false));
     });
 
     // Delete a session
@@ -102,6 +114,21 @@ void register_session_endpoints(httplib::Server &s, AppState &state)
         const auto child = state.sessions.snapshot(id);
         log_info(req.remote_addr, ":", req.remote_port, " snapshotted ", id, " as ", child->id);
         send_json(res, 201, child->to_response());
+    });
+
+    s.Get("/v1/sessions/:id/messages", [&state](const httplib::Request &req, httplib::Response &res) {
+        const SessionID id = std::stoll(req.path_params.at("id"));
+        const auto session = state.sessions.get(id);
+        if (!session)
+        {
+            throw NotFound("session not found");
+        }
+        // Opening the transcript is how a client resumes. The new time keeps this session
+        // when the on-disk cache is over its size limit.
+        state.sessions.note_resume(id);
+        SessionMessagesResponse body;
+        body.messages = session->to_response().messages;
+        send_json(res, 200, body);
     });
 
     // Post a message to a session

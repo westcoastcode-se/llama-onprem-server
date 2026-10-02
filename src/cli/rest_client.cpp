@@ -66,6 +66,19 @@ SessionResponse RestClient::get_session(const SessionID &id)
     return SessionResponse::from_json(request_json("GET", "/v1/sessions/" + std::to_string(id), std::nullopt, 200));
 }
 
+std::vector<SessionResponse> RestClient::list_sessions()
+{
+    const nlohmann::json body = request_json("GET", "/v1/sessions", std::nullopt, 200);
+    return SessionListResponse::from_json(body).sessions;
+}
+
+std::vector<ChatMessage> RestClient::get_messages(const SessionID &id)
+{
+    const nlohmann::json body =
+        request_json("GET", "/v1/sessions/" + std::to_string(id) + "/messages", std::nullopt, 200);
+    return SessionMessagesResponse::from_json(body).messages;
+}
+
 void RestClient::delete_session(const SessionID &id)
 {
     auto res = cli_.Delete("/v1/sessions/" + std::to_string(id));

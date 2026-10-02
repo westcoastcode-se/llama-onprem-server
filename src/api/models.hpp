@@ -261,6 +261,9 @@ struct SessionResponse
     int context_used = 0;
     int context_size = 0;
 
+    // GET /v1/sessions/{id} leaves this false and omits messages. Create and snapshot keep them.
+    bool include_messages = true;
+
     /**
      * Validate required properties
      */
@@ -276,4 +279,24 @@ struct SessionResponse
 
     static SessionResponse from_json(const nlohmann::json &j);
 
+};
+
+// Body of GET /v1/sessions. Headers only, same shape as GET /v1/sessions/{id}.
+struct SessionListResponse
+{
+    std::vector<SessionResponse> sessions;
+
+    [[nodiscard]] nlohmann::json to_json() const;
+
+    static SessionListResponse from_json(const nlohmann::json &j);
+};
+
+// Body of GET /v1/sessions/{id}/messages. The session GET does not carry this list.
+struct SessionMessagesResponse
+{
+    std::vector<ChatMessage> messages;
+
+    [[nodiscard]] nlohmann::json to_json() const;
+
+    static SessionMessagesResponse from_json(const nlohmann::json &j);
 };

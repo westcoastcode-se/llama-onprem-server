@@ -79,6 +79,12 @@ class RestClient
 
     SessionResponse get_session(const SessionID &id);
 
+    // Session headers on this server, newest first. GET /v1/sessions.
+    [[nodiscard]] std::vector<SessionResponse> list_sessions();
+
+    // Transcript. GET /v1/sessions/{id} does not include it.
+    [[nodiscard]] std::vector<ChatMessage> get_messages(const SessionID &id);
+
     /**
      * Delete the session with the supplied id. This will cleanup all of it's resources
      * on the server and abort any running chat request if running

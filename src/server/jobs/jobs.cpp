@@ -349,9 +349,53 @@ void Jobs::release_session(const std::string &session_id)
     {
         return;
     }
+    // The worker is the only thread that may touch the context. A queued release would
+    // never run once this thread has left the loop, so delete the file here.
+    if (on_worker_thread())
+    {
+        engine_.release_session(session_id);
+        return;
+    }
     std::lock_guard lock(mutex_);
     pending_session_releases_.push_back(session_id);
     cv_.notify_one();
+}
+
+void Jobs::set_session_cache_hook(std::function<void()> hook)
+{
+    std::lock_guard lock(mutex_);
+    session_cache_hook_ = std::move(hook);
+}
+
+bool Jobs::on_worker_thread() const
+{
+    return worker_.get_id() == std::this_thread::get_id();
+}
+
+std::string Jobs::active_session_id() const
+{
+    return engine_.active_session_id();
+}
+
+void Jobs::note_session_cache_changed()
+{
+    std::function<void()> hook;
+    {
+        std::lock_guard lock(mutex_);
+        hook = session_cache_hook_;
+    }
+    if (!hook)
+    {
+        return;
+    }
+    try
+    {
+        hook();
+    }
+    catch (const std::exception &error)
+    {
+        log_error("session cache hook failed: ", error.what());
+    }
 }
 
 void Jobs::clone_session(const std::string &from, const std::string &to)
@@ -407,6 +451,10 @@ void Jobs::worker_loop(std::stop_token stop)
         for (const auto &[from, to] : work.clones)
         {
             engine_.clone_session(from, to);
+        }
+        if (!work.clones.empty())
+        {
+            note_session_cache_changed();
         }
         for (const auto &session_id : work.releases)
         {
@@ -543,4 +591,15 @@ void Jobs::worker_loop(std::stop_token stop)
         task->set_result(split.visible, JobState::Done, std::move(actions));
         finish_task(task);
     }
+    // The live sequence is the only copy of the active session until this write.
+    // A kill skips it; the conversation file from the last finished turn remains.
+    try
+    {
+        engine_.park_active_session();
+    }
+    catch (const std::exception &e)
+    {
+        log_error("[llm] shutdown kv park failed: ", e.what());
+    }
+    note_session_cache_changed();
 }

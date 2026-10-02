@@ -183,8 +183,17 @@ class Jobs
 
     /**
      * Forget KV parked for this session. Applied on the worker thread.
+     * A call from the worker deletes the file immediately.
      */
     void release_session(const std::string &session_id);
+
+    // Runs after a KV file is written, on the worker thread.
+    void set_session_cache_hook(std::function<void()> hook);
+
+    [[nodiscard]] bool on_worker_thread() const;
+
+    // Worker thread only.
+    [[nodiscard]] std::string active_session_id() const;
 
     // Configured context length. Immutable after the engine is loaded.
     [[nodiscard]] int context_size() const;
@@ -203,11 +212,13 @@ class Jobs
     std::deque<JobKey> queue_;
     std::vector<std::string> pending_session_releases_;
     std::vector<std::pair<std::string, std::string>> pending_session_clones_;
+    std::function<void()> session_cache_hook_;
     std::shared_ptr<Task> current_task_;
     std::jthread worker_;
 
     void worker_loop(std::stop_token stop);
     void unsafe_gc();
+    void note_session_cache_changed();
 
     struct NextWork
     {

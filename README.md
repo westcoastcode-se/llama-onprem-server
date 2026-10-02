@@ -79,6 +79,8 @@ Start the server. `-c` is the context length. `-ngl 99` offloads layers to the G
   -c 32768 -ngl 99
 ```
 
+Each session is stored under `/tmp/.callisto/sessions`, or the directory given with `--session-dir`. `<id>.json` is the conversation: the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is that session's KV cache and token ids, written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. `--session-cache-size` caps the directory (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
+
 Start the client in the project you want it to edit:
 
 ```bash
@@ -114,7 +116,7 @@ One task from a script:
 ./cmake-build-release/callisto_cli exec "Summarize the README"
 ```
 
-`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.callisto/last-session` for this directory and server. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
+`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.agents/last-session` for this directory and server and shows its transcript. `--session ID` does the same for that id. `/resume` lists the sessions saved for this server, including ones restored after a restart. A session idle for 10 minutes is collected. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
 
 `web_search` calls a local SearXNG on port 4488. Start it with:
 
@@ -142,6 +144,7 @@ Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one
 | `/diff` | `git diff --stat` for the working directory |
 | `/compact` | Summarize the chat into a new session and stop |
 | `/clear` | Start a new session |
+| `/resume` | Continue a session still held by this server |
 | `/exit` | Leave |
 
 `AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md`. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.

@@ -367,6 +367,27 @@ int main(int argc, char **argv)
         print_session(connect(options).create_session(request), options.json);
     });
 
+    auto *list = session->add_subcommand("list", "GET /v1/sessions");
+    list->callback([&] {
+        const std::vector<SessionResponse> sessions = connect(options).list_sessions();
+        if (options.json)
+        {
+            SessionListResponse body;
+            body.sessions = sessions;
+            std::println("{}", body.to_json().dump(2));
+            return;
+        }
+        if (sessions.empty())
+        {
+            std::println("no sessions");
+            return;
+        }
+        for (const SessionResponse &item : sessions)
+        {
+            std::println("session {}  {}  {}/{}", item.id, item.state.to_string(), item.context_used, item.context_size);
+        }
+    });
+
     auto *get = session->add_subcommand("get", "GET /v1/sessions/{id}");
     get->fallthrough();
     std::string get_id;

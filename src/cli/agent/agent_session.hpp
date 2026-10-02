@@ -5,6 +5,7 @@
 #include "common/tools.hpp"
 
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,8 +44,13 @@ class AgentSession
     [[nodiscard]] bool model_command(std::string_view argument);
     [[nodiscard]] std::string offline_message() const;
     [[nodiscard]] bool ensure_server();
-    [[nodiscard]] static std::string last_assistant(const SessionResponse &session);
+    [[nodiscard]] static std::string last_assistant(std::span<const ChatMessage> messages);
     void present_system(const SessionResponse &created) const;
+    // Load this id, remember it, and draw its transcript. Throws when the server has no such session.
+    void present_transcript_of(const AgentConfig &stored, SessionID id);
+    // Replace the transcript with this session's system prompt and messages.
+    void present_transcript(const SessionResponse &header, std::span<const ChatMessage> messages) const;
+    void resume_session();
     void refresh_status();
     // resume posts a follow-up so the new session keeps working. Otherwise the summary is the last step.
     [[nodiscard]] TurnStatus compact(bool resume);

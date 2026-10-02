@@ -4,14 +4,104 @@
 
 #include "common/log.hpp"
 
-Session::Session(const ModelAdapter &adapter) : adapter_(adapter)
+namespace
 {
+
+int64_t unix_seconds()
+{
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+} // namespace
+
+Session::Session(const ModelAdapter &adapter)
+    : Session(adapter, static_cast<SessionID>(std::chrono::high_resolution_clock::now().time_since_epoch().count()))
+{
+}
+
+Session::Session(const ModelAdapter &adapter, const SessionID id) : id(id), adapter_(adapter)
+{
+    updated_at_ = unix_seconds();
+}
+
+SessionRecord Session::record() const
+{
+    std::lock_guard lock(mutex_);
+    SessionRecord record;
+    record.id = id;
+    record.system_prompt = system_prompt_;
+    record.messages = messages_;
+    record.tools = tools_;
+    record.questions = questions_enabled_;
+    record.compress_tools = compress_tools_;
+    record.max_tokens = max_tokens_;
+    record.state = active_job_ ? SessionState::Generating : state_;
+    record.pending_tool_calls = pending_tool_calls_;
+    record.pending_question = pending_question_;
+    record.error = last_error_;
+    record.error_code = error_code_;
+    record.context_used = context_used_;
+    record.context_size = context_size_;
+    record.updated_at = updated_at_;
+    return record;
+}
+
+void Session::restore(SessionRecord record)
+{
+    std::lock_guard lock(mutex_);
+    system_prompt_ = std::move(record.system_prompt);
+    messages_ = std::move(record.messages);
+    tools_ = std::move(record.tools);
+    questions_enabled_ = record.questions;
+    compress_tools_ = record.compress_tools;
+    max_tokens_ = record.max_tokens;
+    turn_max_tokens_ = max_tokens_;
+    context_used_ = std::max(0, record.context_used);
+    context_size_ = std::max(0, record.context_size);
+    updated_at_ = std::max<int64_t>(0, record.updated_at);
+    last_error_ = std::move(record.error);
+    error_code_ = std::move(record.error_code);
+    active_job_.reset();
+    latest_finished_.reset();
+    // The process that was generating is gone. Keep a finished wait so the client can answer it.
+    if (record.state.value == SessionState::Generating || record.state.value == SessionState::Unknown)
+    {
+        state_ = SessionState::Idle;
+        pending_tool_calls_.clear();
+        pending_question_.reset();
+    }
+    else
+    {
+        state_ = record.state;
+        pending_tool_calls_ = std::move(record.pending_tool_calls);
+        pending_question_ = std::move(record.pending_question);
+    }
+    last_active_ = std::chrono::steady_clock::now();
 }
 
 void Session::touch()
 {
     std::lock_guard lock(mutex_);
     last_active_ = std::chrono::steady_clock::now();
+}
+
+void Session::mark_updated_unlocked()
+{
+    updated_at_ = unix_seconds();
+    last_active_ = std::chrono::steady_clock::now();
+}
+
+void Session::mark_updated()
+{
+    std::lock_guard lock(mutex_);
+    mark_updated_unlocked();
+}
+
+int64_t Session::updated_at() const
+{
+    std::lock_guard lock(mutex_);
+    return updated_at_;
 }
 
 [[nodiscard]] std::chrono::steady_clock::time_point Session::last_active() const
@@ -61,13 +151,17 @@ void Session::touch()
     return {};
 }
 
-[[nodiscard]] SessionResponse Session::to_response() const
+[[nodiscard]] SessionResponse Session::to_response(const bool with_messages) const
 {
     std::lock_guard lock(mutex_);
     SessionResponse r;
     r.id = id;
     r.system_prompt = system_prompt_;
-    r.messages = messages_;
+    r.include_messages = with_messages;
+    if (with_messages)
+    {
+        r.messages = messages_;
+    }
     r.active_job_key = active_job_;
     r.state = active_job_ ? SessionState::Generating : state_;
     r.pending_tool_calls = pending_tool_calls_;
@@ -141,7 +235,7 @@ void Session::load_clone(Session::Clone clone)
     compress_tools_ = clone.compress_tools;
     max_tokens_ = clone.max_tokens;
     turn_max_tokens_ = max_tokens_;
-    last_active_ = std::chrono::steady_clock::now();
+    mark_updated_unlocked();
 }
 
 void Session::configure(CreateSessionRequest req)
@@ -154,7 +248,7 @@ void Session::configure(CreateSessionRequest req)
     messages_ = std::move(req.messages);
     max_tokens_ = req.max_tokens;
     turn_max_tokens_ = max_tokens_;
-    last_active_ = std::chrono::steady_clock::now();
+    mark_updated_unlocked();
 }
 
 /**
@@ -177,7 +271,7 @@ void Session::accept_user_message(const SessionMessageRequest &msg)
     }
     messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content, .reasoning_content = {}});
     turn_max_tokens_ = msg.max_tokens >= 0 ? msg.max_tokens : max_tokens_;
-    last_active_ = std::chrono::steady_clock::now();
+    mark_updated_unlocked();
 }
 
 /**
@@ -202,7 +296,7 @@ void Session::accept_tool_results(const SessionToolResultsRequest &body)
     turn_max_tokens_ = max_tokens_;
     clear_pending_unlocked();
     state_ = SessionState::Idle;
-    last_active_ = std::chrono::steady_clock::now();
+    mark_updated_unlocked();
 }
 
 /**
@@ -248,7 +342,7 @@ void Session::complete_job(std::shared_ptr<Task> task)
         context_size_ = size;
     }
     active_job_.reset();
-    last_active_ = std::chrono::steady_clock::now();
+    mark_updated_unlocked();
     latest_finished_ = std::move(task);
 
     if (status.state == JobState::Error)
@@ -429,6 +523,11 @@ Sessions::Sessions(Jobs &jobs, const ModelAdapter &adapter) : jobs_(jobs), adapt
 {
 }
 
+Sessions::~Sessions()
+{
+    jobs_.set_session_cache_hook({});
+}
+
 void Sessions::unsafe_gc()
 {
     const auto now = std::chrono::steady_clock::now();
@@ -440,6 +539,7 @@ void Sessions::unsafe_gc()
         }
         log_info("session ", entry.first, " idle, collected");
         jobs_.release_session(std::to_string(entry.first));
+        remove_session_record(dir_, entry.first);
         return true;
     });
 }
@@ -460,6 +560,7 @@ std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
         sessions_[session->id] = session;
     }
 
+    save_session(session);
     log_info("session ", session->id, " is created");
     return session;
 }
@@ -493,9 +594,26 @@ std::shared_ptr<Session> Sessions::snapshot(const SessionID &id)
         sessions_[child->id] = child;
     }
 
+    save_session(child);
     jobs_.clone_session(std::to_string(parent->id), std::to_string(child->id));
     log_info("session ", parent->id, " snapshotted as ", child->id);
     return child;
+}
+
+std::vector<std::shared_ptr<Session>> Sessions::list()
+{
+    std::lock_guard lock(mutex_);
+    std::vector<std::shared_ptr<Session>> sessions;
+    sessions.reserve(sessions_.size());
+    for (const auto &entry : sessions_)
+    {
+        sessions.push_back(entry.second);
+    }
+    std::sort(sessions.begin(), sessions.end(),
+              [](const std::shared_ptr<Session> &left, const std::shared_ptr<Session> &right) {
+                  return left->id > right->id;
+              });
+    return sessions;
 }
 
 std::shared_ptr<Session> Sessions::get(const SessionID &id)
@@ -523,6 +641,8 @@ std::shared_ptr<Session> Sessions::destroy(const SessionID &id)
         }
         session = it->second;
         sessions_.erase(it);
+        // Same lock as save_session, so a job that finishes during delete cannot write the file back.
+        remove_session_record(dir_, id);
     }
 
     if (const auto job = session->active_job())
@@ -534,10 +654,161 @@ std::shared_ptr<Session> Sessions::destroy(const SessionID &id)
     return session;
 }
 
+void Sessions::load(const std::string &dir, const uint64_t cache_bytes)
+{
+    dir_ = dir;
+    cache_limit_ = cache_bytes;
+    if (dir_.empty())
+    {
+        return;
+    }
+    const std::vector<SessionRecord> records = read_session_records(dir_);
+    std::size_t loaded = 0;
+    {
+        std::lock_guard lock(mutex_);
+        for (const SessionRecord &record : records)
+        {
+            if (sessions_.contains(record.id))
+            {
+                continue;
+            }
+            if (sessions_.size() >= kMaxSessions)
+            {
+                log_info("session ", record.id, " not restored, session limit reached");
+                continue;
+            }
+            auto session = std::make_shared<Session>(adapter_, record.id);
+            session->restore(record);
+            sessions_[session->id] = std::move(session);
+            ++loaded;
+        }
+    }
+    if (loaded != 0)
+    {
+        log_info("restored ", loaded, " sessions from ", dir_);
+    }
+    enforce_cache_limit(0);
+}
+
+void Sessions::save_session(const std::shared_ptr<Session> &session)
+{
+    if (dir_.empty() || !session)
+    {
+        return;
+    }
+    {
+        std::lock_guard lock(mutex_);
+        if (!sessions_.contains(session->id))
+        {
+            return;
+        }
+        if (!write_session_record(dir_, session->record()))
+        {
+            log_error("session ", session->id, " was not saved");
+            return;
+        }
+    }
+    enforce_cache_limit(session->id);
+}
+
+void Sessions::note_resume(const SessionID id)
+{
+    const auto session = get(id);
+    if (!session)
+    {
+        throw NotFound("session not found");
+    }
+    session->mark_updated();
+    save_session(session);
+}
+
+void Sessions::enforce_cache_limit(const SessionID keep)
+{
+    if (cache_limit_ == 0 || dir_.empty())
+    {
+        return;
+    }
+    std::vector<std::shared_ptr<Session>> held;
+    {
+        std::lock_guard lock(mutex_);
+        held.reserve(sessions_.size());
+        for (const auto &[id, session] : sessions_)
+        {
+            (void)id;
+            held.push_back(session);
+        }
+    }
+    std::vector<SessionCacheRef> refs;
+    refs.reserve(held.size());
+    for (const std::shared_ptr<Session> &session : held)
+    {
+        SessionCacheRef ref;
+        ref.id = session->id;
+        ref.updated_at = session->updated_at();
+        ref.pinned = session->id == keep || !session->is_gc_idle();
+        refs.push_back(ref);
+    }
+    if (jobs_.on_worker_thread())
+    {
+        const std::string active = jobs_.active_session_id();
+        if (!active.empty())
+        {
+            try
+            {
+                const auto id = static_cast<SessionID>(std::stoull(active));
+                for (SessionCacheRef &ref : refs)
+                {
+                    if (ref.id == id)
+                    {
+                        ref.pinned = true;
+                    }
+                }
+            }
+            catch (const std::exception &)
+            {
+            }
+        }
+    }
+    const SessionCachePlan plan = plan_session_cache(dir_, refs, cache_limit_);
+    for (const SessionID id : plan.drop_sessions)
+    {
+        log_info("session ", id, " removed, session cache over ", cache_limit_, " bytes");
+        std::shared_ptr<Session> session;
+        {
+            std::lock_guard lock(mutex_);
+            const auto it = sessions_.find(id);
+            if (it != sessions_.end())
+            {
+                session = it->second;
+                sessions_.erase(it);
+            }
+            remove_session_record(dir_, id);
+        }
+        if (session)
+        {
+            if (const auto job = session->active_job())
+            {
+                jobs_.cancel(*job);
+            }
+        }
+        jobs_.release_session(std::to_string(id));
+    }
+    for (const SessionID id : plan.drop_orphan_kv)
+    {
+        log_info("session ", id, " kv removed, session cache over ", cache_limit_, " bytes");
+        jobs_.release_session(std::to_string(id));
+    }
+    if (plan.still_over)
+    {
+        log_info("session cache remains above ", cache_limit_, " bytes; in-use sessions were kept");
+    }
+}
+
 void Sessions::on_job_finished(const std::shared_ptr<Session> &session, std::shared_ptr<Task> task)
 {
     log_info(task, " | is finished");
     session->complete_job(std::move(task));
+    save_session(session);
 }
 
 std::optional<JobKey> Sessions::enqueue_generation(const std::shared_ptr<Session> &session)
@@ -572,6 +843,7 @@ std::optional<JobKey> Sessions::post_message(const SessionID &id, const SessionM
     }
 
     session->accept_user_message(msg);
+    save_session(session);
     return enqueue_generation(session);
 }
 
@@ -588,6 +860,7 @@ std::optional<JobKey> Sessions::post_tool_results(const SessionID &id, const Ses
     }
 
     session->accept_tool_results(body);
+    save_session(session);
     return enqueue_generation(session);
 }
 

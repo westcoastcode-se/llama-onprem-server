@@ -76,11 +76,13 @@ add_executable(callisto_server
         src/server/http/routes.cpp
         src/server/jobs/jobs.cpp
         src/server/sessions/sessions.cpp
+        src/server/sessions/session_disk.cpp
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp
         src/server/llm/llm_engine.cpp
         src/server/llm/kv_trim.cpp
+        src/server/llm/session_kv_store.cpp
         src/server/sessions/tool_history.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
@@ -165,6 +167,8 @@ add_executable(tests
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
     tests/server/test_llama_engine.cpp
+    tests/server/test_session_kv_store.cpp
+    tests/server/test_session_disk.cpp
     tests/server/test_context_params.cpp
     tests/server/test_session_gc.cpp
     tests/server/test_tool_history.cpp
@@ -180,7 +184,9 @@ add_executable(tests
     src/server/jobs/jobs.cpp
     src/server/llm/kv_trim.cpp
     src/server/llm/llm_engine.cpp
+    src/server/llm/session_kv_store.cpp
     src/server/sessions/sessions.cpp
+    src/server/sessions/session_disk.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
 target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl llama-common llama ${CMAKE_THREAD_LIBS_INIT})

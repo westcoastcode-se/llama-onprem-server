@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../api/messages.hpp"
+#include "session_kv_store.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -51,9 +52,12 @@ struct LlamaConfig
     uint32_t seed = 0xFFFFFFFFu;
     // New tokens per turn. Negative means "until the context is full".
     int max_tokens = -1;
-    // How many session KV snapshots to retain, including the one loaded in the context.
-    // A full snapshot is large; keep this small.
+    // Parsed so older command lines still start. Snapshots are files in session_dir and are not capped by count.
     int kv_sessions = 2;
+    // 0 does not limit the session directory. Otherwise the oldest session files are removed until they fit.
+    uint64_t session_cache_bytes = 0;
+    // Parked session files: token ids, message ends, and the llama state bytes.
+    std::string session_dir{kDefaultSessionDir};
 };
 
 struct ModelNotFound : std::runtime_error
@@ -103,12 +107,15 @@ struct LlamaRequest
 // One loaded GGUF and one llama_context.
 //
 // The context holds a single KV sequence. active_tokens_ is the token ids that sequence contains.
-// Other sessions are parked as raw state bytes plus a copy of those ids. Switching sessions
-// saves the live sequence and restores the next one, so a session change is not a full prefill.
+// Other sessions are parked with llama_state_seq_save_file: the sequence state and those ids.
+// Switching sessions writes the live sequence out and reads the next one back, so a change is not
+// a full prefill.
 //
 // A turn tokenizes its whole prompt and decodes only the tail that differs from active_tokens_.
-// message_ends_ records where each rendered message ends in that sequence. The next turn reuses
-// the longest end that still matches, then compares the generated tail token by token.
+// message_ends_ records where each rendered message ends in the live sequence. The parked file has
+// no field for those ends, so the first turn after a load measures them again. While the session
+// stays active the next turn reuses the longest end that still matches, then compares the generated
+// tail token by token.
 // Matching tokens, not formatted bytes, is what keeps end-of-turn markers in the cache: the
 // model stops on EOG without decoding it, and the next prompt's template emits that marker again.
 //
@@ -130,13 +137,17 @@ class LlamaEngine
     // Drops the live KV sequence. Parked sessions are left alone.
     void reset();
 
-    // Drops one session's parked state, and the live sequence when it is that session.
+    // Deletes one session's parked file, and the live sequence when it is that session.
     // Call from the worker thread, never during llama_decode.
     void release_session(std::string_view session_id);
 
     // Copy one session's KV and token ids under a new id. The source session stays as it is.
     // Call from the worker thread, never during llama_decode.
     void clone_session(const std::string &from, const std::string &to);
+
+    // Write the live sequence. The worker calls this when it stops, so a restart can load it.
+    // Call from the worker thread, never during llama_decode.
+    void park_active_session();
 
     // Tokenize prompt, reuse the matching KV prefix, then sample until EOG, max_tokens, or abort.
     // An aborted or failed turn rolls the cache back to the prefix it started from.
@@ -161,19 +172,13 @@ class LlamaEngine
     // Tokens stored for this session, live or parked. Worker thread only.
     [[nodiscard]] int session_token_count(std::string_view session_id) const;
 
-  private:
-    // One session that is not currently loaded. state is llama_state_seq_get_data output.
-    // tokens must stay aligned with that state: the next turn diffs against tokens, not against the bytes.
-    struct SessionKv
+    // Worker thread only. Empty when no session owns sequence 0.
+    [[nodiscard]] const std::string &active_session_id() const
     {
-        std::string id;
-        std::vector<int32_t> tokens;
-        // End offset of each message inside tokens. The client never sees these.
-        std::vector<size_t> message_ends;
-        std::vector<uint8_t> state;
-        std::chrono::steady_clock::time_point used{};
-    };
+        return active_session_id_;
+    }
 
+  private:
     struct ModelDeleter
     {
         void operator()(llama_model *model) const noexcept;
@@ -195,11 +200,8 @@ class LlamaEngine
     void rebuild_sampler(float temperature);
     // Make session_id the sequence in the context, parking the previous one if it differs.
     void activate_session(const std::string &session_id);
-    // Copy the live sequence out of the context. Evicts the least recently used snapshot past the cap.
-    void park_active_session();
-    // Load a parked snapshot into sequence 0. False when this session has nothing saved.
+    // Load a parked file into sequence 0. False when this session has nothing saved.
     bool unpark_session(const std::string &session_id);
-    void erase_stored(const std::string &session_id);
     // Keep the first n_tokens of the live sequence. The family's KvTrim decides whether a suffix
     // can be dropped. False clears the sequence, and the caller decodes its prompt from the start.
     [[nodiscard]] bool trim_kv_to(size_t n_tokens);
@@ -224,8 +226,10 @@ class LlamaEngine
     // Token ids currently stored in KV sequence 0, in order.
     std::vector<int32_t> active_tokens_;
     // End offset of each message inside active_tokens_. Empty until a chat turn has measured them.
+    // A parked file does not store these, so the first turn after a load measures them again.
     std::vector<size_t> message_ends_;
-    std::vector<SessionKv> stored_sessions_;
+    // Parked sessions live here as files. The live sequence stays in the context.
+    SessionKvStore kv_store_;
 
     // End offset of each message inside prompt_tokens. Reuses message_ends_ while that prefix still matches.
     [[nodiscard]] std::vector<size_t> message_token_ends(std::span<const ChatMessage> messages,

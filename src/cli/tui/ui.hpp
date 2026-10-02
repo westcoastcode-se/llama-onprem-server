@@ -34,6 +34,15 @@ struct AgentUi
     virtual void caption(std::string) {}
     // System prompt of a session that was just created. The console session ignores this.
     virtual void show_system(std::string) {}
+    // Drop the transcript before another session is drawn.
+    virtual void clear() {}
+    // Thinking that was already finished. The fullscreen view does not time it.
+    virtual void show_saved_thinking(std::string text)
+    {
+        begin("thinking");
+        append(std::move(text));
+        end();
+    }
     // While true, streamed sub-agent text stays expanded and the view follows it.
     virtual void set_subagent_live(bool) {}
     virtual Ask ask(std::string title, std::string body) = 0;

@@ -76,6 +76,23 @@ paths:
               example:
                 error_code: 503
                 message: too many sessions
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: List session headers
+      description: |
+        Sessions saved for this server, newest first, including ones reloaded after
+        a restart. Each item is a session header. The transcript of one session is
+        `GET /v1/sessions/{id}/messages`. A session idle for 10 minutes is collected
+        and leaves this list. When the session directory exceeds `--session-cache-size`,
+        the oldest sessions are removed. A session whose transcript was just read is kept.
+      responses:
+        "200":
+          description: Session headers.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionList"
 
   /v1/sessions/{id}:
     parameters:
@@ -83,10 +100,13 @@ paths:
     get:
       tags: [sessions]
       operationId: getSession
-      summary: Read a session
+      summary: Read a session header
+      description: |
+        State, pending tool calls, and the context meter. The transcript is
+        `GET /v1/sessions/{id}/messages`.
       responses:
         "200":
-          description: Current session, including history and anything it is waiting on.
+          description: Current session header, including anything it is waiting on.
           content:
             application/json:
               schema:
@@ -157,6 +177,31 @@ paths:
   /v1/sessions/{id}/messages:
     parameters:
       - $ref: "#/components/parameters/SessionId"
+    get:
+      tags: [sessions]
+      operationId: getSessionMessages
+      summary: Read the session transcript
+      description: |
+        Returns the stored messages. Reading them refreshes the session's updated time,
+        so a resumed session is not the first one removed when the session cache is over
+        its size limit.
+      responses:
+        "200":
+          description: Messages stored for this session, in order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChatMessage"
+        "400":
+          $ref: "#/components/responses/InvalidId"
+        "404":
+          $ref: "#/components/responses/SessionNotFound"
     post:
       tags: [sessions]
       operationId: postMessage
@@ -673,9 +718,18 @@ components:
             type: string
           description: Empty means a free-form answer. The client sends the answer with `POST /messages`.
 
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+
     Session:
       type: object
-      required: [id, system, messages, state, questions]
+      required: [id, system, state, questions]
       properties:
         id:
           type: integer
@@ -687,6 +741,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChatMessage"
+          description: |
+            Present on create and snapshot. Omitted by `GET /v1/sessions/{id}`.
+            Read them with `GET /v1/sessions/{id}/messages`.
         state:
           $ref: "#/components/schemas/SessionState"
         questions:

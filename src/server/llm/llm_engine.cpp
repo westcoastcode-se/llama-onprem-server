@@ -11,10 +11,9 @@
 
 #include <algorithm>
 #include <format>
-#include <limits>
 #include <fstream>
 #include <iterator>
-#include <ranges>
+#include <limits>
 #include <utility>
 
 namespace
@@ -113,7 +112,7 @@ LlamaEngine::LlamaEngine(LlamaEngine &&other) noexcept
       ctx_(std::move(other.ctx_)), smpl_(std::move(other.smpl_)), templates_(std::move(other.templates_)),
       trim_(std::move(other.trim_)),
       active_session_id_(std::move(other.active_session_id_)), active_tokens_(std::move(other.active_tokens_)),
-      message_ends_(std::move(other.message_ends_)), stored_sessions_(std::move(other.stored_sessions_))
+      message_ends_(std::move(other.message_ends_)), kv_store_(std::move(other.kv_store_))
 {
 }
 
@@ -131,7 +130,7 @@ LlamaEngine &LlamaEngine::operator=(LlamaEngine &&other) noexcept
         active_session_id_ = std::move(other.active_session_id_);
         active_tokens_ = std::move(other.active_tokens_);
         message_ends_ = std::move(other.message_ends_);
-        stored_sessions_ = std::move(other.stored_sessions_);
+        kv_store_ = std::move(other.kv_store_);
     }
     return *this;
 }
@@ -181,6 +180,19 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
     {
         throw LlamaModelInitError("n_ctx must be positive");
     }
+    if (engine.config_.session_dir.empty())
+    {
+        engine.config_.session_dir = std::string(kDefaultSessionDir);
+    }
+    try
+    {
+        engine.kv_store_.open(engine.config_.session_dir);
+    }
+    catch (const std::exception &error)
+    {
+        throw LlamaModelInitError(std::format("session directory {}: {}", engine.config_.session_dir, error.what()));
+    }
+    log_info("[llm] session kv directory ", engine.config_.session_dir);
 
     llama_log_set(
         [](enum ggml_log_level level, const char *text, void *) {
@@ -243,11 +255,6 @@ void LlamaEngine::reset()
     (void)trim_kv_to(0);
 }
 
-void LlamaEngine::erase_stored(const std::string &session_id)
-{
-    std::erase_if(stored_sessions_, [&](const SessionKv &slot) { return slot.id == session_id; });
-}
-
 void LlamaEngine::clone_session(const std::string &from, const std::string &to)
 {
     if (from.empty() || to.empty() || from == to)
@@ -255,75 +262,33 @@ void LlamaEngine::clone_session(const std::string &from, const std::string &to)
         return;
     }
 
-    SessionKv copy;
-    copy.id = to;
-    copy.used = std::chrono::steady_clock::now();
     if (from == active_session_id_)
     {
         if (!ctx_ || active_tokens_.empty())
         {
             return;
         }
-        const size_t bytes = llama_state_seq_get_size(ctx_.get(), 0);
-        if (bytes == 0)
-        {
-            return;
-        }
-        copy.state.resize(bytes);
-        const size_t written = llama_state_seq_get_data(ctx_.get(), copy.state.data(), copy.state.size(), 0);
-        if (written == 0)
+        if (!kv_store_.save(ctx_.get(), to, active_tokens_))
         {
             log_error("[llm] session ", from, " kv clone failed");
             return;
         }
-        copy.state.resize(written);
-        copy.tokens = active_tokens_;
-        copy.message_ends = message_ends_;
-    }
-    else
-    {
-        const auto it = std::ranges::find(stored_sessions_, from, &SessionKv::id);
-        if (it == stored_sessions_.end())
-        {
-            return;
-        }
-        copy.tokens = it->tokens;
-        copy.message_ends = it->message_ends;
-        copy.state = it->state;
+        log_info("[llm] session ", from, " kv cloned to ", to, " (", active_tokens_.size(), " tokens)");
+        return;
     }
 
-    erase_stored(to);
-    const size_t cloned_tokens = copy.tokens.size();
-    stored_sessions_.push_back(std::move(copy));
-    const int keep = std::max(0, config_.kv_sessions - 1);
-    while (static_cast<int>(stored_sessions_.size()) > keep)
+    if (!kv_store_.copy(from, to))
     {
-        auto victim = stored_sessions_.end();
-        for (auto it = stored_sessions_.begin(); it != stored_sessions_.end(); ++it)
-        {
-            if (it->id == to)
-            {
-                continue;
-            }
-            if (victim == stored_sessions_.end() || it->used < victim->used)
-            {
-                victim = it;
-            }
-        }
-        if (victim == stored_sessions_.end())
-        {
-            break;
-        }
-        log_info("[llm] session ", victim->id, " kv evicted");
-        stored_sessions_.erase(victim);
+        return;
     }
-    log_info("[llm] session ", from, " kv cloned to ", to, " (", cloned_tokens, " tokens)");
+    const size_t tokens = kv_store_.token_count(to).value_or(0);
+    log_info("[llm] session ", from, " kv cloned to ", to, " (", tokens, " tokens)");
 }
 
 void LlamaEngine::release_session(std::string_view session_id)
 {
     const std::string id(session_id);
-    erase_stored(id);
+    kv_store_.remove(id);
     if (active_session_id_ == id)
     {
         (void)trim_kv_to(0);
@@ -356,68 +321,38 @@ bool LlamaEngine::trim_kv_to(size_t n_tokens)
 
 void LlamaEngine::park_active_session()
 {
-    // The context can hold one sequence. Parking copies it out so another session can use sequence 0.
-    // kv_sessions counts the live sequence too, so at most kv_sessions-1 snapshots stay in memory.
-    erase_stored(active_session_id_);
-    const int keep = std::max(0, config_.kv_sessions - 1);
-    if (keep > 0 && ctx_ && !active_tokens_.empty())
+    // The context can hold one sequence. The file replaces it so another session can use sequence 0.
+    if (active_session_id_.empty() || !ctx_ || active_tokens_.empty())
     {
-        const size_t bytes = llama_state_seq_get_size(ctx_.get(), 0);
-        if (bytes == 0)
-        {
-            log_error("[llm] session ", active_session_id_, " kv save returned empty state");
-        }
-        else
-        {
-            SessionKv slot;
-            slot.id = active_session_id_;
-            slot.tokens = active_tokens_;
-            slot.message_ends = message_ends_;
-            slot.used = std::chrono::steady_clock::now();
-            slot.state.resize(bytes);
-            const size_t written = llama_state_seq_get_data(ctx_.get(), slot.state.data(), slot.state.size(), 0);
-            if (written == 0)
-            {
-                log_error("[llm] session ", active_session_id_, " kv save failed");
-            }
-            else
-            {
-                slot.state.resize(written);
-                stored_sessions_.push_back(std::move(slot));
-                log_info("[llm] session ", active_session_id_, " kv parked (", active_tokens_.size(), " tokens, ",
-                         written, " bytes)");
-            }
-        }
+        return;
     }
-    while (static_cast<int>(stored_sessions_.size()) > keep)
+    if (!kv_store_.save(ctx_.get(), active_session_id_, active_tokens_))
     {
-        auto oldest = std::ranges::min_element(stored_sessions_, {}, &SessionKv::used);
-        log_info("[llm] session ", oldest->id, " kv evicted");
-        stored_sessions_.erase(oldest);
+        log_error("[llm] session ", active_session_id_, " kv save failed");
+        return;
     }
+    log_info("[llm] session ", active_session_id_, " kv parked (", active_tokens_.size(), " tokens)");
 }
 
 bool LlamaEngine::unpark_session(const std::string &session_id)
 {
-    auto it = std::ranges::find(stored_sessions_, session_id, &SessionKv::id);
-    if (it == stored_sessions_.end())
+    if (!kv_store_.token_count(session_id))
     {
         return false;
     }
-    SessionKv slot = std::move(*it);
-    stored_sessions_.erase(it);
-    // Clear sequence 0 before the restore so the snapshot replaces it instead of merging into it.
+    // Drop whatever sequence 0 still holds. The load streams the file into that same sequence.
     (void)trim_kv_to(0);
-    const size_t loaded = llama_state_seq_set_data(ctx_.get(), slot.state.data(), slot.state.size(), 0);
-    if (loaded == 0)
+    std::vector<int32_t> tokens;
+    if (!kv_store_.load(ctx_.get(), session_id, tokens))
     {
         log_error("[llm] session ", session_id, " kv restore failed");
         active_tokens_.clear();
         message_ends_.clear();
         return false;
     }
-    active_tokens_ = std::move(slot.tokens);
-    message_ends_ = std::move(slot.message_ends);
+    active_tokens_ = std::move(tokens);
+    // The sequence file has no per-message ends. The next chat turn measures them.
+    message_ends_.clear();
     return true;
 }
 
@@ -458,12 +393,8 @@ int LlamaEngine::session_token_count(std::string_view session_id) const
     {
         return 0;
     }
-    const size_t count = session_id == active_session_id_
-                             ? active_tokens_.size()
-                             : [&] {
-                                   const auto it = std::ranges::find(stored_sessions_, session_id, &SessionKv::id);
-                                   return it == stored_sessions_.end() ? size_t{0} : it->tokens.size();
-                               }();
+    const size_t count = session_id == active_session_id_ ? active_tokens_.size()
+                                                          : kv_store_.token_count(session_id).value_or(0);
     const size_t cap = static_cast<size_t>(std::numeric_limits<int>::max());
     return static_cast<int>(std::min(count, cap));
 }
