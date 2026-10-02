@@ -207,10 +207,37 @@ static int test_session_cache_drops_oldest()
     return EXIT_SUCCESS;
 }
 
+/**
+ * A separate KV directory is counted on its own. A .kv file beside the conversation is not.
+ */
+static int test_session_cache_counts_split_directories()
+{
+    const auto json_dir = make_temp_dir("session-json");
+    const auto kv_dir = make_temp_dir("session-kv");
+    defer(std::filesystem::remove_all(json_dir));
+    defer(std::filesystem::remove_all(kv_dir));
+
+    write_test_file(json_dir / "1.json", std::string(10, 'a'));
+    write_test_file(json_dir / "1.kv", std::string(1000, 'x'));
+    write_test_file(kv_dir / "1.kv", std::string(100, 'b'));
+    write_test_file(kv_dir / "9.kv", std::string(50, 'c'));
+
+    const SessionCacheRef loaded[] = {
+        SessionCacheRef{.id = 1, .updated_at = 1, .pinned = true},
+    };
+    const SessionCachePlan plan = plan_session_cache(json_dir, loaded, 150, kv_dir);
+    assertTrue(plan.drop_sessions.empty());
+    assertEquals(static_cast<size_t>(1), plan.drop_orphan_kv.size());
+    assertEquals(static_cast<SessionID>(9), plan.drop_orphan_kv[0]);
+    assertTrue(!plan.still_over);
+    return EXIT_SUCCESS;
+}
+
 int test_session_disk()
 {
     RUN_TEST(test_session_record_round_trip);
     RUN_TEST(test_session_restore_keeps_id_and_drops_generation);
     RUN_TEST(test_session_cache_drops_oldest);
+    RUN_TEST(test_session_cache_counts_split_directories);
     return EXIT_SUCCESS;
 }

@@ -3,6 +3,7 @@
 #include "common/tools.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -120,12 +121,47 @@ struct Front
     return {};
 }
 
-} // namespace
+[[nodiscard]] bool is_under_cwd(const std::filesystem::path &relative)
+{
+    if (relative.empty())
+    {
+        return false;
+    }
+    for (const std::filesystem::path &part : relative)
+    {
+        if (part == "..")
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
-std::vector<SkillNote> list_skills(const std::filesystem::path &cwd)
+// A file inside cwd stays relative. A user skill is absolute so read_file can open it.
+[[nodiscard]] std::string skill_path(const std::filesystem::path &file, const std::filesystem::path &cwd)
+{
+    std::error_code ec;
+    const auto relative = std::filesystem::relative(file, cwd, ec);
+    if (!ec && is_under_cwd(relative))
+    {
+        return relative.generic_string();
+    }
+    ec.clear();
+    const auto absolute = std::filesystem::absolute(file, ec);
+    if (ec)
+    {
+        return file.generic_string();
+    }
+    return absolute.generic_string();
+}
+
+[[nodiscard]] std::vector<SkillNote> skills_in(const std::filesystem::path &root, const std::filesystem::path &cwd)
 {
     std::vector<SkillNote> notes;
-    const auto root = cwd / skills_directory();
+    if (root.empty())
+    {
+        return notes;
+    }
     std::error_code ec;
     if (!std::filesystem::is_directory(root, ec))
     {
@@ -147,13 +183,47 @@ std::vector<SkillNote> list_skills(const std::filesystem::path &cwd)
         SkillNote note;
         note.name = front.name.empty() ? entry.path().filename().string() : front.name;
         note.summary = front.description.empty() ? first_summary(front.body) : one_line(front.description, 160);
-        std::error_code rel_ec;
-        const auto relative = std::filesystem::relative(file, cwd, rel_ec);
-        note.path = rel_ec ? file.generic_string() : relative.generic_string();
+        note.path = skill_path(file, cwd);
+        notes.push_back(std::move(note));
+    }
+    return notes;
+}
+
+[[nodiscard]] std::filesystem::path user_skills_directory()
+{
+    const char *home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0')
+    {
+        return {};
+    }
+    return std::filesystem::path(home) / skills_directory();
+}
+
+} // namespace
+
+std::vector<SkillNote> list_skills(const std::filesystem::path &cwd, const std::filesystem::path &user_skills)
+{
+    std::vector<SkillNote> notes = skills_in(cwd / skills_directory(), cwd);
+    std::set<std::string> names;
+    for (const SkillNote &note : notes)
+    {
+        names.insert(note.name);
+    }
+    for (SkillNote &note : skills_in(user_skills, cwd))
+    {
+        if (names.contains(note.name))
+        {
+            continue;
+        }
         notes.push_back(std::move(note));
     }
     std::ranges::sort(notes, [](const SkillNote &left, const SkillNote &right) { return left.name < right.name; });
     return notes;
+}
+
+std::vector<SkillNote> list_skills(const std::filesystem::path &cwd)
+{
+    return list_skills(cwd, user_skills_directory());
 }
 
 static void list_extensions(const std::filesystem::path &cwd, std::set<std::string> &extensions)

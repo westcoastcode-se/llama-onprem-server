@@ -272,24 +272,33 @@ struct DiskRow
     bool kv = false;
 };
 
-} // namespace
-
-SessionCachePlan plan_session_cache(const std::filesystem::path &dir, const std::span<const SessionCacheRef> loaded,
-                                    const uint64_t limit)
+bool same_directory(const std::filesystem::path &left, const std::filesystem::path &right)
 {
-    SessionCachePlan plan;
-    if (limit == 0 || dir.empty())
+    if (left.empty() || right.empty())
     {
-        return plan;
+        return left.empty() && right.empty();
     }
     std::error_code error;
-    if (!std::filesystem::is_directory(dir, error) || error)
+    if (std::filesystem::exists(left, error) && !error && std::filesystem::exists(right, error) && !error)
     {
-        return plan;
+        const bool same = std::filesystem::equivalent(left, right, error);
+        if (!error)
+        {
+            return same;
+        }
     }
+    return left.lexically_normal() == right.lexically_normal();
+}
 
-    std::unordered_map<SessionID, DiskRow> rows;
-    for (const auto &entry : std::filesystem::directory_iterator(dir, error))
+void scan_suffixes(const std::filesystem::path &folder, const bool want_json, const bool want_kv,
+                   std::unordered_map<SessionID, DiskRow> &rows)
+{
+    std::error_code error;
+    if (folder.empty() || !std::filesystem::is_directory(folder, error) || error)
+    {
+        return;
+    }
+    for (const auto &entry : std::filesystem::directory_iterator(folder, error))
     {
         if (error || !entry.is_regular_file())
         {
@@ -298,7 +307,7 @@ SessionCachePlan plan_session_cache(const std::filesystem::path &dir, const std:
         const std::string name = entry.path().filename().string();
         const bool json = name.ends_with(".json");
         const bool kv = name.ends_with(".kv");
-        if (!json && !kv)
+        if ((json && !want_json) || (kv && !want_kv) || (!json && !kv))
         {
             continue;
         }
@@ -322,6 +331,30 @@ SessionCachePlan plan_session_cache(const std::filesystem::path &dir, const std:
             row.kv_bytes = bytes;
             row.mtime = std::max(row.mtime, file_mtime(entry.path()));
         }
+    }
+}
+
+} // namespace
+
+SessionCachePlan plan_session_cache(const std::filesystem::path &dir, const std::span<const SessionCacheRef> loaded,
+                                    const uint64_t limit, const std::filesystem::path &kv_dir)
+{
+    SessionCachePlan plan;
+    if (limit == 0 || (dir.empty() && kv_dir.empty()))
+    {
+        return plan;
+    }
+    const std::filesystem::path kv = kv_dir.empty() ? dir : kv_dir;
+    const bool split = !kv_dir.empty() && !same_directory(dir, kv);
+    std::unordered_map<SessionID, DiskRow> rows;
+    if (split)
+    {
+        scan_suffixes(dir, true, false, rows);
+        scan_suffixes(kv, false, true, rows);
+    }
+    else
+    {
+        scan_suffixes(dir.empty() ? kv : dir, true, true, rows);
     }
 
     struct Candidate

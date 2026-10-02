@@ -122,7 +122,8 @@ static int test_server_args_keep_defaults()
     assertTrue(config.template_path.empty());
     assertTrue(config.reasoning);
     assertEquals(2, config.kv_sessions);
-    assertEquals(std::string(kDefaultSessionDir), config.session_dir);
+    assertTrue(config.session_dir.empty());
+    assertTrue(config.kv_dir.empty());
     assertEquals(static_cast<uint64_t>(0), config.session_cache_bytes);
     assertEquals(std::string("127.0.0.1"), parsed.options.host);
     assertEquals(8080, parsed.options.port);

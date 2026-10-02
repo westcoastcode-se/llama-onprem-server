@@ -81,6 +81,7 @@ add_executable(callisto_server
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp
+        src/common/xdg.cpp
         src/server/llm/llm_engine.cpp
         src/server/llm/kv_trim.cpp
         src/server/llm/session_kv_store.cpp
@@ -129,6 +130,7 @@ add_executable(callisto_cli
         src/cli/rest_client.cpp
         src/api/models.cpp
         src/common/log.cpp
+        src/common/xdg.cpp
         ${COMMON_TOOL_SOURCES})
 configure_localai_target(callisto_cli)
 target_include_directories(callisto_cli BEFORE PRIVATE
@@ -146,6 +148,7 @@ add_executable(tests
     tests/common/test_tool_policy.cpp
     tests/common/test_web_utils.cpp
     tests/common/test_defer.cpp
+    tests/common/test_xdg.cpp
     tests/common/tools/test_tool_execute_command.cpp
     tests/common/tools/test_tool_read_file.cpp
     tests/common/tools/test_tool_write_file.cpp
@@ -186,6 +189,7 @@ add_executable(tests
     src/cli/servers.cpp
     src/cli/session_store.cpp
     src/common/log.cpp
+    src/common/xdg.cpp
     src/server/sessions/tool_history.cpp
     src/server/agent/model_adapter.cpp
     src/server/agent/response_parse.cpp

@@ -11,9 +11,6 @@
 
 struct llama_context;
 
-// Directory of parked session KV files. Default matches the server flag.
-inline constexpr std::string_view kDefaultSessionDir = "/tmp/.callisto/sessions";
-
 // Files named <session id>.kv. llama_state_seq_save_file writes the sequence state and the token
 // ids straight to the file, one tensor slice at a time, so the whole snapshot is not a RAM buffer.
 // Ids are decimal so a name cannot escape the directory.

@@ -5,9 +5,10 @@
 #include <filesystem>
 #include <optional>
 
-// Sessions created on this computer, under ~/.agents.
+// Sessions created on this computer, under $XDG_STATE_HOME/callisto
+// (default ~/.local/state/callisto).
 // last-session is the latest id for one directory and server.
-// sessions lists every id created here, so resume can ignore the rest.
+// known-sessions lists every id created here, so resume can ignore the rest.
 class SessionStore
 {
   public:

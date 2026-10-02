@@ -65,8 +65,10 @@ void print_usage(const char *argv0)
                  "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
                  "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
                  "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
-                 "  --session-dir PATH     parked session files (default /tmp/.callisto/sessions)\n"
-                 "  --session-cache-size SIZE  max bytes for that directory (K/M/G/T, 0 = no limit)\n"
+                 "  --session-dir PATH     session files. Default puts conversations in\n"
+                 "                         $XDG_STATE_HOME/callisto/sessions and KV in\n"
+                 "                         $XDG_CACHE_HOME/callisto/sessions. PATH stores both.\n"
+                 "  --session-cache-size SIZE  max bytes for those files (K/M/G/T, 0 = no limit)\n"
                  "  --config-file PATH  JSON object of these settings\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)\n"
@@ -126,7 +128,8 @@ int main(int argc, char **argv)
     Jobs jobs(engine, *adapter);
     Sessions sessions(jobs, *adapter);
     // The conversation is on disk. KV stays there until a turn activates the session.
-    sessions.load(engine.get_config().session_dir, engine.get_config().session_cache_bytes);
+    sessions.load(engine.get_config().session_dir, engine.get_config().session_cache_bytes,
+                  engine.get_config().kv_dir);
     jobs.set_session_cache_hook([&sessions] { sessions.enforce_cache_limit(0); });
     httplib::Server svr;
 

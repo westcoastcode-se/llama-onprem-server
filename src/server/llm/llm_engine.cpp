@@ -1,6 +1,7 @@
 #include "llm_engine.hpp"
 
 #include "common/log.hpp"
+#include "common/xdg.hpp"
 #include "context_params.hpp"
 #include "kv_trim.hpp"
 #include "token_offset.hpp"
@@ -10,6 +11,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -28,6 +30,24 @@ struct LlamaAbort : std::exception
         return "generation aborted";
     }
 };
+
+void resolve_session_dirs(LlamaConfig &config)
+{
+    if (config.kv_dir.empty())
+    {
+        const SessionDirs dirs = default_session_dirs(config.session_dir);
+        if (config.session_dir.empty())
+        {
+            config.session_dir = dirs.conversations.string();
+        }
+        config.kv_dir = dirs.kv.string();
+        return;
+    }
+    if (config.session_dir.empty())
+    {
+        config.session_dir = default_session_dirs("").conversations.string();
+    }
+}
 
 std::string read_text_file(const std::string &path)
 {
@@ -180,19 +200,25 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
     {
         throw LlamaModelInitError("n_ctx must be positive");
     }
-    if (engine.config_.session_dir.empty())
-    {
-        engine.config_.session_dir = std::string(kDefaultSessionDir);
-    }
+    resolve_session_dirs(engine.config_);
     try
     {
-        engine.kv_store_.open(engine.config_.session_dir);
+        std::filesystem::create_directories(engine.config_.session_dir);
     }
     catch (const std::exception &error)
     {
         throw LlamaModelInitError(std::format("session directory {}: {}", engine.config_.session_dir, error.what()));
     }
-    log_info("[llm] session kv directory ", engine.config_.session_dir);
+    try
+    {
+        engine.kv_store_.open(engine.config_.kv_dir);
+    }
+    catch (const std::exception &error)
+    {
+        throw LlamaModelInitError(std::format("session kv directory {}: {}", engine.config_.kv_dir, error.what()));
+    }
+    log_info("[llm] session directory ", engine.config_.session_dir);
+    log_info("[llm] session kv directory ", engine.config_.kv_dir);
 
     llama_log_set(
         [](enum ggml_log_level level, const char *text, void *) {

@@ -238,7 +238,8 @@ int main(int argc, char **argv)
                "--config-file reads a JSON object. Keys are host, port, server, approval, resume, session,\n"
                "show-think, debug, questions, compress-tools, theme, json, and verbose.\n"
                "A later file overrides the keys it sets. Flags override the file.\n"
-               "Colors come from --theme, or from ~/.config/callisto/theme.json.\n"
+               "Colors come from --theme, or from $XDG_CONFIG_HOME/callisto/theme.json\n"
+               "(~/.config/callisto/theme.json).\n"
                "The first server in the list is used when it answers. Otherwise the next one that answers.\n"
                "/model opens a chooser.\n"
                "health, session, send, job, and tools talk to the HTTP API.");

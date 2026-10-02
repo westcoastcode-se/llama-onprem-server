@@ -14,6 +14,7 @@ extern int test_tool_search_text();
 extern int test_tool_subagent();
 extern int test_web_utils();
 extern int test_defer();
+extern int test_xdg();
 extern int test_tool_schema();
 extern int test_client_config();
 extern int test_servers();
@@ -81,6 +82,10 @@ int main()
         return rc;
     }
     if (const int rc = test_defer())
+    {
+        return rc;
+    }
+    if (const int rc = test_xdg())
     {
         return rc;
     }

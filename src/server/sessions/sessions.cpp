@@ -666,9 +666,10 @@ std::shared_ptr<Session> Sessions::destroy(const SessionID &id)
     return session;
 }
 
-void Sessions::load(const std::string &dir, const uint64_t cache_bytes)
+void Sessions::load(const std::string &dir, const uint64_t cache_bytes, const std::string &kv_dir)
 {
     dir_ = dir;
+    kv_dir_ = kv_dir;
     cache_limit_ = cache_bytes;
     if (dir_.empty())
     {
@@ -781,7 +782,7 @@ void Sessions::enforce_cache_limit(const SessionID keep)
             }
         }
     }
-    const SessionCachePlan plan = plan_session_cache(dir_, refs, cache_limit_);
+    const SessionCachePlan plan = plan_session_cache(dir_, refs, cache_limit_, kv_dir_);
     for (const SessionID id : plan.drop_sessions)
     {
         log_info("session ", id, " removed, session cache over ", cache_limit_, " bytes");

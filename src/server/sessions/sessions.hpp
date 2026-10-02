@@ -196,9 +196,10 @@ class Sessions
     explicit Sessions(Jobs &jobs, const ModelAdapter &adapter);
     ~Sessions();
 
-    // Load <id>.json from this directory. Later creates and turns are written there.
-    // Empty leaves sessions in memory only. cache_bytes 0 does not limit the directory.
-    void load(const std::string &dir, uint64_t cache_bytes = 0);
+    // Load <id>.json from dir. Later creates and turns are written there.
+    // Empty leaves sessions in memory only. cache_bytes 0 does not limit the files.
+    // kv_dir empty means the KV files sit in dir. Otherwise the size cap counts <id>.kv there.
+    void load(const std::string &dir, uint64_t cache_bytes = 0, const std::string &kv_dir = {});
 
     // The transcript was opened. Refresh updated_at and drop older sessions that no longer fit.
     void note_resume(SessionID id);
@@ -241,6 +242,7 @@ class Sessions
     const ModelAdapter &adapter_;
     std::mutex mutex_;
     std::string dir_;
+    std::string kv_dir_;
     uint64_t cache_limit_ = 0;
     std::unordered_map<SessionID, std::shared_ptr<Session>> sessions_;
 

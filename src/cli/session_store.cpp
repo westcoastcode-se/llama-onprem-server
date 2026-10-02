@@ -1,6 +1,7 @@
 #include "cli/session_store.hpp"
 
-#include <cstdlib>
+#include "common/xdg.hpp"
+
 #include <fstream>
 #include <string>
 #include <utility>
@@ -125,20 +126,39 @@ bool recorded(const std::filesystem::path &path, const AgentConfig &config, cons
     return false;
 }
 
+// Empty when neither $XDG_STATE_HOME nor HOME is set.
+std::filesystem::path state_dir()
+{
+    const std::filesystem::path dir = callisto_user_dir(XdgBase::State);
+    if (dir.empty())
+    {
+        return {};
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir;
+}
+
 } // namespace
 
 std::filesystem::path SessionStore::file() const
 {
-    const char *home = std::getenv("HOME");
-    std::filesystem::path dir = home != nullptr ? std::filesystem::path(home) / ".agents" : std::filesystem::path(".agents");
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
+    const std::filesystem::path dir = state_dir();
+    if (dir.empty())
+    {
+        return {};
+    }
     return dir / "last-session";
 }
 
 std::filesystem::path SessionStore::registry() const
 {
-    return file().parent_path() / "sessions";
+    const std::filesystem::path dir = state_dir();
+    if (dir.empty())
+    {
+        return {};
+    }
+    return dir / "known-sessions";
 }
 
 void SessionStore::record(const AgentConfig &config, const SessionID id) const
@@ -147,12 +167,13 @@ void SessionStore::record(const AgentConfig &config, const SessionID id) const
     {
         return;
     }
-    if (recorded(registry(), config, id))
+    const std::filesystem::path path = registry();
+    if (path.empty() || recorded(path, config, id))
     {
         return;
     }
     const std::string line = std::to_string(id) + '\t' + config.host + '\t' + std::to_string(config.port) + '\n';
-    std::ofstream out(registry(), std::ios::app);
+    std::ofstream out(path, std::ios::app);
     if (!out)
     {
         return;
@@ -166,7 +187,12 @@ void SessionStore::remember(const AgentConfig &config, const SessionID id, const
     {
         return;
     }
-    std::ofstream out(file());
+    const std::filesystem::path path = file();
+    if (path.empty())
+    {
+        return;
+    }
+    std::ofstream out(path);
     if (out)
     {
         out << config.host << '\n' << config.port << '\n' << cwd.string() << '\n' << id << '\n';

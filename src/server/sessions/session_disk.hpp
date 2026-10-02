@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-// Durable session beside <id>.kv. The KV file is the cache. This is the conversation that uses it.
+// Durable conversation. The KV file is the cache. This is the conversation that uses it.
 struct SessionRecord
 {
     SessionID id = 0;
@@ -47,10 +47,13 @@ struct SessionCachePlan
     bool still_over = false;
 };
 
-// limit 0 leaves the directory alone. Otherwise drop the oldest <id>.json and <id>.kv
-// until the directory fits. A json with no loaded row is aged by its file time.
+// limit 0 leaves the files alone. Otherwise drop the oldest <id>.json and <id>.kv
+// until they fit. A json with no loaded row is aged by its file time.
+// kv_dir empty, or the same directory as dir, scans dir for both suffixes.
+// A different kv_dir is scanned only for <id>.kv, and dir only for <id>.json.
 [[nodiscard]] SessionCachePlan plan_session_cache(const std::filesystem::path &dir,
-                                                  std::span<const SessionCacheRef> loaded, uint64_t limit);
+                                                  std::span<const SessionCacheRef> loaded, uint64_t limit,
+                                                  const std::filesystem::path &kv_dir = {});
 
 // <id>.json.tmp, then rename. False leaves the previous file.
 [[nodiscard]] bool write_session_record(const std::filesystem::path &dir, const SessionRecord &record);

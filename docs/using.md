@@ -11,9 +11,9 @@ pip install huggingface_hub
 python <<EOF
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="unsloth/Qwen3.8-27B-GGUF",
-    allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"],
-    local_dir="Qwen3.8-27B-GGUF",
+    repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
+    allow_patterns=["*Devstral-Small-2-24B-Instruct-2512-UD-Q5_K_XL.gguf"],
+    local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF",
 )
 EOF
 ```
@@ -61,7 +61,7 @@ The same values can live in JSON. Short flags use names such as `model`, `contex
 | `--cache-type-v TYPE` | f16 | KV type for V |
 | `--chat-template PATH` | the template in the GGUF | Your own Jinja file |
 | `--reasoning` / `--no-reasoning` | on | `enable_thinking` |
-| `--session-dir PATH` | `/tmp/.callisto/sessions` | Stored sessions |
+| `--session-dir PATH` | `~/.local/state/callisto/sessions` and `~/.cache/callisto/sessions` | Conversation and KV. `PATH` stores both in one directory |
 | `--session-cache-size SIZE` | 0 | Cap in bytes. `0` means no cap. Suffixes `K`, `M`, `G`, `T` |
 | `--host HOST` | 127.0.0.1 | Bind address |
 | `-p`, `--port N` | 8080 | Port |
@@ -95,7 +95,7 @@ Point the client at Qwen first and Devstral second. The first server that answer
 }
 ```
 
-Each session is two files in the session directory. `<id>.json` is the conversation: the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn. A restarted server loads those files back. `<id>.kv` is the KV cache and the token ids, written when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted, after 10 minutes idle, or when `--session-cache-size` is set and the oldest sessions no longer fit. A session that is in use is not idle.
+By default the conversation `<id>.json` is under `~/.local/state/callisto/sessions` and the KV cache `<id>.kv` is under `~/.cache/callisto/sessions`. `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` replace those homes. `--session-dir PATH` stores both files in `PATH`. `<id>.json` holds the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn. A restarted server loads those files back. `<id>.kv` is written when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted, after 10 minutes idle, or when `--session-cache-size` is set and the oldest sessions no longer fit. The cap counts the conversation files and the KV files together. A session that is in use is not idle.
 
 `callisto_server --help` prints the same list.
 
@@ -126,7 +126,7 @@ Those settings can also come from a JSON file. `--config-file` may be repeated. 
 
 With no subcommand, a fullscreen session opens in the current directory. You can pass a first task as arguments.
 
-`COLORTERM=truecolor` gives more colors. The theme comes from `--theme`, or from `~/.config/callisto/theme.json` when that file exists. Built-in names are `default`, `ink`, `nord`, `forest`, and `ember`. A path is a JSON file. An object can set `"theme"` to a built-in name and override colors with a palette name or `#rrggbb`.
+`COLORTERM=truecolor` gives more colors. The theme comes from `--theme`, or from `$XDG_CONFIG_HOME/callisto/theme.json` (default `~/.config/callisto/theme.json`) when that file exists. Built-in names are `default`, `ink`, `nord`, `forest`, and `ember`. A path is a JSON file. An object can set `"theme"` to a built-in name and override colors with a palette name or `#rrggbb`.
 
 Thinking stays on one line while it runs, the last three lines, then closes. A finished thinking row and a finished tool row show how long they took once that time reaches one second. A tool call is one line and opens while you answer the approval question. The reply sits in a box. The context meter is in the upper right. Click a thinking, tool, or system row, or press `Ctrl-O`, to open or close it. `Ctrl-C` cancels the current generation. A running command is aborted, and the server is told how long it ran. `Ctrl-D` or `/exit` leaves. `/quit` leaves as well.
 
@@ -163,7 +163,7 @@ The fullscreen client still opens when no server answers. Status stays `offline`
 | `-p`, `--port` | 8080 | Port |
 | `--server SPEC` | | `[model=]host:port`. Repeat it, or separate entries with commas |
 | `--approval` | read-only | `read-only`, `auto`, or `full` |
-| `--resume` | off | Continue the session in `~/.agents/last-session` for this directory and server |
+| `--resume` | off | Continue the session in `~/.local/state/callisto/last-session` for this directory and server |
 | `--session ID` | | Continue an id created on this computer |
 | `--show-think` / `--hide-think` | shown | The thinking line |
 | `--debug` | off | Leave tool-call XML in the assistant text |
@@ -177,7 +177,7 @@ The fullscreen client still opens when no server answers. Status stays `offline`
 
 ## Sessions
 
-The client resumes only sessions created on this computer. The list lives under `~/.agents`. A session from another computer is refused. `/resume` lists your sessions that the server still holds, newest first, including ones restored after a restart. `--resume` takes the latest session for this directory and this server. `--session ID` takes an id from that list.
+The client resumes only sessions created on this computer. The list is `~/.local/state/callisto/known-sessions` (`$XDG_STATE_HOME/callisto/known-sessions`). A session from another computer is refused. `/resume` lists your sessions that the server still holds, newest first, including ones restored after a restart. `--resume` takes the latest session for this directory and this server. `--session ID` takes an id from that list.
 
 `POST /v1/sessions` with an `id` resumes that session, leaves the conversation unchanged, and refreshes its timestamp. The other fields in that body are ignored. A missing or zero `id` creates a session. An unknown id is 404.
 
@@ -218,7 +218,7 @@ When context is strictly over 80% and the server is waiting for tools or for an 
 
 `AGENTS.md` in the project root is added to the system prompt when the file has text. The prompt tells the model to look at the root files and determine what kind of project this is.
 
-A skill is `.agents/skills/<name>/SKILL.md`. The prompt lists the name, one line, and the path. The model reads the file when the task needs that procedure.
+A skill is `.agents/skills/<name>/SKILL.md` in the project, or `~/.agents/skills/<name>/SKILL.md` for the user. A project skill with the same name is the one listed. The prompt lists the name, one line, and the path. The model reads the file when the task needs that procedure.
 
 Wide exploration belongs in `sub_agent`. The sub-agent runs, then is summarized, and the parent receives only the last assistant message. A sub-agent does not start its own sub-agents. `exec` does not register `sub_agent`.
 

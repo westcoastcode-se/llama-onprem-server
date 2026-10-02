@@ -1,8 +1,9 @@
 #include "cli/tui/theme.hpp"
 
+#include "common/xdg.hpp"
+
 #include <nlohmann/json.hpp>
 
-#include <cstdlib>
 #include <format>
 #include <fstream>
 #include <stdexcept>
@@ -394,12 +395,12 @@ Theme theme_from_json(std::string_view text)
 
 std::filesystem::path theme_config_path()
 {
-    const char *home = std::getenv("HOME");
-    if (home == nullptr || home[0] == '\0')
+    const std::filesystem::path dir = callisto_user_dir(XdgBase::Config);
+    if (dir.empty())
     {
         return {};
     }
-    return std::filesystem::path(home) / ".config" / "callisto" / "theme.json";
+    return dir / "theme.json";
 }
 
 Theme load_theme(std::string_view spec)

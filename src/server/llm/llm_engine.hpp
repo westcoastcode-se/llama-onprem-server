@@ -54,10 +54,12 @@ struct LlamaConfig
     int max_tokens = -1;
     // Parsed so older command lines still start. Snapshots are files in session_dir and are not capped by count.
     int kv_sessions = 2;
-    // 0 does not limit the session directory. Otherwise the oldest session files are removed until they fit.
+    // 0 does not limit the session files. Otherwise the oldest conversation and KV files are removed until they fit.
     uint64_t session_cache_bytes = 0;
-    // Parked session files: token ids, message ends, and the llama state bytes.
-    std::string session_dir{kDefaultSessionDir};
+    // Conversation files (<id>.json). Empty means the XDG state directory.
+    std::string session_dir;
+    // KV files (<id>.kv). Empty means the XDG cache directory, or session_dir when that was set.
+    std::string kv_dir;
 };
 
 struct ModelNotFound : std::runtime_error
