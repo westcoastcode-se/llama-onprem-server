@@ -75,7 +75,7 @@ class DevstralAdapter final : public ModelAdapter
     [[nodiscard]] bool prompt_opens_think() const override;
 };
 
-// The shipped Ternary Bonsai template uses the same call syntax as Qwen.
+// The Ternary Bonsai template uses the same call syntax as Qwen.
 // The class is separate so its prompt and parser can diverge without touching Qwen.
 class BonsaiAdapter final : public ModelAdapter
 {

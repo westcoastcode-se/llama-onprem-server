@@ -1,5 +1,5 @@
 //
-// File containing tests for tool approval, allow-lists, think stripping, and tool-call parsing
+// File containing tests for tool approval, allow-lists, run_tool, and AGENTS.md
 //
 
 #include "common/defer.hpp"

@@ -73,7 +73,7 @@ void print_usage(const char *argv0)
                  "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)\n"
                  "\n"
-                 "Config keys are model, context, batch, gpu-layers, temperature, top-p, host, and port.\n"
+                 "JSON keys use these flag names. Short flags are model, context, batch, gpu-layers, and temperature.\n"
                  "reasoning is true or false. session-cache-size is a byte count or a string such as \"8G\".\n"
                  "A later --config-file overrides the keys it sets.\n"
                  "Arguments on the command line override the file.",

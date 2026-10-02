@@ -52,7 +52,7 @@ struct LlamaConfig
     uint32_t seed = 0xFFFFFFFFu;
     // New tokens per turn. Negative means "until the context is full".
     int max_tokens = -1;
-    // Parsed so older command lines still start. Snapshots are files in session_dir and are not capped by count.
+    // Parsed so older command lines still start. The value is unused. Parked KV is one file per session.
     int kv_sessions = 2;
     // 0 does not limit the session files. Otherwise the oldest conversation and KV files are removed until they fit.
     uint64_t session_cache_bytes = 0;

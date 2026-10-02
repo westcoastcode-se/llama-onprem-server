@@ -65,7 +65,7 @@ std::vector<Tool> get_registered_tools(bool include_subagents, SubagentRunner su
 }
 
 std::string load_agents_markdown(const std::filesystem::path base_dir) {
-    // AGENTS.md lives in the project root, not under .agents or .agents.
+    // AGENTS.md lives in the project root, not under .agents or .callisto.
     std::filesystem::path p = base_dir / "AGENTS.md";
     if (std::filesystem::exists(p) && std::filesystem::is_regular_file(p)) {
         std::ifstream ifs(p);

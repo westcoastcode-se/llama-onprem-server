@@ -1,5 +1,5 @@
 //
-// File containing tests for the read_file tool
+// File containing tests for the execute_command tool
 //
 
 #include "common/defer.hpp"
