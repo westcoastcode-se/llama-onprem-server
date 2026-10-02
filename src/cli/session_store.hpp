@@ -5,13 +5,24 @@
 #include <filesystem>
 #include <optional>
 
-// Remembers the last session id for this directory and server in ~/.agents.
+// Sessions created on this computer, under $XDG_STATE_HOME/callisto
+// (default ~/.local/state/callisto).
+// last-session is the latest id for one directory and server.
+// known-sessions lists every id created here, so resume can ignore the rest.
 class SessionStore
 {
   public:
     void remember(const AgentConfig &config, SessionID id, const std::filesystem::path &cwd) const;
+
+    // Adds id to the set created on this computer. Does not change the directory's last session.
+    void record(const AgentConfig &config, SessionID id) const;
+
     [[nodiscard]] std::optional<SessionID> recall(const AgentConfig &config, const std::filesystem::path &cwd) const;
+
+    // True when this computer created id against config's host and port.
+    [[nodiscard]] bool owns(const AgentConfig &config, SessionID id) const;
 
   private:
     [[nodiscard]] std::filesystem::path file() const;
+    [[nodiscard]] std::filesystem::path registry() const;
 };

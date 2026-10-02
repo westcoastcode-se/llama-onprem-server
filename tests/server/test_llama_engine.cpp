@@ -65,6 +65,40 @@ int test_visible_text_question()
 }
 
 /**
+ * A Devstral call is hidden through the end of its JSON arguments.
+ */
+int test_visible_text_devstral()
+{
+    assertEquals("I'll read it.\nDone.",
+                 visible("I'll read it.\n[TOOL_CALLS]read_file[ARGS]{\"path\":\"/tmp/a\"}\nDone."));
+    assertEquals("A\nB",
+                 visible("A\n[TOOL_CALLS]write_file[ARGS]{\"content\":\"x}y\"}[TOOL_CALLS]read_file[ARGS]{}\nB"));
+
+    VisibleText chunked;
+    std::string out = chunked.feed("Look.\n[TOOL_CAL");
+    out += chunked.feed("LS]read_file[ARGS]{\"path\":\"/tmp/a\"}\nDone.");
+    out += chunked.finish();
+    assertEquals("Look.\nDone.", out);
+
+    VisibleText open;
+    assertEquals("Partial ", open.feed("Partial [TOOL_CALLS]read_file[ARGS]{\"path\":"));
+    assertEquals("", open.finish());
+
+    // No prose before the call, so the assistant heading stays closed.
+    const std::string only = "[TOOL_CALLS]sub_agent[ARGS]{\"task\":\"Review the project\"}";
+    assertEquals("", visible(only));
+    VisibleText bytes;
+    std::string streamed;
+    for (const char ch : only)
+    {
+        streamed += bytes.feed(std::string_view(&ch, 1));
+    }
+    streamed += bytes.finish();
+    assertEquals("", streamed);
+    return EXIT_SUCCESS;
+}
+
+/**
  * Deepseek tool markers are hidden.
  */
 int test_visible_text_deepseek()
@@ -96,6 +130,19 @@ int test_visible_text_open()
     VisibleText open;
     assertEquals("Partial ", open.feed("Partial <tool_call>\n<function=read_file>"));
     assertEquals("", open.finish());
+    return EXIT_SUCCESS;
+}
+
+/**
+ * A marker inside another family's span stays hidden with that span.
+ */
+int test_visible_text_nested_markup()
+{
+    assertEquals("Before\nAfter",
+                 visible("Before\n[TOOL_CALLS]write_file[ARGS]{\"content\":\"<tool_call>x</tool_call>\"}\nAfter"));
+    assertEquals("Before\nAfter",
+                 visible("Before\n<tool_call>\n<function=write_file>\n<parameter=content>\n"
+                         "[TOOL_CALLS]read_file[ARGS]{}\n</parameter>\n</function>\n</tool_call>\nAfter"));
     return EXIT_SUCCESS;
 }
 
@@ -170,6 +217,30 @@ int test_tool_parse_command_string()
     assertEquals(1, static_cast<int>(true_actions.tool_calls.size()));
     assertTrue(true_actions.tool_calls[0].arguments.at("command").is_string());
     assertEquals("true", true_actions.tool_calls[0].arguments.at("command").get<std::string>());
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Devstral calls are [TOOL_CALLS]name[ARGS]{json}. Several calls can share one turn.
+ */
+int test_tool_parse_devstral()
+{
+    const char *call = "Reading it.\n[TOOL_CALLS]read_file[ARGS]{\"path\":\"/tmp/a.txt\"}";
+    DevstralAdapter devstral;
+    const auto actions = parse_assistant_actions(call, devstral);
+    assertEquals(1, static_cast<int>(actions.tool_calls.size()));
+    assertEquals("read_file", actions.tool_calls[0].name);
+    assertEquals("/tmp/a.txt", actions.tool_calls[0].arguments.value("path", ""));
+
+    const char *two = "[TOOL_CALLS]write_file[ARGS]{\"content\":\"x}y\"}"
+                      "[TOOL_CALLS]execute_command[CALL_ID]abc123456[ARGS]{\"command\":\"date\"}";
+    const auto both = parse_assistant_actions(two, devstral);
+    assertEquals(2, static_cast<int>(both.tool_calls.size()));
+    assertEquals("write_file", both.tool_calls[0].name);
+    assertEquals("x}y", both.tool_calls[0].arguments.value("content", ""));
+    assertEquals("execute_command", both.tool_calls[1].name);
+    assertEquals("date", both.tool_calls[1].arguments.value("command", ""));
+    assertTrue(!devstral.prompt_opens_think());
     return EXIT_SUCCESS;
 }
 
@@ -325,6 +396,11 @@ int test_system_prompt_uses_client_tools()
     assertTrue(deepseek_prompt.find("<｜tool▁sep｜>ping") != std::string::npos);
     assertTrue(deepseek_prompt.find("\"host\"") != std::string::npos);
     assertTrue(deepseek_prompt.find("When several approaches") == std::string::npos);
+
+    const DevstralAdapter devstral;
+    const std::string devstral_prompt = default_agent_system_prompt(devstral, tools, "", true);
+    assertTrue(devstral_prompt.find("[TOOL_CALLS]ping[ARGS]") != std::string::npos);
+    assertTrue(devstral_prompt.find("\"host\"") != std::string::npos);
     return EXIT_SUCCESS;
 }
 
@@ -383,6 +459,14 @@ int test_model_adapter_selection()
     const auto deepseek = make_model_adapter("models/DeepSeek-V3.gguf", "");
     assertEquals("deepseek", std::string(deepseek->name()));
 
+    const auto devstral =
+        make_model_adapter("models/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf", "");
+    assertEquals("devstral", std::string(devstral->name()));
+    assertTrue(!devstral->prompt_opens_think());
+
+    const auto devstral_template = make_model_adapter("models/Qwen3.gguf", "templates/Devstral-Small.jinja");
+    assertEquals("devstral", std::string(devstral_template->name()));
+
     const auto bonsai = make_model_adapter("models/Qwen3.gguf", "templates/Ternary-Bonsai-2-27B-gguf.jinja");
     assertEquals("bonsai", std::string(bonsai->name()));
 
@@ -401,13 +485,16 @@ int test_llama_engine()
     RUN_TEST(test_visible_text_plain);
     RUN_TEST(test_visible_text_tool_call);
     RUN_TEST(test_visible_text_question);
+    RUN_TEST(test_visible_text_devstral);
     RUN_TEST(test_visible_text_deepseek);
     RUN_TEST(test_visible_text_chunked);
     RUN_TEST(test_visible_text_open);
+    RUN_TEST(test_visible_text_nested_markup);
     RUN_TEST(test_prefix);
     RUN_TEST(test_tool_parse_json);
     RUN_TEST(test_tool_parse_qwen);
     RUN_TEST(test_tool_parse_command_string);
+    RUN_TEST(test_tool_parse_devstral);
     RUN_TEST(test_tool_parse_deepseek);
     RUN_TEST(test_tool_parse_hybrid_and_stringified);
     RUN_TEST(test_tool_parse_thinking_channel);

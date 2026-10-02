@@ -35,7 +35,7 @@ ftxui::Element system_prompt_block(const std::string &text, bool expanded, bool 
     using namespace ftxui;
     const std::string clean = without_cr(text);
     Elements lines;
-    // The header carries focus so opening the box keeps that row on screen.
+    // The header carries focus so opening the row keeps it on screen.
     // A window title does not, because the frame copies focus from its body.
     lines.push_back(title_line(expanded ? "▼ system" : "▶ system", title_ink, bold, reveal));
     if (expanded && !clean.empty())

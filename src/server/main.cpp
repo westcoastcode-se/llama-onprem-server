@@ -5,11 +5,10 @@
 #include "server/http/routes.hpp"
 #include "server/jobs/jobs.hpp"
 #include "server/llm/llm_engine.hpp"
+#include "server/options.hpp"
 #include "server/sessions/sessions.hpp"
 #include <atomic>
 #include <csignal>
-#include <cstdint>
-#include <cstdlib>
 #include <format>
 #include <httplib.h>
 #include <poll.h>
@@ -17,9 +16,11 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 namespace
 {
+
 int g_wake_fd = -1;
 volatile sig_atomic_t g_stop_flag = 0;
 
@@ -63,9 +64,19 @@ void print_usage(const char *argv0)
                  "  --cache-type-v TYPE    KV cache V type (default f16)\n"
                  "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
                  "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
-                 "  --kv-sessions N        parked session KV slots including the live one (default 2)\n"
+                 "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
+                 "  --session-dir PATH     session files. Default puts conversations in\n"
+                 "                         $XDG_STATE_HOME/callisto/sessions and KV in\n"
+                 "                         $XDG_CACHE_HOME/callisto/sessions. PATH stores both.\n"
+                 "  --session-cache-size SIZE  max bytes for those files (K/M/G/T, 0 = no limit)\n"
+                 "  --config-file PATH  JSON object of these settings\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
-                 "  -p/--port N   port (default 8080)",
+                 "  -p/--port N   port (default 8080)\n"
+                 "\n"
+                 "JSON keys use these flag names. Short flags are model, context, batch, gpu-layers, and temperature.\n"
+                 "reasoning is true or false. session-cache-size is a byte count or a string such as \"8G\".\n"
+                 "A later --config-file overrides the keys it sets.\n"
+                 "Arguments on the command line override the file.",
                  argv0);
 }
 } // namespace
@@ -74,139 +85,32 @@ int main(int argc, char **argv)
 {
     Logger::set_level(Logger::LEVEL_DEBUG);
 
-    LlamaConfig config;
-    std::string host = "127.0.0.1";
-    int port = 8080;
-
-    for (int i = 1; i < argc; ++i)
+    std::vector<std::string> args;
+    if (argc > 1)
     {
-        std::string arg = argv[i];
-        auto need = [&](const char *name) -> const char * {
-            if (i + 1 >= argc)
-            {
-                std::println(stderr, "missing value for {}", name);
-                std::exit(1);
-            }
-            return argv[++i];
-        };
-        if (arg == "-m")
-        {
-            config.model_path = need("-m");
-        }
-        else if (arg == "-c")
-        {
-            config.n_ctx = std::stoi(need("-c"));
-        }
-        else if (arg == "-b")
-        {
-            config.n_batch = std::stoi(need("-b"));
-        }
-        else if (arg == "-ngl")
-        {
-            config.n_gpu_layers = std::stoi(need("-ngl"));
-        }
-        else if (arg == "-t")
-        {
-            config.temperature = std::stof(need("-t"));
-        }
-        else if (arg == "--top-p")
-        {
-            config.top_p = std::stof(need("--top-p"));
-        }
-        else if (arg == "--top-k")
-        {
-            config.top_k = std::stoi(need("--top-k"));
-        }
-        else if (arg == "--min-p")
-        {
-            config.min_p = std::stof(need("--min-p"));
-        }
-        else if (arg == "--presence-penalty")
-        {
-            config.presence_penalty = std::stof(need("--presence-penalty"));
-        }
-        else if (arg == "--repetition-penalty")
-        {
-            config.repetition_penalty = std::stof(need("--repetition-penalty"));
-        }
-        else if (arg == "--frequency-penalty")
-        {
-            config.frequency_penalty = std::stof(need("--frequency-penalty"));
-        }
-        else if (arg == "--penalty-last-n")
-        {
-            config.penalty_last_n = std::stoi(need("--penalty-last-n"));
-        }
-        else if (arg == "--seed")
-        {
-            config.seed = static_cast<uint32_t>(std::stoul(need("--seed")));
-        }
-        else if (arg == "--max-tokens")
-        {
-            config.max_tokens = std::stoi(need("--max-tokens"));
-        }
-        else if (arg == "--threads")
-        {
-            config.n_threads = std::stoi(need("--threads"));
-        }
-        else if (arg == "--threads-batch")
-        {
-            config.n_threads_batch = std::stoi(need("--threads-batch"));
-        }
-        else if (arg == "--flash-attn")
-        {
-            config.flash_attn = need("--flash-attn");
-        }
-        else if (arg == "--cache-type-k")
-        {
-            config.cache_type_k = need("--cache-type-k");
-        }
-        else if (arg == "--cache-type-v")
-        {
-            config.cache_type_v = need("--cache-type-v");
-        }
-        else if (arg == "--chat-template")
-        {
-            config.template_path = need("--chat-template");
-        }
-        else if (arg == "--reasoning")
-        {
-            config.reasoning = true;
-        }
-        else if (arg == "--no-reasoning")
-        {
-            config.reasoning = false;
-        }
-        else if (arg == "--kv-sessions")
-        {
-            config.kv_sessions = std::stoi(need("--kv-sessions"));
-        }
-        else if (arg == "--host")
-        {
-            host = need("--host");
-        }
-        else if (arg == "-p" || arg == "--port")
-        {
-            port = std::stoi(need(arg.c_str()));
-        }
-        else if (arg == "-h" || arg == "--help")
-        {
-            print_usage(argv[0]);
-            return 0;
-        }
-        else
-        {
-            std::println(stderr, "unknown argument: {}", arg);
-            print_usage(argv[0]);
-            return 1;
-        }
+        args.assign(argv + 1, argv + argc);
     }
-
-    if (config.model_path.empty())
+    const ServerArgParse parsed = parse_server_args(args);
+    if (parsed.help)
     {
         print_usage(argv[0]);
+        return 0;
+    }
+    if (!parsed.error.empty())
+    {
+        std::println(stderr, "{}", parsed.error);
+    }
+    if (parsed.usage)
+    {
+        print_usage(argv[0]);
+    }
+    if (!parsed.error.empty() || parsed.usage)
+    {
         return 1;
     }
+    const LlamaConfig &config = parsed.options.config;
+    const std::string &host = parsed.options.host;
+    const int port = parsed.options.port;
 
     LlamaEngine engine;
     try
@@ -223,6 +127,10 @@ int main(int argc, char **argv)
     log_info("[llm] assistant format ", adapter->name());
     Jobs jobs(engine, *adapter);
     Sessions sessions(jobs, *adapter);
+    // The conversation is on disk. KV stays there until a turn activates the session.
+    sessions.load(engine.get_config().session_dir, engine.get_config().session_cache_bytes,
+                  engine.get_config().kv_dir);
+    jobs.set_session_cache_hook([&sessions] { sessions.enforce_cache_limit(0); });
     httplib::Server svr;
 
     int wake[2] = {-1, -1};
@@ -316,6 +224,7 @@ int main(int argc, char **argv)
     if (!svr.listen(host, port))
     {
         log_error("failed to listen on ", host, ":", port);
+        jobs.stop();
         return 1;
     }
 

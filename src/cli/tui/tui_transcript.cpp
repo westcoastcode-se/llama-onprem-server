@@ -3,6 +3,7 @@
 #include <ftxui/component/screen_interactive.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 std::size_t TuiUi::latest(std::string_view kind) const
@@ -50,10 +51,7 @@ void TuiUi::note(std::string text)
 {
     {
         std::lock_guard lock(mutex);
-        if (open)
-        {
-            open = false;
-        }
+        seal_open_block();
         blocks.push_back(Block{"note", std::move(text)});
     }
     wake();
@@ -70,14 +68,22 @@ void TuiUi::begin(std::string kind)
 {
     {
         std::lock_guard lock(mutex);
-        if (open)
-        {
-            open = false;
-        }
+        seal_open_block();
+        const bool thinking = kind == "thinking";
+        const bool tool = kind == "tool";
         blocks.push_back(Block{std::move(kind), {}});
         if (subagent_live)
         {
             blocks.back().caption = "sub-agent";
+        }
+        if (thinking || tool)
+        {
+            blocks.back().think_started = std::chrono::steady_clock::now();
+        }
+        if (thinking)
+        {
+            blocks.back().expanded = true;
+            blocks.back().thinking_live = true;
         }
         open = true;
     }
@@ -106,9 +112,42 @@ void TuiUi::end()
 {
     {
         std::lock_guard lock(mutex);
-        open = false;
+        seal_open_block();
     }
     wake();
+}
+
+void TuiUi::seal_open_block()
+{
+    if (!open || blocks.empty())
+    {
+        open = false;
+        return;
+    }
+    open = false;
+    Block &block = blocks.back();
+    const bool thinking = block.kind == "thinking" && block.thinking_live;
+    const bool tool = block.kind == "tool" && block.think_ms < 0;
+    if (!thinking && !tool)
+    {
+        return;
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                               block.think_started);
+    block.think_ms = std::max<std::int64_t>(elapsed.count(), 0);
+    if (!thinking)
+    {
+        return;
+    }
+    block.thinking_live = false;
+    block.expanded = false;
+    const std::size_t index = blocks.size() - 1;
+    if (revealed == index)
+    {
+        revealed = static_cast<std::size_t>(-1);
+        scroll.follow_reveal = false;
+        scroll.follow_bottom = true;
+    }
 }
 
 void TuiUi::expand(std::string_view kind)
@@ -156,6 +195,35 @@ void TuiUi::caption(std::string text)
     wake();
 }
 
+void TuiUi::clear()
+{
+    {
+        std::lock_guard lock(mutex);
+        blocks.clear();
+        open = false;
+        revealed = static_cast<std::size_t>(-1);
+        scroll = {};
+    }
+    wake();
+}
+
+void TuiUi::show_saved_thinking(std::string text)
+{
+    if (text.empty())
+    {
+        return;
+    }
+    {
+        std::lock_guard lock(mutex);
+        seal_open_block();
+        Block block{"thinking", std::move(text)};
+        block.thinking_live = false;
+        block.think_ms = -1;
+        blocks.push_back(std::move(block));
+    }
+    wake();
+}
+
 void TuiUi::show_system(std::string text)
 {
     if (text.empty())
@@ -164,7 +232,7 @@ void TuiUi::show_system(std::string text)
     }
     {
         std::lock_guard lock(mutex);
-        open = false;
+        seal_open_block();
         blocks.push_back(Block{"system", std::move(text)});
     }
     wake();

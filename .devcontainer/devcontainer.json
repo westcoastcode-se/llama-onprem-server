@@ -1,6 +1,6 @@
 {
   "name": "dev",
-  "image":"local_ai:latest",
+  "image":"callisto:latest",
   "runArgs": [
     "--network=host"
   ],

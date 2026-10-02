@@ -91,13 +91,10 @@ std::vector<Tool> get_base_tools();
  */
 std::vector<Tool> get_registered_tools(bool include_subagents = true, SubagentRunner subagent_runner = nullptr);
 
-/**
- * @brief Looks up and executes a tool with the specified JSON arguments.
- * Also handles tool aliases and error formatting.
- */
 // The tool with this name, or with this alias. Null when nothing matches.
 [[nodiscard]] const Tool *find_tool(std::span<const Tool> tools, std::string_view name);
 
+// Looks up and executes a tool. Also handles aliases and error formatting.
 std::string run_tool(std::span<const Tool> tools, std::string_view name, const nlohmann::json &arguments);
 
 /**

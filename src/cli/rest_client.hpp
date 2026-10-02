@@ -58,10 +58,8 @@ class RestClient
     bool probe();
 
     /**
-     * Create a new session
-     *
-     * @param body The creation request
-     * @return Information on the created session
+     * POST /v1/sessions. id == 0 creates a session and expects 201.
+     * A non-zero id resumes that session and expects 200.
      */
     SessionResponse create_session(const CreateSessionRequest &body);
 
@@ -78,6 +76,12 @@ class RestClient
     SessionResponse snapshot_session(const SessionID &id);
 
     SessionResponse get_session(const SessionID &id);
+
+    // Session headers on this server, newest first. GET /v1/sessions.
+    [[nodiscard]] std::vector<SessionResponse> list_sessions();
+
+    // Transcript. GET /v1/sessions/{id} does not include it.
+    [[nodiscard]] std::vector<ChatMessage> get_messages(const SessionID &id);
 
     /**
      * Delete the session with the supplied id. This will cleanup all of it's resources

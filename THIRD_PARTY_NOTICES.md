@@ -99,7 +99,7 @@ SOFTWARE.
 
 https://github.com/ArthurSonzogni/FTXUI
 
-Fetched at configure time (v6.1.9) and linked into `callisto_cli`. Copyright (c) 2019 Arthur Sonzogni. MIT, same permission notice as llama.cpp above.
+Submodule `vendors/ftxui` at v6.1.9, linked into `callisto_cli`. Copyright (c) 2019 Arthur Sonzogni. MIT, same permission notice as llama.cpp above. License text: `vendors/ftxui/LICENSE`.
 
 ## CLI11
 

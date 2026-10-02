@@ -50,7 +50,8 @@ bool RestClient::probe()
 SessionResponse RestClient::create_session(const CreateSessionRequest &body)
 {
     body.validate();
-    auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body.to_json(), 201));
+    const int status = body.id == 0 ? 201 : 200;
+    auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body.to_json(), status));
     resp.validate();
     return resp;
 }
@@ -64,6 +65,19 @@ SessionResponse RestClient::snapshot_session(const SessionID &id)
 SessionResponse RestClient::get_session(const SessionID &id)
 {
     return SessionResponse::from_json(request_json("GET", "/v1/sessions/" + std::to_string(id), std::nullopt, 200));
+}
+
+std::vector<SessionResponse> RestClient::list_sessions()
+{
+    const nlohmann::json body = request_json("GET", "/v1/sessions", std::nullopt, 200);
+    return SessionListResponse::from_json(body).sessions;
+}
+
+std::vector<ChatMessage> RestClient::get_messages(const SessionID &id)
+{
+    const nlohmann::json body =
+        request_json("GET", "/v1/sessions/" + std::to_string(id) + "/messages", std::nullopt, 200);
+    return SessionMessagesResponse::from_json(body).messages;
 }
 
 void RestClient::delete_session(const SessionID &id)

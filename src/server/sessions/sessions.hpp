@@ -6,8 +6,10 @@
 #include "server/api/messages.hpp"
 #include "server/api/sessions.hpp"
 #include "server/jobs/jobs.hpp"
+#include "server/sessions/session_disk.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <utility>
 #include <format>
 #include <memory>
@@ -28,6 +30,11 @@ class Session
 {
   public:
     explicit Session(const ModelAdapter &adapter);
+    Session(const ModelAdapter &adapter, SessionID id);
+
+    // Conversation as stored in <id>.json. A restarted server has no running job.
+    [[nodiscard]] SessionRecord record() const;
+    void restore(SessionRecord record);
 
     // Unique ID for this session
     const SessionID id = std::chrono::high_resolution_clock::now().time_since_epoch().count();
@@ -35,6 +42,11 @@ class Session
     const std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
 
     void touch();
+
+    // Wall clock stored in <id>.json. A resume or a finished turn moves it to now.
+    void mark_updated();
+
+    [[nodiscard]] int64_t updated_at() const;
 
     [[nodiscard]] std::chrono::steady_clock::time_point last_active() const;
 
@@ -51,7 +63,8 @@ class Session
      */
     [[nodiscard]] std::shared_ptr<Task> resolve_job(JobKey job_key, const Jobs &jobs) const;
 
-    [[nodiscard]] SessionResponse to_response() const;
+    // with_messages false is the session GET: state and pending work, not the transcript.
+    [[nodiscard]] SessionResponse to_response(bool with_messages = true) const;
 
     void set_context_usage(int used, int size);
 
@@ -145,6 +158,9 @@ class Session
     bool questions_enabled_ = true;
     bool compress_tools_ = true;
     std::chrono::steady_clock::time_point last_active_ = std::chrono::steady_clock::now();
+    int64_t updated_at_ = 0;
+
+    void mark_updated_unlocked();
 
     [[nodiscard]] bool tracks_job_unlocked(JobKey job_key) const;
 
@@ -178,7 +194,21 @@ class Sessions
     static constexpr std::chrono::seconds kIdleTtl{600};
 
     explicit Sessions(Jobs &jobs, const ModelAdapter &adapter);
+    ~Sessions();
 
+    // Load <id>.json from dir. Later creates and turns are written there.
+    // Empty leaves sessions in memory only. cache_bytes 0 does not limit the files.
+    // kv_dir empty means the KV files sit in dir. Otherwise the size cap counts <id>.kv there.
+    void load(const std::string &dir, uint64_t cache_bytes = 0, const std::string &kv_dir = {});
+
+    // The transcript was opened. Refresh updated_at and drop older sessions that no longer fit.
+    void note_resume(SessionID id);
+
+    // Drop the oldest session files until the directory is within the configured size.
+    // keep is never removed by this call.
+    void enforce_cache_limit(SessionID keep);
+
+    // id == 0 creates a session. A non-zero id resumes that session without changing its conversation.
     [[nodiscard]] std::shared_ptr<Session> create(CreateSessionRequest req);
 
     /**
@@ -188,6 +218,9 @@ class Sessions
      */
     [[nodiscard]] std::shared_ptr<Session> snapshot(const SessionID &id);
     [[nodiscard]] std::shared_ptr<Session> get(const SessionID &id);
+
+    // Newest session first. Does not collect idle sessions.
+    [[nodiscard]] std::vector<std::shared_ptr<Session>> list();
     [[nodiscard]] std::shared_ptr<Session> destroy(const SessionID &id);
 
     /**
@@ -208,7 +241,12 @@ class Sessions
     Jobs &jobs_;
     const ModelAdapter &adapter_;
     std::mutex mutex_;
+    std::string dir_;
+    std::string kv_dir_;
+    uint64_t cache_limit_ = 0;
     std::unordered_map<SessionID, std::shared_ptr<Session>> sessions_;
+
+    void save_session(const std::shared_ptr<Session> &session);
 
     void unsafe_gc();
 

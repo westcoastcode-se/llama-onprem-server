@@ -1,4 +1,7 @@
+#include "api/errors.hpp"
 #include "server/agent/model_adapter.hpp"
+#include "server/jobs/jobs.hpp"
+#include "server/llm/llm_engine.hpp"
 #include "server/sessions/sessions.hpp"
 #include "../tests.hpp"
 
@@ -47,8 +50,65 @@ static int test_waiting_session_is_not_gc_idle()
     return EXIT_SUCCESS;
 }
 
+/**
+ * POST /v1/sessions with an id returns that session and does not replace its messages.
+ * An id the server does not hold is rejected.
+ */
+static int test_create_resumes_existing_session()
+{
+    QwenAdapter adapter;
+    LlamaEngine engine;
+    Jobs jobs(engine, adapter);
+    Sessions sessions(jobs, adapter);
+
+    CreateSessionRequest created_request;
+    ChatMessage message;
+    message.role = "user";
+    message.content = "keep me";
+    created_request.messages.push_back(message);
+    const auto created = sessions.create(created_request);
+    const SessionID id = created->id;
+    const std::string prompt = created->to_response().system_prompt;
+
+    CreateSessionRequest again;
+    again.id = id;
+    again.system = "wipe";
+    ChatMessage replacement;
+    replacement.role = "user";
+    replacement.content = "replace";
+    again.messages.push_back(replacement);
+    const auto resumed = sessions.create(again);
+
+    assertTrue(created.get() == resumed.get());
+    assertEquals(id, resumed->id);
+    const SessionResponse body = resumed->to_response();
+    assertEquals(prompt, body.system_prompt);
+    assertEquals(static_cast<size_t>(1), body.messages.size());
+    assertEquals(std::string("keep me"), body.messages[0].content);
+
+    const auto fresh = sessions.create(CreateSessionRequest{});
+    assertTrue(fresh->id != id);
+
+    CreateSessionRequest missing;
+    missing.id = id == 42 ? 43 : 42;
+    bool threw = false;
+    std::shared_ptr<Session> resumed_missing;
+    try
+    {
+        resumed_missing = sessions.create(missing);
+    }
+    catch (const NotFound &)
+    {
+        threw = true;
+    }
+    assertTrue(threw);
+    assertTrue(resumed_missing == nullptr);
+    return EXIT_SUCCESS;
+}
+
 int test_session_gc()
 {
     RUN_TEST(test_waiting_session_is_not_gc_idle);
+    RUN_TEST(test_create_resumes_existing_session);
     return EXIT_SUCCESS;
 }

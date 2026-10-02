@@ -9,9 +9,11 @@ Callisto is a local coding agent. Two programs share the work:
 
 llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.
 
+Build and day-to-day use are in [docs/](docs/README.md).
+
 ## The client
 
-With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. Thinking stays on one line until you open it. A tool call is one line, and opens while you answer the approval question. The assistant reply sits in a box. The context meter is in the upper right.
+With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. While the model is thinking, that row shows the last three lines, then closes. A finished thinking row and a finished tool row show how long they took once that time reaches one second. A tool call is one line, and opens while you answer the approval question. The assistant reply is a label and the text. The system prompt starts as a collapsed row. The context meter is in the upper right.
 
 ![Callisto client](example.gif)
 
@@ -29,9 +31,10 @@ sudo pacman -S --needed base-devel git cmake ninja curl
 
 Debian or Ubuntu: install the same packages with `apt` (`build-essential`, `cmake`, `ninja-build`, `libcurl4-openssl-dev`, `git`). Add the CUDA toolkit when you want GPU layers.
 
-From the repository root:
+From the repository root. `vendors/llama.cpp` and `vendors/ftxui` are git submodules, so a fresh clone needs them checked out first:
 
 ```bash
+git submodule update --init
 cmake -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build cmake-build-debug -j$(nproc)
 ```
@@ -57,17 +60,17 @@ cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
 cmake --build cmake-build-release --target callisto_server callisto_cli -j$(nproc)
 ```
 
-The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages the binaries already built in `cmake-build-debug`. Build those first.
+The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages `callisto_cli` already built in `cmake-build-release`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md`. The image has no server. Build the client first. The same steps are in [docs/build.md](docs/build.md).
 
 # Run
 
-Download a GGUF model. This tree ships chat templates for Qwen3.8-27B and Ternary-Bonsai-2-27B under `src/templates/`. Pass `--chat-template` when the file inside the GGUF is not the one you want.
+Download a GGUF model. The server uses the Jinja template stored in that file. Pass `--chat-template` when you want a different one. The file name of that template, or else the GGUF, selects the tool-call format. [docs/using.md](docs/using.md) lists the names.
 
 ```bash
 pip install huggingface_hub
 python <<EOF
 from huggingface_hub import snapshot_download
-snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
+snapshot_download(repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", allow_patterns=["*Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"], local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF")
 EOF
 ```
 
@@ -79,13 +82,54 @@ Start the server. `-c` is the context length. `-ngl 99` offloads layers to the G
   -c 32768 -ngl 99
 ```
 
+A GGUF whose file name contains `devstral` is parsed as Devstral. Run it on another port and list it after Qwen in the client config. Temperature `0.15` and `--min-p 0.01` match that model. Details are in [docs/using.md](docs/using.md).
+
+```bash
+./cmake-build-release/callisto_server \
+  -m Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf \
+  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081
+```
+
+The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p` and `port`. `reasoning` is a boolean. `session-cache-size` is a byte count or a string such as `"8G"`. A later file overrides the keys it sets. Flags on the command line override the file.
+
+```bash
+./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
+```
+
+```json
+{
+  "model": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "context": 32768,
+  "gpu-layers": 99,
+  "host": "127.0.0.1"
+}
+```
+
+Each session's conversation is `<id>.json` under `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). `<id>.kv` is that session's KV cache and token ids under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores both files in that directory. `<id>.json` holds the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. A session that is generating, or waiting for tools or an answer, is kept. With no home directory and no XDG variable, both files are under `/tmp/callisto/sessions`. `--session-cache-size` caps the combined size of the conversation files and the KV files (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `POST /v1/sessions` with an `id` resumes that session, returns its conversation, and refreshes the same time. The other fields in that body are ignored. A missing or zero `id` creates a session. An unknown id is 404. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
+
 Start the client in the project you want it to edit:
 
 ```bash
 ./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
-Several models means several servers. Pass them at startup, or keep the list in `~/.config/callisto/servers.json`. The client connects to every server and uses the first one that answers. `/model` opens a dialog to switch. Switching starts a new session on that server and copies the conversation so far, so the next turn continues there.
+The same client settings can live in a JSON file and be passed with `--config-file`. `server` is one `[model=]host:port` string, or an array of them. `show-think`, `questions`, `compress-tools`, `resume`, `json`, and `verbose` are booleans. A later file overrides the keys it sets. Flags on the command line override the file.
+
+```bash
+./cmake-build-release/callisto_cli --config-file callisto.json
+```
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "server": ["qwen=127.0.0.1:8080", "devstral=127.0.0.1:8081"],
+  "approval": "read-only",
+  "theme": "nord"
+}
+```
+
+Several models means several servers. Pass them with `--server`, or set `server` in the config file. The client uses the first server in that list when it answers, and otherwise the next one that answers. `/model` opens a dialog to switch. Switching starts a new session on that server and copies the conversation so far, so the next turn continues there.
 
 ```bash
 export COLORTERM=truecolor ./cmake-build-release/callisto_cli \
@@ -93,18 +137,9 @@ export COLORTERM=truecolor ./cmake-build-release/callisto_cli \
   --server devstral=127.0.0.1:8081
 ```
 
-Setting `COLORTERM=truecolor` is optional but gives you the best color experience
+Setting `COLORTERM=truecolor` is optional but gives you the best color experience.
 
-```json
-{
-  "servers": [
-    {"model": "qwen", "host": "127.0.0.1", "port": 8080},
-    {"model": "devstral", "host": "127.0.0.1", "port": 8081}
-  ]
-}
-```
-
-`--server` replaces the file. With neither, `--host` and `-p` are the single server. HTTP subcommands such as `health` and `session` still use `--host` and `-p`.
+`--server` replaces the `server` list from the config file. With neither, `--host` and `-p` are the single server. HTTP subcommands such as `health` and `session` still use `--host` and `-p`.
 
 The fullscreen client still opens when every server is down. Status stays `offline`, and a chat message reports that none are reachable. The next message connects to the first server that answers.
 
@@ -114,7 +149,7 @@ One task from a script:
 ./cmake-build-release/callisto_cli exec "Summarize the README"
 ```
 
-`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.callisto/last-session` for this directory and server. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
+`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.local/state/callisto/last-session` for this directory and server, when this computer created it, and shows its transcript. `--session ID` does the same for an id listed in `~/.local/state/callisto/known-sessions`. `/resume` lists only sessions this computer created that the server still holds, including ones restored after a restart. A session id from another computer is refused. A session idle for 10 minutes is collected. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
 
 `web_search` calls a local SearXNG on port 4488. Start it with:
 
@@ -131,22 +166,23 @@ Reads run without a prompt. A write, a shell command, or a network tool asks fir
 - **Always this tool** (`a`)
 - **Full access** (`f`)
 
-Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D` or `/exit` leaves.
+Click a thinking line, a tool line, or the system row to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D`, `/exit`, or `/quit` leaves.
 
 | Command | What it does |
 |---|---|
 | `/help` | Show the commands |
 | `/model [name]` | Open the server dialog, or switch by name |
 | `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
-| `/status` | Session id, approval mode, and server |
+| `/status` | Model, session, approval, server, and directory |
 | `/diff` | `git diff --stat` for the working directory |
 | `/compact` | Summarize the chat into a new session and stop |
 | `/clear` | Start a new session |
-| `/exit` | Leave |
+| `/resume` | Continue a session created on this computer |
+| `/exit` | Leave. `/quit` does the same |
 
-`AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md`. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
+`AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md` in the project, or `~/.agents/skills/<name>/SKILL.md` for the user. A project skill with the same name is the one listed. The prompt lists each skill's name, one line, and the path. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
 
-Tools the client can run: `read_file`, `edit_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed.
+Tools the client can run: `read_file`, `write_file`, `edit_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `write_file` replaces a whole file. `edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed.
 
 # Credits
 

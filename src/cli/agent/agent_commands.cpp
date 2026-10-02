@@ -52,13 +52,16 @@ void AgentSession::help() const
     state_.ui->note("/help                 show these commands\n"
                     "/model [name]         choose a server, or switch by name\n"
                     "/approval [mode]      read-only, auto, or full\n"
-                    "/status               session id, approval, and server\n"
+                    "/status               model, session, approval, server, and directory\n"
                     "/diff                 git diff --stat for this directory\n"
                     "/compact              summarize the chat into a new session and stop\n"
                     "/clear                start a new session\n"
+                    "/resume               continue a session created on this computer\n"
                     "/exit                 leave\n"
                     "Ctrl-C cancels the current generation. A running command is aborted, and the server is told how long it ran.\n"
-                    "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it.\n"
+                    "Click a thinking or tool line, or the system row, or press Ctrl-O, to open or close it. "
+                    "Thinking shows its last three lines while it runs, then closes. "
+                    "A finished thinking or tool row shows how long it took once that time reaches one second.\n"
                     "When context is over 80% and the server is waiting, you can compact before the next request.\n"
                     "Compact and continue keeps working from the summary. Compact and stop leaves you at the prompt.");
 }
@@ -117,6 +120,11 @@ bool AgentSession::slash(const std::string &line)
     if (line == "/exit" || line == "/quit")
     {
         return false;
+    }
+    if (line == "/resume")
+    {
+        resume_session();
+        return true;
     }
     if (line == "/clear")
     {
@@ -280,7 +288,7 @@ void AgentSession::use_model(std::size_t index)
     std::vector<ChatMessage> history;
     if (previous_session != 0 && previous_client != nullptr)
     {
-        history = previous_client->get_session(previous_session).messages;
+        history = previous_client->get_messages(previous_session);
     }
     const std::size_t carried = history.size();
     state_.active = index;

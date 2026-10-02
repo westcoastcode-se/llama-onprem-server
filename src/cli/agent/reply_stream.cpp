@@ -18,6 +18,7 @@ void ReplyStream::read(JobKey key)
     bool think_open = false;
     bool answer_open = false;
     VisibleText hidden;
+    VisibleText hidden_think;
     auto show_assistant = [&](std::string_view text) {
         if (!answer_open)
         {
@@ -56,11 +57,7 @@ void ReplyStream::read(JobKey key)
             think_open = false;
         }
     };
-    auto take_think = [&](std::string_view text) {
-        if (!state_.show_think)
-        {
-            return;
-        }
+    auto show_think = [&](std::string_view text) {
         while (!think_open && !text.empty() && (text.front() == '\n' || text.front() == '\r'))
         {
             text.remove_prefix(1);
@@ -75,6 +72,28 @@ void ReplyStream::read(JobKey key)
             think_open = true;
         }
         state_.ui->append(std::string(text));
+    };
+    auto take_think = [&](std::string_view text) {
+        if (!state_.show_think || text.empty())
+        {
+            return;
+        }
+        if (state_.debug)
+        {
+            show_think(text);
+            return;
+        }
+        show_think(hidden_think.feed(text));
+    };
+    auto finish_think = [&] {
+        if (state_.debug || !state_.show_think)
+        {
+            hidden_think = VisibleText{};
+            return;
+        }
+        const std::string rest = hidden_think.finish();
+        hidden_think = VisibleText{};
+        show_think(rest);
     };
 
     std::jthread watcher([&](std::stop_token stop) {
@@ -150,6 +169,7 @@ void ReplyStream::read(JobKey key)
                     break;
                 }
                 take_think(std::string_view(pending).substr(0, close));
+                finish_think();
                 pending.erase(0, close + kClose.size());
                 thinking = false;
                 close_think();
@@ -161,6 +181,7 @@ void ReplyStream::read(JobKey key)
     {
         watcher.request_stop();
         watcher.join();
+        finish_think();
         close_think();
         if (!state_.debug)
         {
@@ -181,6 +202,7 @@ void ReplyStream::read(JobKey key)
     else
     {
         take_think(pending);
+        finish_think();
     }
     close_think();
     if (!state_.debug)

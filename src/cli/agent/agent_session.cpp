@@ -6,6 +6,7 @@
 #include "cli/session_store.hpp"
 #include "cli/agent/tool_runner.hpp"
 #include "cli/agent/tool_schema.hpp"
+#include "cli/tui/visible_text.hpp"
 
 #include "api/errors.hpp"
 #include "api/models.hpp"
@@ -232,9 +233,9 @@ AgentSession::AgentSession(AgentState &state, const AgentConfig &config, std::ve
     }
 }
 
-std::string AgentSession::last_assistant(const SessionResponse &session)
+std::string AgentSession::last_assistant(const std::span<const ChatMessage> messages)
 {
-    for (auto it = session.messages.rbegin(); it != session.messages.rend(); ++it)
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it)
     {
         if (it->role == ChatMessage::ROLE_ASSISTANT && !it->content.empty())
         {
@@ -324,7 +325,7 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
             forget();
             return "sub-agent stopped before the summary";
         }
-        std::string summary = last_assistant(client.get_session(child));
+        std::string summary = last_assistant(client.get_messages(child));
         if (summary.empty())
         {
             summary = "sub-agent produced no summary";
@@ -430,17 +431,17 @@ const ServerSlot &AgentSession::slot() const
 SessionID AgentSession::open(const AgentConfig &config)
 {
     const AgentConfig stored = endpoint_config(config);
+    const SessionStore store;
     if (config.session != 0)
     {
-        state_.client->get_session(config.session);
+        present_transcript_of(stored, config.session);
         return config.session;
     }
-    const SessionStore store;
     if (config.resume)
     {
         if (const auto saved = store.recall(stored, state_.cwd))
         {
-            state_.client->get_session(*saved);
+            present_transcript_of(stored, *saved);
             return *saved;
         }
         throw std::runtime_error("no saved session for this directory and server");
@@ -484,6 +485,142 @@ void AgentSession::present_system(const SessionResponse &created) const
     state_.ui->show_system(created.system_prompt);
 }
 
+void AgentSession::present_transcript_of(const AgentConfig &stored, SessionID id)
+{
+    if (!SessionStore{}.owns(stored, id))
+    {
+        throw std::runtime_error("session was not created on this computer");
+    }
+    CreateSessionRequest request;
+    request.id = id;
+    const SessionResponse resumed = state_.client->create_session(request);
+    if (resumed.id != id)
+    {
+        throw std::runtime_error("server resumed a different session");
+    }
+    SessionStore{}.remember(stored, id, state_.cwd);
+    present_transcript(resumed, resumed.messages);
+}
+
+void AgentSession::present_transcript(const SessionResponse &header, const std::span<const ChatMessage> messages) const
+{
+    if (state_.ui == nullptr)
+    {
+        return;
+    }
+    state_.ui->clear();
+    if (!header.system_prompt.empty())
+    {
+        state_.ui->show_system(header.system_prompt);
+    }
+    for (const ChatMessage &message : messages)
+    {
+        if (message.content.empty() && message.reasoning_content.empty())
+        {
+            continue;
+        }
+        if (message.role == ChatMessage::ROLE_ASSISTANT)
+        {
+            auto shown = [&](std::string_view text) {
+                if (state_.debug)
+                {
+                    return std::string(text);
+                }
+                VisibleText filter;
+                std::string out = filter.feed(text);
+                out += filter.finish();
+                return out;
+            };
+            if (state_.show_think)
+            {
+                std::string thinking = shown(message.reasoning_content);
+                if (!thinking.empty())
+                {
+                    state_.ui->show_saved_thinking(std::move(thinking));
+                }
+            }
+            std::string visible = shown(message.content);
+            if (!visible.empty())
+            {
+                state_.ui->begin("assistant");
+                state_.ui->append(std::move(visible));
+                state_.ui->end();
+            }
+            continue;
+        }
+        if (message.role == ChatMessage::ROLE_SYSTEM)
+        {
+            state_.ui->show_system(message.content);
+            continue;
+        }
+        const bool tool = message.content.find("<tool_response>") != std::string::npos ||
+                          message.content.find("</tool_response>") != std::string::npos;
+        state_.ui->begin(tool ? "tool" : "you");
+        state_.ui->append(message.content);
+        state_.ui->end();
+    }
+    if (header.state.value == SessionState::AwaitingTools)
+    {
+        state_.ui->note("this session is waiting on tool results");
+    }
+    else if (header.state.value == SessionState::AwaitingQuestion && header.pending_question)
+    {
+        state_.ui->note("this session is waiting on a question: " + header.pending_question->text);
+    }
+    else if (header.state.value == SessionState::Generating)
+    {
+        state_.ui->note("this session is still generating");
+    }
+}
+
+void AgentSession::resume_session()
+{
+    if (state_.client == nullptr || !state_.client->probe())
+    {
+        state_.ui->note(offline_message());
+        return;
+    }
+    const AgentConfig stored = endpoint_config(config_);
+    const SessionStore store;
+    const std::vector<SessionResponse> sessions = state_.client->list_sessions();
+    std::vector<SessionResponse> mine;
+    mine.reserve(sessions.size());
+    for (const SessionResponse &session : sessions)
+    {
+        if (store.owns(stored, session.id))
+        {
+            mine.push_back(session);
+        }
+    }
+    if (mine.empty())
+    {
+        state_.ui->note("no sessions created on this computer");
+        return;
+    }
+    std::vector<std::string> rows;
+    std::size_t selected = 0;
+    rows.reserve(mine.size());
+    for (std::size_t i = 0; i < mine.size(); ++i)
+    {
+        const SessionResponse &session = mine[i];
+        if (session.id == state_.session)
+        {
+            selected = i;
+        }
+        rows.push_back(std::format("{}  {}  {}/{} tok", session.id, session.state.to_string(), session.context_used,
+                                   session.context_size));
+    }
+    const std::optional<std::size_t> picked = state_.ui->choose("Resume session", std::move(rows), selected);
+    if (!picked || *picked >= mine.size())
+    {
+        return;
+    }
+    const SessionID id = mine[*picked].id;
+    present_transcript_of(stored, id);
+    bind_session(id);
+    refresh_status();
+}
+
 void AgentSession::refresh_status()
 {
     if (state_.session == 0 || state_.client == nullptr)
@@ -525,7 +662,7 @@ TurnStatus AgentSession::compact(bool resume)
         {
             return status;
         }
-        summary = last_assistant(state_.client->get_session(state_.session));
+        summary = last_assistant(state_.client->get_messages(state_.session));
         if (summary.empty())
         {
             state_.ui->note("compact produced no summary");

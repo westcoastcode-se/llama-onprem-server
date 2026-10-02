@@ -71,7 +71,7 @@ ChatMessage ChatMessage::from_json(const nlohmann::json &j)
         tools_json.push_back(tool.to_json());
 
     // clang-format off
-    return nlohmann::json
+    nlohmann::json json
     {
         {"system", system},
         {"messages", arr},
@@ -81,11 +81,17 @@ ChatMessage ChatMessage::from_json(const nlohmann::json &j)
         {"max_tokens", max_tokens},
     };
     // clang-format on
+    if (id != 0)
+    {
+        json["id"] = id;
+    }
+    return json;
 }
 
 CreateSessionRequest CreateSessionRequest::from_json(const nlohmann::json &j)
 {
     CreateSessionRequest req;
+    req.id = j.value("id", SessionID{});
     req.system = j.value("system", "");
     req.questions = j.value("questions", true);
     req.compress_tools = j.value("compress_tools", true);
@@ -215,16 +221,11 @@ MessageStatusResponse MessageStatusResponse::from_json(const nlohmann::json &j)
 {
     validate();
 
-    nlohmann::json arr = nlohmann::json::array();
-    for (const auto &m : messages)
-        arr.push_back(m.to_json());
-
     // clang-format off
     nlohmann::json j
     {
         {"id", id},
         {"system", system_prompt},
-        {"messages", arr},
         {"state", state.to_string()},
         {"questions", questions},
         {"compress_tools", compress_tools},
@@ -232,6 +233,16 @@ MessageStatusResponse MessageStatusResponse::from_json(const nlohmann::json &j)
         {"context_size", context_size}
     };
     // clang-format on
+
+    if (include_messages)
+    {
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto &m : messages)
+        {
+            arr.push_back(m.to_json());
+        }
+        j["messages"] = std::move(arr);
+    }
 
     if (!error.empty())
     {
@@ -307,7 +318,58 @@ SessionResponse SessionResponse::from_json(const nlohmann::json &j)
     req.error_code = j.value("error_code", std::string());
     req.context_used = j.value("context_used", 0);
     req.context_size = j.value("context_size", 0);
+    req.include_messages = j.contains("messages");
 
     return req;
+}
+
+[[nodiscard]] nlohmann::json SessionListResponse::to_json() const
+{
+    nlohmann::json arr = nlohmann::json::array();
+    for (SessionResponse session : sessions)
+    {
+        session.include_messages = false;
+        session.messages.clear();
+        arr.push_back(session.to_json());
+    }
+    return nlohmann::json{{"sessions", std::move(arr)}};
+}
+
+SessionListResponse SessionListResponse::from_json(const nlohmann::json &j)
+{
+    SessionListResponse response;
+    if (const auto arr = j.value("sessions", nlohmann::json::array()); arr.is_array())
+    {
+        response.sessions.reserve(arr.size());
+        for (const auto &item : arr)
+        {
+            response.sessions.push_back(SessionResponse::from_json(item));
+        }
+    }
+    return response;
+}
+
+[[nodiscard]] nlohmann::json SessionMessagesResponse::to_json() const
+{
+    nlohmann::json arr = nlohmann::json::array();
+    for (const ChatMessage &message : messages)
+    {
+        arr.push_back(message.to_json());
+    }
+    return nlohmann::json{{"messages", std::move(arr)}};
+}
+
+SessionMessagesResponse SessionMessagesResponse::from_json(const nlohmann::json &j)
+{
+    SessionMessagesResponse response;
+    if (const auto arr = j.value("messages", nlohmann::json::array()); arr.is_array())
+    {
+        response.messages.reserve(arr.size());
+        for (const auto &item : arr)
+        {
+            response.messages.push_back(ChatMessage::from_json(item));
+        }
+    }
+    return response;
 }
 

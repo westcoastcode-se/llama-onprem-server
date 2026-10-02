@@ -159,6 +159,9 @@ int test_load_theme_file_and_missing_config()
 
     const char *previous = std::getenv("HOME");
     const std::string saved = previous == nullptr ? std::string() : previous;
+    const char *xdg = std::getenv("XDG_CONFIG_HOME");
+    const std::string saved_xdg = xdg == nullptr ? std::string() : xdg;
+    unsetenv("XDG_CONFIG_HOME");
     setenv("HOME", dir.c_str(), 1);
     const Theme missing = load_theme("");
     {
@@ -173,6 +176,14 @@ int test_load_theme_file_and_missing_config()
     else
     {
         setenv("HOME", saved.c_str(), 1);
+    }
+    if (xdg == nullptr)
+    {
+        unsetenv("XDG_CONFIG_HOME");
+    }
+    else
+    {
+        setenv("XDG_CONFIG_HOME", saved_xdg.c_str(), 1);
     }
     std::filesystem::remove_all(dir);
 

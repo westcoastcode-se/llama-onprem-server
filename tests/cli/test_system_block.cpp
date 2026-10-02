@@ -17,7 +17,7 @@ std::string draw(ftxui::Element element, int width, int height)
 }
 
 // The block sits in a column, the way the transcript lays it out, so a tall
-// screen must not stretch the collapsed frame.
+// screen must not stretch the collapsed row.
 std::string draw_in_column(ftxui::Element element, int width, int height)
 {
     return draw(ftxui::vbox({std::move(element), ftxui::text("AFTER")}), width, height);

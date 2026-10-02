@@ -14,12 +14,15 @@ extern int test_tool_search_text();
 extern int test_tool_subagent();
 extern int test_web_utils();
 extern int test_defer();
+extern int test_xdg();
 extern int test_tool_schema();
+extern int test_client_config();
 extern int test_servers();
 extern int test_theme();
 extern int test_session_store();
 extern int test_transcript_scroll();
 extern int test_system_block();
+extern int test_thinking_block();
 extern int test_context_pressure();
 extern int test_utf8_stream();
 extern int test_token_buffer();
@@ -28,6 +31,9 @@ extern int test_llama_engine();
 extern int test_context_params();
 extern int test_session_gc();
 extern int test_tool_history();
+extern int test_session_kv_store();
+extern int test_session_disk();
+extern int test_server_options();
 
 int main()
 {
@@ -79,7 +85,15 @@ int main()
     {
         return rc;
     }
+    if (const int rc = test_xdg())
+    {
+        return rc;
+    }
     if (const int rc = test_tool_schema())
+    {
+        return rc;
+    }
+    if (const int rc = test_client_config())
     {
         return rc;
     }
@@ -100,6 +114,10 @@ int main()
         return rc;
     }
     if (const int rc = test_system_block())
+    {
+        return rc;
+    }
+    if (const int rc = test_thinking_block())
     {
         return rc;
     }
@@ -132,6 +150,18 @@ int main()
         return rc;
     }
     if (const int rc = test_tool_history())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_kv_store())
+    {
+        return rc;
+    }
+    if (const int rc = test_session_disk())
+    {
+        return rc;
+    }
+    if (const int rc = test_server_options())
     {
         return rc;
     }

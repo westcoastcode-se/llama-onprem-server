@@ -51,7 +51,8 @@ struct Theme
 // A color is a palette name (yellow, cyan, gray, graydark, white, ...) or #rgb / #rrggbb.
 [[nodiscard]] Theme theme_from_json(std::string_view text);
 
-// ~/.config/callisto/theme.json. Empty when HOME is unset.
+// $XDG_CONFIG_HOME/callisto/theme.json, or ~/.config/callisto/theme.json.
+// Empty when neither the variable nor HOME is set.
 [[nodiscard]] std::filesystem::path theme_config_path();
 
 // A built-in name, a path to JSON, or empty. Empty reads theme.json when that file exists.

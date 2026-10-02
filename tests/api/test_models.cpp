@@ -120,6 +120,8 @@ static int test_create_session_request_json() {
     req.messages.push_back(message);
 
     const auto back = CreateSessionRequest::from_json(req.to_json());
+    assertEquals(static_cast<SessionID>(0), back.id);
+    assertTrue(!req.to_json().contains("id"));
     assertEquals("Be brief", back.system);
     assertTrue(!back.questions);
     assertTrue(back.compress_tools);
@@ -133,6 +135,12 @@ static int test_create_session_request_json() {
     assertTrue(!off_back.compress_tools);
     const auto omitted = CreateSessionRequest::from_json(nlohmann::json::object());
     assertTrue(omitted.compress_tools);
+    assertEquals(static_cast<SessionID>(0), omitted.id);
+
+    CreateSessionRequest with_id;
+    with_id.id = 42;
+    const auto id_back = CreateSessionRequest::from_json(with_id.to_json());
+    assertEquals(static_cast<SessionID>(42), id_back.id);
     return EXIT_SUCCESS;
 }
 
@@ -188,6 +196,42 @@ static int test_error_response_json() {
 }
 
 /**
+ * A session header omits the transcript. Parsing that JSON keeps it omitted.
+ */
+static int test_session_header_omits_messages()
+{
+    SessionResponse session;
+    session.id = 4;
+    session.state = SessionState::Idle;
+    session.include_messages = false;
+    session.messages.push_back(ChatMessage{.role = "user", .content = "secret", .reasoning_content = {}});
+    const nlohmann::json header = session.to_json();
+    assertTrue(!header.contains("messages"));
+    assertEquals(static_cast<SessionID>(4), header.value("id", SessionID()));
+
+    const SessionResponse back = SessionResponse::from_json(header);
+    assertTrue(back.messages.empty());
+    assertTrue(!back.include_messages);
+    assertTrue(!back.to_json().contains("messages"));
+
+    SessionMessagesResponse transcript;
+    transcript.messages.push_back(ChatMessage{.role = "assistant", .content = "done", .reasoning_content = {}});
+    const auto restored = SessionMessagesResponse::from_json(transcript.to_json());
+    assertEquals(1, static_cast<int>(restored.messages.size()));
+    assertEquals("done", restored.messages[0].content);
+
+    SessionListResponse list;
+    list.sessions.push_back(session);
+    const nlohmann::json listed = list.to_json();
+    assertEquals(1, static_cast<int>(listed["sessions"].size()));
+    assertTrue(!listed["sessions"][0].contains("messages"));
+    const SessionListResponse listed_back = SessionListResponse::from_json(listed);
+    assertEquals(static_cast<SessionID>(4), listed_back.sessions.at(0).id);
+    assertTrue(listed_back.sessions.at(0).messages.empty());
+    return EXIT_SUCCESS;
+}
+
+/**
  * Run all API model tests
  */
 int test_models() {
@@ -198,5 +242,6 @@ int test_models() {
     RUN_TEST(test_create_session_request_json);
     RUN_TEST(test_message_status_response_json);
     RUN_TEST(test_error_response_json);
+    RUN_TEST(test_session_header_omits_messages);
     return EXIT_SUCCESS;
 }
