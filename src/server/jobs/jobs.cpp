@@ -512,7 +512,9 @@ void Jobs::worker_loop(std::stop_token stop)
 
         // Start stream the LLM response
         const auto buffer = task->buffer;
-        const bool prompt_opened_think = engine_.get_config().reasoning;
+        // Only families whose template opens <think> get that tag in the stream.
+        // Devstral never writes </think>, so the tag would keep its tool calls in the thinking row.
+        const bool opened_think = engine_.get_config().reasoning && adapter_.prompt_opens_think();
         const auto publish_context = [&] {
             task->note_context(engine_.session_token_count(task->request.session_id), engine_.get_context_size());
         };
@@ -533,7 +535,7 @@ void Jobs::worker_loop(std::stop_token stop)
                 }
                 // The template already opened <think> in the prompt, so the sample does not
                 // repeat it. The client only hides thinking when it sees that opener.
-                if (prompt_opened_think && !think_prefix_sent)
+                if (opened_think && !think_prefix_sent)
                 {
                     think_prefix_sent = true;
                     buffer->push("<think>\n");
@@ -580,7 +582,7 @@ void Jobs::worker_loop(std::stop_token stop)
             continue;
         }
 
-        const ThinkingSplit split = split_thinking_channel(full, engine_.get_config().reasoning);
+        const ThinkingSplit split = split_thinking_channel(full, opened_think);
         ParsedAssistantActions actions;
         if (split.closed)
         {

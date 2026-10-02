@@ -67,11 +67,11 @@ void print_usage(const char *argv0)
                  "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
                  "  --session-dir PATH     parked session files (default /tmp/.callisto/sessions)\n"
                  "  --session-cache-size SIZE  max bytes for that directory (K/M/G/T, 0 = no limit)\n"
-                 "  --config-file PATH  JSON object of these arguments\n"
+                 "  --config-file PATH  JSON object of these settings\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)\n"
                  "\n"
-                 "Config keys are the option names without leading dashes, such as m, c, ngl, top-p, host, and port.\n"
+                 "Config keys are model, context, batch, gpu-layers, temperature, top-p, host, and port.\n"
                  "reasoning is true or false. session-cache-size is a byte count or a string such as \"8G\".\n"
                  "A later --config-file overrides the keys it sets.\n"
                  "Arguments on the command line override the file.",

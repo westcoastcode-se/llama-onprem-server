@@ -30,7 +30,8 @@ struct Block
     bool expanded = false;
     // True while thinking tokens are still arriving. The view then shows the last three lines.
     bool thinking_live = false;
-    // Elapsed thinking time, set when the block closes. Negative until then.
+    // Elapsed time for a finished thinking or tool block. Negative until it closes.
+    // A span under one second is kept and left off the header.
     std::int64_t think_ms = -1;
     std::chrono::steady_clock::time_point think_started{};
 };
@@ -87,7 +88,8 @@ class TuiUi final : public AgentUi
     void begin(std::string kind) override;
     void append(std::string text) override;
     void end() override;
-    // Caller holds mutex. Closes a live thinking block and records how long it ran.
+    // Caller holds mutex. Closes the open block. A live thinking block collapses,
+    // and a thinking or tool block records how long it ran.
     void seal_open_block();
     void expand(std::string_view kind) override;
     void collapse(std::string_view kind) override;

@@ -50,7 +50,8 @@ bool RestClient::probe()
 SessionResponse RestClient::create_session(const CreateSessionRequest &body)
 {
     body.validate();
-    auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body.to_json(), 201));
+    const int status = body.id == 0 ? 201 : 200;
+    auto resp = SessionResponse::from_json(request_json("POST", "/v1/sessions", body.to_json(), status));
     resp.validate();
     return resp;
 }

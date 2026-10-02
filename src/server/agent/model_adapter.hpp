@@ -22,6 +22,13 @@ class ModelAdapter
 
     // Append tool calls found in text. Does not assign ids.
     virtual void parse_tool_calls(std::string_view text, std::vector<ParsedToolCall> &out) const = 0;
+
+    // Qwen and Bonsai open <think> in the generation prompt when reasoning is on.
+    // The completion then starts inside that block.
+    [[nodiscard]] virtual bool prompt_opens_think() const
+    {
+        return true;
+    }
 };
 
 // One property from a tool's JSON schema. Model-neutral.
@@ -56,6 +63,16 @@ class DeepseekAdapter final : public ModelAdapter
     [[nodiscard]] std::string_view name() const override;
     [[nodiscard]] std::string example_call(std::span<const ChatTool> tools) const override;
     void parse_tool_calls(std::string_view text, std::vector<ParsedToolCall> &out) const override;
+};
+
+// [TOOL_CALLS]name[ARGS]{...}  The template does not open a <think> block.
+class DevstralAdapter final : public ModelAdapter
+{
+  public:
+    [[nodiscard]] std::string_view name() const override;
+    [[nodiscard]] std::string example_call(std::span<const ChatTool> tools) const override;
+    void parse_tool_calls(std::string_view text, std::vector<ParsedToolCall> &out) const override;
+    [[nodiscard]] bool prompt_opens_think() const override;
 };
 
 // The shipped Ternary Bonsai template uses the same call syntax as Qwen.

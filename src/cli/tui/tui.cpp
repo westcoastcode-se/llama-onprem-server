@@ -154,14 +154,17 @@ ftxui::Element tool_block(const Block &block, bool reveal, ftxui::Box &hit, cons
         title = "tool";
     }
     const bool more = !preview.line.empty() || preview.more;
+    const std::string duration = visible_duration_suffix(block.think_ms);
+    const int duration_columns = string_width(duration);
     Elements lines;
     if (!block.expanded)
     {
-        lines.push_back(text("▶ " + fit_label(title, columns, more)) | color(ink));
+        const int room = std::max(1, columns - duration_columns);
+        lines.push_back(text("▶ " + fit_label(title, room, more) + duration) | color(ink));
     }
     else
     {
-        Element header = weighted(text("▼ " + title), theme) | color(ink);
+        Element header = weighted(text("▼ " + title + duration), theme) | color(ink);
         if (reveal)
         {
             header = header | focus;

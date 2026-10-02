@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/devstral_call.hpp"
+
 #include <array>
 #include <string>
 #include <string_view>
@@ -28,6 +30,7 @@ struct VisibleText
 
     std::string pending;
     bool hiding = false;
+    bool hiding_devstral = false;
     std::string close;
 
     static bool ieq(std::string_view text, std::size_t pos, std::string_view literal)
@@ -92,12 +95,10 @@ struct VisibleText
     static std::size_t held_prefix(std::string_view text)
     {
         std::size_t held = 0;
-        for (const Tag &tag : tags())
-        {
-            const std::string_view open = tag.open;
+        const auto consider = [&](std::string_view open) {
             if (open.size() < 2)
             {
-                continue;
+                return;
             }
             const std::size_t max = std::min(text.size(), open.size() - 1);
             for (std::size_t size = max; size > held; --size)
@@ -108,7 +109,12 @@ struct VisibleText
                     break;
                 }
             }
+        };
+        for (const Tag &tag : tags())
+        {
+            consider(tag.open);
         }
+        consider(kDevstralToolCalls);
         return held;
     }
 
@@ -141,6 +147,7 @@ struct VisibleText
                     if (end)
                     {
                         pending.clear();
+                        hiding = false;
                     }
                     break;
                 }
@@ -152,9 +159,48 @@ struct VisibleText
                 }
                 continue;
             }
+            if (hiding_devstral)
+            {
+                const std::size_t call_end = devstral_call_end(pending, 0);
+                if (call_end == std::string_view::npos)
+                {
+                    if (end)
+                    {
+                        pending.clear();
+                        hiding_devstral = false;
+                    }
+                    break;
+                }
+                pending.erase(0, call_end);
+                hiding_devstral = false;
+                while (!pending.empty() && (pending.front() == '\n' || pending.front() == '\r'))
+                {
+                    pending.erase(pending.begin());
+                }
+                continue;
+            }
 
             std::size_t pos = 0;
             const Tag *tag = earliest(pending, pos);
+            const std::size_t devstral = pending.find(kDevstralToolCalls);
+            if (devstral != std::string_view::npos && (tag == nullptr || devstral <= pos))
+            {
+                std::size_t cut = devstral;
+                bool broke = false;
+                while (cut > 0 && (pending[cut - 1] == '\n' || pending[cut - 1] == '\r'))
+                {
+                    broke = true;
+                    --cut;
+                }
+                out.append(pending, 0, cut);
+                if (broke)
+                {
+                    out.push_back('\n');
+                }
+                pending.erase(0, devstral);
+                hiding_devstral = true;
+                continue;
+            }
             if (tag == nullptr)
             {
                 const std::size_t hold = held_prefix(pending);

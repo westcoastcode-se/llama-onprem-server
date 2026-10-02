@@ -546,6 +546,18 @@ void Sessions::unsafe_gc()
 
 std::shared_ptr<Session> Sessions::create(CreateSessionRequest req)
 {
+    if (req.id != 0)
+    {
+        const auto existing = get(req.id);
+        if (!existing)
+        {
+            throw NotFound("session not found");
+        }
+        note_resume(req.id);
+        log_info("session ", req.id, " is resumed");
+        return existing;
+    }
+
     log_info("starting a new session");
 
     auto session = std::make_shared<Session>(adapter_);

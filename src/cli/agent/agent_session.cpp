@@ -487,10 +487,19 @@ void AgentSession::present_system(const SessionResponse &created) const
 
 void AgentSession::present_transcript_of(const AgentConfig &stored, SessionID id)
 {
-    const SessionResponse header = state_.client->get_session(id);
-    const std::vector<ChatMessage> messages = state_.client->get_messages(id);
+    if (!SessionStore{}.owns(stored, id))
+    {
+        throw std::runtime_error("session was not created on this computer");
+    }
+    CreateSessionRequest request;
+    request.id = id;
+    const SessionResponse resumed = state_.client->create_session(request);
+    if (resumed.id != id)
+    {
+        throw std::runtime_error("server resumed a different session");
+    }
     SessionStore{}.remember(stored, id, state_.cwd);
-    present_transcript(header, messages);
+    present_transcript(resumed, resumed.messages);
 }
 
 void AgentSession::present_transcript(const SessionResponse &header, const std::span<const ChatMessage> messages) const
@@ -512,17 +521,25 @@ void AgentSession::present_transcript(const SessionResponse &header, const std::
         }
         if (message.role == ChatMessage::ROLE_ASSISTANT)
         {
-            if (!message.reasoning_content.empty() && state_.show_think)
+            auto shown = [&](std::string_view text) {
+                if (state_.debug)
+                {
+                    return std::string(text);
+                }
+                VisibleText filter;
+                std::string out = filter.feed(text);
+                out += filter.finish();
+                return out;
+            };
+            if (state_.show_think)
             {
-                state_.ui->show_saved_thinking(message.reasoning_content);
+                std::string thinking = shown(message.reasoning_content);
+                if (!thinking.empty())
+                {
+                    state_.ui->show_saved_thinking(std::move(thinking));
+                }
             }
-            std::string visible = message.content;
-            if (!state_.debug)
-            {
-                VisibleText hidden;
-                visible = hidden.feed(message.content);
-                visible += hidden.finish();
-            }
+            std::string visible = shown(message.content);
             if (!visible.empty())
             {
                 state_.ui->begin("assistant");
@@ -563,18 +580,29 @@ void AgentSession::resume_session()
         state_.ui->note(offline_message());
         return;
     }
+    const AgentConfig stored = endpoint_config(config_);
+    const SessionStore store;
     const std::vector<SessionResponse> sessions = state_.client->list_sessions();
-    if (sessions.empty())
+    std::vector<SessionResponse> mine;
+    mine.reserve(sessions.size());
+    for (const SessionResponse &session : sessions)
     {
-        state_.ui->note("no sessions on this server");
+        if (store.owns(stored, session.id))
+        {
+            mine.push_back(session);
+        }
+    }
+    if (mine.empty())
+    {
+        state_.ui->note("no sessions created on this computer");
         return;
     }
     std::vector<std::string> rows;
     std::size_t selected = 0;
-    rows.reserve(sessions.size());
-    for (std::size_t i = 0; i < sessions.size(); ++i)
+    rows.reserve(mine.size());
+    for (std::size_t i = 0; i < mine.size(); ++i)
     {
-        const SessionResponse &session = sessions[i];
+        const SessionResponse &session = mine[i];
         if (session.id == state_.session)
         {
             selected = i;
@@ -583,12 +611,12 @@ void AgentSession::resume_session()
                                    session.context_size));
     }
     const std::optional<std::size_t> picked = state_.ui->choose("Resume session", std::move(rows), selected);
-    if (!picked || *picked >= sessions.size())
+    if (!picked || *picked >= mine.size())
     {
         return;
     }
-    const SessionID id = sessions[*picked].id;
-    present_transcript_of(endpoint_config(config_), id);
+    const SessionID id = mine[*picked].id;
+    present_transcript_of(stored, id);
     bind_session(id);
     refresh_status();
 }

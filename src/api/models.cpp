@@ -71,7 +71,7 @@ ChatMessage ChatMessage::from_json(const nlohmann::json &j)
         tools_json.push_back(tool.to_json());
 
     // clang-format off
-    return nlohmann::json
+    nlohmann::json json
     {
         {"system", system},
         {"messages", arr},
@@ -81,11 +81,17 @@ ChatMessage ChatMessage::from_json(const nlohmann::json &j)
         {"max_tokens", max_tokens},
     };
     // clang-format on
+    if (id != 0)
+    {
+        json["id"] = id;
+    }
+    return json;
 }
 
 CreateSessionRequest CreateSessionRequest::from_json(const nlohmann::json &j)
 {
     CreateSessionRequest req;
+    req.id = j.value("id", SessionID{});
     req.system = j.value("system", "");
     req.questions = j.value("questions", true);
     req.compress_tools = j.value("compress_tools", true);

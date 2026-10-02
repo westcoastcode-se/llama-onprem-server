@@ -14,8 +14,11 @@
 // Milliseconds under one second, otherwise tenths of a second (1.2s).
 [[nodiscard]] std::string format_think_duration(std::int64_t milliseconds);
 
+// Two spaces and the duration once it reaches one second. Empty before that.
+[[nodiscard]] std::string visible_duration_suffix(std::int64_t milliseconds);
+
 // Live and open: header plus the last three lines.
-// Finished and closed: header plus how long thinking took.
+// Finished and closed: header, plus the duration when it reached one second.
 // Finished and open: that header plus the full text.
 [[nodiscard]] ftxui::Element thinking_transcript_block(std::string_view title, std::string_view content, bool expanded,
                                                        bool live, std::int64_t duration_ms, bool reveal, bool bold,

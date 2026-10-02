@@ -24,11 +24,11 @@ static int test_config_file_sets_every_argument()
     defer(std::filesystem::remove_all(dir));
     const auto path = config_path(dir, "server.json");
     write_test_file(path, R"({
-        "m": "/tmp/my model.gguf",
-        "c": 32768,
-        "b": 1024,
-        "ngl": 40,
-        "t": 0.5,
+        "model": "/tmp/my model.gguf",
+        "context": 32768,
+        "batch": 1024,
+        "gpu-layers": 40,
+        "temperature": 0.5,
         "top-p": 0.5,
         "top-k": 40,
         "min-p": 0.25,
@@ -140,16 +140,16 @@ static int test_command_line_overrides_config_file()
     const auto first = config_path(dir, "first.json");
     const auto second = config_path(dir, "second.json");
     write_test_file(first, R"({
-        "m": "from-file.gguf",
-        "c": 111,
+        "model": "from-file.gguf",
+        "context": 111,
         "host": "1.1.1.1",
         "port": 2222,
         "reasoning": false,
         "session-cache-size": "1K"
     })");
     write_test_file(second, R"({
-        "c": 222,
-        "p": 3333,
+        "context": 222,
+        "port": 3333,
         "session-cache-size": 2097152
     })");
 
@@ -197,7 +197,7 @@ static int test_config_file_strings_and_flag_like_values()
     defer(std::filesystem::remove_all(dir));
     const auto path = config_path(dir, "strings.json");
     write_test_file(path, R"({
-        "m": "model.gguf",
+        "model": "model.gguf",
         "host": "--config-file",
         "chat-template": "a\"b",
         "session-dir": "a\\b"
@@ -274,7 +274,7 @@ static int test_config_file_errors()
     assertTrue(not_object.error.find(array + ": expected a JSON object") != std::string::npos);
 
     const auto nested = config_path(dir, "nested.json");
-    write_test_file(nested, R"({"m": "model.gguf", "config-file": "other.json"})");
+    write_test_file(nested, R"({"model": "model.gguf", "config-file": "other.json"})");
     const ServerArgParse inside = parse_server_args({"--config-file", nested});
     assertTrue(inside.error.find("config-file cannot be set inside a config file") != std::string::npos);
     assertTrue(inside.error.find(nested) != std::string::npos);
@@ -286,19 +286,24 @@ static int test_config_file_errors()
     assertTrue(bad_flag.error.find("unknown argument: not-a-flag") != std::string::npos);
     assertTrue(bad_flag.error.find(unknown) != std::string::npos);
 
+    const auto short_key = config_path(dir, "short.json");
+    write_test_file(short_key, R"({"m": "model.gguf"})");
+    const ServerArgParse old_key = parse_server_args({"--config-file", short_key});
+    assertTrue(old_key.error.find("unknown argument: m") != std::string::npos);
+
     const auto typed = config_path(dir, "typed.json");
-    write_test_file(typed, R"({"m": "model.gguf", "c": "32768"})");
+    write_test_file(typed, R"({"model": "model.gguf", "context": "32768"})");
     const ServerArgParse bad_type = parse_server_args({"--config-file", typed});
-    assertTrue(bad_type.error.find("c must be an integer") != std::string::npos);
+    assertTrue(bad_type.error.find("context must be an integer") != std::string::npos);
     assertTrue(!bad_type.usage);
 
     const auto flag = config_path(dir, "flag.json");
-    write_test_file(flag, R"({"m": "model.gguf", "reasoning": 1})");
+    write_test_file(flag, R"({"model": "model.gguf", "reasoning": 1})");
     const ServerArgParse bad_flag_type = parse_server_args({"--config-file", flag});
     assertTrue(bad_flag_type.error.find("reasoning must be a boolean") != std::string::npos);
 
     const auto bad_size = config_path(dir, "size.json");
-    write_test_file(bad_size, R"({"m": "model.gguf", "session-cache-size": "12xigs"})");
+    write_test_file(bad_size, R"({"model": "model.gguf", "session-cache-size": "12xigs"})");
     const ServerArgParse size = parse_server_args({"--config-file", bad_size});
     assertTrue(size.error.find("invalid session-cache-size") != std::string::npos);
     return EXIT_SUCCESS;

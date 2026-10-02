@@ -46,7 +46,8 @@ class AgentSession
     [[nodiscard]] bool ensure_server();
     [[nodiscard]] static std::string last_assistant(std::span<const ChatMessage> messages);
     void present_system(const SessionResponse &created) const;
-    // Load this id, remember it, and draw its transcript. Throws when the server has no such session.
+    // Resume this id with POST /v1/sessions, remember it, and draw its transcript.
+    // Throws when this computer did not create the id, or the server no longer has it.
     void present_transcript_of(const AgentConfig &stored, SessionID id);
     // Replace the transcript with this session's system prompt and messages.
     void present_transcript(const SessionResponse &header, std::span<const ChatMessage> messages) const;

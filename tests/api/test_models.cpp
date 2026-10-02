@@ -120,6 +120,8 @@ static int test_create_session_request_json() {
     req.messages.push_back(message);
 
     const auto back = CreateSessionRequest::from_json(req.to_json());
+    assertEquals(static_cast<SessionID>(0), back.id);
+    assertTrue(!req.to_json().contains("id"));
     assertEquals("Be brief", back.system);
     assertTrue(!back.questions);
     assertTrue(back.compress_tools);
@@ -133,6 +135,12 @@ static int test_create_session_request_json() {
     assertTrue(!off_back.compress_tools);
     const auto omitted = CreateSessionRequest::from_json(nlohmann::json::object());
     assertTrue(omitted.compress_tools);
+    assertEquals(static_cast<SessionID>(0), omitted.id);
+
+    CreateSessionRequest with_id;
+    with_id.id = 42;
+    const auto id_back = CreateSessionRequest::from_json(with_id.to_json());
+    assertEquals(static_cast<SessionID>(42), id_back.id);
     return EXIT_SUCCESS;
 }
 

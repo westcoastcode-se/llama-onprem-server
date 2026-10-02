@@ -70,16 +70,20 @@ void TuiUi::begin(std::string kind)
         std::lock_guard lock(mutex);
         seal_open_block();
         const bool thinking = kind == "thinking";
+        const bool tool = kind == "tool";
         blocks.push_back(Block{std::move(kind), {}});
         if (subagent_live)
         {
             blocks.back().caption = "sub-agent";
         }
+        if (thinking || tool)
+        {
+            blocks.back().think_started = std::chrono::steady_clock::now();
+        }
         if (thinking)
         {
             blocks.back().expanded = true;
             blocks.back().thinking_live = true;
-            blocks.back().think_started = std::chrono::steady_clock::now();
         }
         open = true;
     }
@@ -122,13 +126,19 @@ void TuiUi::seal_open_block()
     }
     open = false;
     Block &block = blocks.back();
-    if (block.kind != "thinking" || !block.thinking_live)
+    const bool thinking = block.kind == "thinking" && block.thinking_live;
+    const bool tool = block.kind == "tool" && block.think_ms < 0;
+    if (!thinking && !tool)
     {
         return;
     }
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                                                block.think_started);
     block.think_ms = std::max<std::int64_t>(elapsed.count(), 0);
+    if (!thinking)
+    {
+        return;
+    }
     block.thinking_live = false;
     block.expanded = false;
     const std::size_t index = blocks.size() - 1;

@@ -3,6 +3,129 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <utility>
+
+namespace
+{
+
+struct SavedSession
+{
+    std::string host;
+    int port = 0;
+    std::string cwd;
+    SessionID id = 0;
+};
+
+bool parse_port(const std::string &text, int &port)
+{
+    if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
+    {
+        return false;
+    }
+    try
+    {
+        std::size_t used = 0;
+        const int value = std::stoi(text, &used, 10);
+        if (used != text.size() || value <= 0)
+        {
+            return false;
+        }
+        port = value;
+        return true;
+    }
+    catch (const std::exception &)
+    {
+        return false;
+    }
+}
+
+bool parse_id(const std::string &text, SessionID &id)
+{
+    if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
+    {
+        return false;
+    }
+    try
+    {
+        std::size_t used = 0;
+        const unsigned long long value = std::stoull(text, &used, 10);
+        if (used != text.size() || value == 0)
+        {
+            return false;
+        }
+        id = static_cast<SessionID>(value);
+        return true;
+    }
+    catch (const std::exception &)
+    {
+        return false;
+    }
+}
+
+std::optional<SavedSession> read_saved(const std::filesystem::path &path)
+{
+    std::ifstream in(path);
+    if (!in)
+    {
+        return std::nullopt;
+    }
+    SavedSession saved;
+    std::string port_text;
+    std::string id_text;
+    if (!std::getline(in, saved.host) || !std::getline(in, port_text) || !std::getline(in, saved.cwd) ||
+        !std::getline(in, id_text))
+    {
+        return std::nullopt;
+    }
+    if (!parse_port(port_text, saved.port) || !parse_id(id_text, saved.id))
+    {
+        return std::nullopt;
+    }
+    return saved;
+}
+
+bool same_server(const SavedSession &saved, const AgentConfig &config)
+{
+    return saved.host == config.host && saved.port == config.port;
+}
+
+// One registry line is "id\\thost\\tport". A short or foreign line is skipped.
+bool recorded(const std::filesystem::path &path, const AgentConfig &config, const SessionID id)
+{
+    std::ifstream in(path);
+    if (!in)
+    {
+        return false;
+    }
+    std::string line;
+    while (std::getline(in, line))
+    {
+        if (!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        const auto first = line.find('\t');
+        const auto second = first == std::string::npos ? std::string::npos : line.find('\t', first + 1);
+        if (first == std::string::npos || second == std::string::npos || line.find('\t', second + 1) != std::string::npos)
+        {
+            continue;
+        }
+        SessionID line_id = 0;
+        int port = 0;
+        const std::string host = line.substr(first + 1, second - first - 1);
+        if (host != config.host || !parse_id(line.substr(0, first), line_id) || !parse_port(line.substr(second + 1), port))
+        {
+            continue;
+        }
+        if (line_id == id && port == config.port)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
 
 std::filesystem::path SessionStore::file() const
 {
@@ -13,46 +136,64 @@ std::filesystem::path SessionStore::file() const
     return dir / "last-session";
 }
 
-void SessionStore::remember(const AgentConfig &config, SessionID id, const std::filesystem::path &cwd) const
+std::filesystem::path SessionStore::registry() const
 {
-    std::ofstream out(file());
+    return file().parent_path() / "sessions";
+}
+
+void SessionStore::record(const AgentConfig &config, const SessionID id) const
+{
+    if (id == 0 || config.host.find_first_of("\t\r\n") != std::string::npos)
+    {
+        return;
+    }
+    if (recorded(registry(), config, id))
+    {
+        return;
+    }
+    const std::string line = std::to_string(id) + '\t' + config.host + '\t' + std::to_string(config.port) + '\n';
+    std::ofstream out(registry(), std::ios::app);
     if (!out)
     {
         return;
     }
-    out << config.host << '\n' << config.port << '\n' << cwd.string() << '\n' << id << '\n';
+    out.write(line.data(), static_cast<std::streamsize>(line.size()));
+}
+
+void SessionStore::remember(const AgentConfig &config, const SessionID id, const std::filesystem::path &cwd) const
+{
+    if (id == 0 || config.host.find_first_of("\t\r\n") != std::string::npos)
+    {
+        return;
+    }
+    std::ofstream out(file());
+    if (out)
+    {
+        out << config.host << '\n' << config.port << '\n' << cwd.string() << '\n' << id << '\n';
+    }
+    record(config, id);
 }
 
 std::optional<SessionID> SessionStore::recall(const AgentConfig &config, const std::filesystem::path &cwd) const
 {
-    std::ifstream in(file());
-    if (!in)
+    const auto saved = read_saved(file());
+    if (!saved || !same_server(*saved, config) || saved->cwd != cwd.string())
     {
         return std::nullopt;
     }
-    std::string host;
-    std::string port_text;
-    std::string saved_cwd;
-    std::string id_text;
-    if (!std::getline(in, host) || !std::getline(in, port_text) || !std::getline(in, saved_cwd) ||
-        !std::getline(in, id_text))
+    return saved->id;
+}
+
+bool SessionStore::owns(const AgentConfig &config, const SessionID id) const
+{
+    if (id == 0)
     {
-        return std::nullopt;
+        return false;
     }
-    try
+    if (recorded(registry(), config, id))
     {
-        if (host != config.host || std::stoi(port_text) != config.port || saved_cwd != cwd.string())
-        {
-            return std::nullopt;
-        }
+        return true;
     }
-    catch (const std::exception &)
-    {
-        return std::nullopt;
-    }
-    if (id_text.empty() || id_text.find_first_not_of("0123456789") != std::string::npos)
-    {
-        return std::nullopt;
-    }
-    return static_cast<SessionID>(std::stoull(id_text));
+    const auto saved = read_saved(file());
+    return saved && same_server(*saved, config) && saved->id == id;
 }

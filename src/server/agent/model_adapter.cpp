@@ -1,5 +1,7 @@
 #include "model_adapter.hpp"
 
+#include "common/devstral_call.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <format>
@@ -187,6 +189,105 @@ std::string parameter_placeholder(const ToolParameter &parameter)
     return parameter.name;
 }
 
+void append_devstral_calls(std::string_view text, std::vector<ParsedToolCall> &out)
+{
+    constexpr std::string_view kCallId = "[CALL_ID]";
+    std::size_t pos = 0;
+    while (pos < text.size())
+    {
+        const std::size_t start = text.find(kDevstralToolCalls, pos);
+        if (start == std::string_view::npos)
+        {
+            break;
+        }
+        const std::size_t end = devstral_call_end(text, start);
+        if (end == std::string_view::npos)
+        {
+            break;
+        }
+        const std::string_view call = text.substr(start + kDevstralToolCalls.size(), end - (start + kDevstralToolCalls.size()));
+        pos = end;
+
+        std::size_t cursor = 0;
+        while (cursor < call.size() && std::isspace(static_cast<unsigned char>(call[cursor])) != 0)
+        {
+            ++cursor;
+        }
+        if (cursor < call.size() && (call[cursor] == '{' || call[cursor] == '['))
+        {
+            try
+            {
+                const nlohmann::json parsed = nlohmann::json::parse(call.substr(cursor));
+                if (parsed.is_array())
+                {
+                    for (const auto &item : parsed)
+                    {
+                        if (!item.is_object() || !item.contains("name") || !item.at("name").is_string())
+                        {
+                            continue;
+                        }
+                        ParsedToolCall one;
+                        one.name = item.at("name").get<std::string>();
+                        if (one.name.empty())
+                        {
+                            continue;
+                        }
+                        if (item.contains("arguments"))
+                        {
+                            one.arguments = item.at("arguments");
+                            if (one.arguments.is_string())
+                            {
+                                const auto inner =
+                                    nlohmann::json::parse(one.arguments.get<std::string>(), nullptr, false);
+                                if (inner.is_object())
+                                {
+                                    one.arguments = inner;
+                                }
+                            }
+                        }
+                        if (!one.arguments.is_object())
+                        {
+                            one.arguments = nlohmann::json::object();
+                        }
+                        out.push_back(std::move(one));
+                    }
+                }
+            }
+            catch (...)
+            {
+            }
+            continue;
+        }
+
+        const std::size_t args = call.find(kDevstralToolArgs);
+        if (args == std::string_view::npos)
+        {
+            continue;
+        }
+        std::string_view head = trim_sv(call.substr(0, args));
+        const std::size_t id_at = head.find(kCallId);
+        if (id_at != std::string_view::npos)
+        {
+            head = trim_sv(head.substr(0, id_at));
+        }
+        ParsedToolCall one;
+        one.name = std::string(head);
+        if (one.name.empty())
+        {
+            continue;
+        }
+        try
+        {
+            one.arguments = parse_argument_object(call.substr(args + kDevstralToolArgs.size()));
+        }
+        catch (...)
+        {
+            one.arguments = nlohmann::json::object();
+        }
+        out.push_back(std::move(one));
+    }
+}
+
 std::string function_parameter_example(std::span<const ChatTool> tools)
 {
     if (tools.empty())
@@ -281,6 +382,37 @@ std::vector<ToolParameter> tool_parameters(const ChatTool &tool)
     return parameters;
 }
 
+namespace
+{
+
+nlohmann::json example_arguments(const ChatTool &tool)
+{
+    nlohmann::json arguments = nlohmann::json::object();
+    for (const ToolParameter &parameter : tool_parameters(tool))
+    {
+        const std::string placeholder = parameter_placeholder(parameter);
+        if (parameter.type == "integer")
+        {
+            arguments[parameter.name] = 0;
+        }
+        else if (parameter.type == "number")
+        {
+            arguments[parameter.name] = 0.0;
+        }
+        else if (parameter.type == "boolean")
+        {
+            arguments[parameter.name] = false;
+        }
+        else
+        {
+            arguments[parameter.name] = placeholder;
+        }
+    }
+    return arguments;
+}
+
+} // namespace
+
 std::string_view QwenAdapter::name() const
 {
     return "qwen";
@@ -308,27 +440,7 @@ std::string DeepseekAdapter::example_call(std::span<const ChatTool> tools) const
         return {};
     }
     const ChatTool &tool = tools.front();
-    nlohmann::json arguments = nlohmann::json::object();
-    for (const ToolParameter &parameter : tool_parameters(tool))
-    {
-        const std::string placeholder = parameter_placeholder(parameter);
-        if (parameter.type == "integer")
-        {
-            arguments[parameter.name] = 0;
-        }
-        else if (parameter.type == "number")
-        {
-            arguments[parameter.name] = 0.0;
-        }
-        else if (parameter.type == "boolean")
-        {
-            arguments[parameter.name] = false;
-        }
-        else
-        {
-            arguments[parameter.name] = placeholder;
-        }
-    }
+    const nlohmann::json arguments = example_arguments(tool);
     return std::format("Call a tool in this format:\n"
                        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>{}\n"
                        "```json\n"
@@ -401,6 +513,35 @@ void DeepseekAdapter::parse_tool_calls(std::string_view text, std::vector<Parsed
     }
 }
 
+std::string_view DevstralAdapter::name() const
+{
+    return "devstral";
+}
+
+std::string DevstralAdapter::example_call(std::span<const ChatTool> tools) const
+{
+    if (tools.empty())
+    {
+        return {};
+    }
+    const ChatTool &tool = tools.front();
+    return std::format("Call a tool in this format:\n"
+                       "[TOOL_CALLS]{}[ARGS]{}\n\n"
+                       "The name after [TOOL_CALLS] is the tool. The object after [ARGS] is the arguments. "
+                       "Repeat [TOOL_CALLS] for another tool in the same turn.\n\n",
+                       tool.name, example_arguments(tool).dump());
+}
+
+void DevstralAdapter::parse_tool_calls(std::string_view text, std::vector<ParsedToolCall> &out) const
+{
+    append_devstral_calls(text, out);
+}
+
+bool DevstralAdapter::prompt_opens_think() const
+{
+    return false;
+}
+
 std::string_view BonsaiAdapter::name() const
 {
     return "bonsai";
@@ -433,6 +574,10 @@ std::unique_ptr<ModelAdapter> make_model_adapter(std::string_view model_path, st
         if (contains(text, "deepseek"))
         {
             return std::make_unique<DeepseekAdapter>();
+        }
+        if (contains(text, "devstral"))
+        {
+            return std::make_unique<DevstralAdapter>();
         }
         if (contains(text, "bonsai") || contains(text, "ternary"))
         {

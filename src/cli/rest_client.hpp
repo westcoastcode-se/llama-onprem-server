@@ -58,10 +58,8 @@ class RestClient
     bool probe();
 
     /**
-     * Create a new session
-     *
-     * @param body The creation request
-     * @return Information on the created session
+     * POST /v1/sessions. id == 0 creates a session and expects 201.
+     * A non-zero id resumes that session and expects 200.
      */
     SessionResponse create_session(const CreateSessionRequest &body);
 

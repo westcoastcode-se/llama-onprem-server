@@ -139,6 +139,9 @@ struct ChatMessage
  */
 struct CreateSessionRequest
 {
+    // Zero creates a session. Any other id resumes that session and leaves its conversation unchanged.
+    SessionID id = 0;
+
     // Extra instructions appended to the system prompt the server builds for the active model.
     std::string system;
 

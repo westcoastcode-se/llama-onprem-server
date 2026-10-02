@@ -68,10 +68,17 @@ void send_job_token_stream(const httplib::Request &, httplib::Response &res, con
  */
 void register_session_endpoints(httplib::Server &s, AppState &state)
 {
-    // Create a new session
+    // Create a session. A body with id resumes that session instead.
     s.Post("/v1/sessions", [&state](const httplib::Request &req, httplib::Response &res) {
         const auto body = nlohmann::json::parse(req.body.empty() ? "{}" : req.body);
-        const auto created = state.sessions.create(CreateSessionRequest::from_json(body));
+        const auto request = CreateSessionRequest::from_json(body);
+        const auto created = state.sessions.create(request);
+        if (request.id != 0)
+        {
+            log_info(req.remote_addr, ":", req.remote_port, " resumed ", created);
+            send_json(res, 200, created->to_response());
+            return;
+        }
         log_info(req.remote_addr, ":", req.remote_port, " created ", created);
         send_json(res, 201, created->to_response());
     });

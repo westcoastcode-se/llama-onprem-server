@@ -207,6 +207,7 @@ class Sessions
     // keep is never removed by this call.
     void enforce_cache_limit(SessionID keep);
 
+    // id == 0 creates a session. A non-zero id resumes that session without changing its conversation.
     [[nodiscard]] std::shared_ptr<Session> create(CreateSessionRequest req);
 
     /**

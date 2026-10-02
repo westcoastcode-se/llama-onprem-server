@@ -1,5 +1,7 @@
 #include "cli/agent/agent.hpp"
+#include "cli/client_config.hpp"
 #include "cli/servers.hpp"
+#include "cli/session_store.hpp"
 #include "api/errors.hpp"
 #include "api/models.hpp"
 #include "api/sessions.hpp"
@@ -23,15 +25,7 @@
 namespace
 {
 
-struct Options
-{
-    std::string host = "127.0.0.1";
-    int port = 8080;
-    bool json = false;
-    bool verbose = false;
-};
-
-RestClient connect(const Options &options)
+RestClient connect(const ClientConfig &options)
 {
     Logger::set_level(options.verbose ? Logger::LEVEL_INFO : Logger::LEVEL_ERROR);
     return RestClient(options.host, options.port);
@@ -224,7 +218,7 @@ nlohmann::json load_tool_results(const std::string &path, const std::string &id,
     return nlohmann::json::array({std::move(item)});
 }
 
-void add_connection(CLI::App &app, Options &options)
+void add_connection(CLI::App &app, ClientConfig &options)
 {
     app.add_option("--host", options.host, "Server host")->default_val("127.0.0.1");
     app.add_option("-p,--port", options.port, "Server port")->default_val(8080)->check(CLI::Range(1, 65535));
@@ -240,66 +234,62 @@ int main(int argc, char **argv)
     CLI::App app{"Coding agent for the local Callisto server"};
     app.set_help_all_flag("--help-all", "Show help for every subcommand");
     app.footer("With no subcommand, start an interactive session in the current directory.\n"
-               "Repeat --server for several models, or use ~/.config/callisto/servers.json.\n"
+               "Repeat --server for several models, or set server in --config-file.\n"
+               "--config-file reads a JSON object. Keys are host, port, server, approval, resume, session,\n"
+               "show-think, debug, questions, compress-tools, theme, json, and verbose.\n"
+               "A later file overrides the keys it sets. Flags override the file.\n"
                "Colors come from --theme, or from ~/.config/callisto/theme.json.\n"
-               "The first server that answers is selected. /model opens a chooser.\n"
+               "The first server in the list is used when it answers. Otherwise the next one that answers.\n"
+               "/model opens a chooser.\n"
                "health, session, send, job, and tools talk to the HTTP API.");
 
-    Options options;
+    ClientConfig options;
     add_connection(app, options);
-    std::vector<std::string> server_specs;
-    app.add_option("--server", server_specs, "Model server as [model=]host:port. Repeat, or separate with commas.");
-    std::string approval = "read-only";
-    bool resume = false;
-    bool show_think = true;
-    bool debug = false;
-    bool questions = true;
-    bool compress_tools = true;
-    std::string resume_id;
-    std::string theme_name;
+    std::string config_file_option;
+    app.add_option("--config-file", config_file_option,
+                   "JSON file of client settings. Repeat to layer files. Flags override the file.")
+        ->expected(1)
+        ->type_name("PATH");
+    app.add_option("--server", options.servers, "Model server as [model=]host:port. Repeat, or separate with commas.");
     std::vector<std::string> initial_prompt;
-    app.add_option("--approval", approval, "read-only, auto, or full")->default_val("read-only");
-    app.add_flag("--resume", resume, "Continue the saved session for this directory and server");
-    app.add_option("--session", resume_id, "Continue this session id");
-    app.add_flag("--show-think,!--hide-think", show_think, "Print the thinking block");
-    app.add_flag("--debug", debug, "Show tool-call XML and similar protocol blocks");
-    app.add_flag("--questions,!--no-questions", questions, "Let the model pause and ask a question");
-    app.add_flag("--compress-tools,!--no-compress-tools", compress_tools,
+    app.add_option("--approval", options.approval, "read-only, auto, or full")->default_val("read-only");
+    app.add_flag("--resume", options.resume, "Continue the saved session for this directory and server");
+    app.add_option("--session", options.session, "Continue a session id created on this computer");
+    app.add_flag("--show-think,!--hide-think", options.show_think, "Print the thinking block");
+    app.add_flag("--debug", options.debug, "Show tool-call XML and similar protocol blocks");
+    app.add_flag("--questions,!--no-questions", options.questions, "Let the model pause and ask a question");
+    app.add_flag("--compress-tools,!--no-compress-tools", options.compress_tools,
                  "Shorten finished tool results when the next message is saved. Applies to a new session");
-    app.add_option("--theme", theme_name,
-                   "Color theme: default, ink, nord, forest, ember, or a path to a JSON file");
+    app.add_option("--theme", options.theme, "Color theme: default, ink, nord, forest, ember, or a path to a JSON file");
     app.add_option("prompt", initial_prompt, "Task to start with")->expected(0, -1);
 
     int agent_status = 0;
     auto start_agent = [&](bool exec_mode, const std::string &prompt) {
-        if (approval != "read-only" && approval != "suggest" && approval != "auto" && approval != "full")
+        if (options.approval != "read-only" && options.approval != "suggest" && options.approval != "auto" &&
+            options.approval != "full")
         {
             throw std::runtime_error("--approval must be read-only, auto, or full");
         }
         AgentConfig config;
         config.host = options.host;
         config.port = options.port;
-        if (!server_specs.empty())
+        if (!options.servers.empty())
         {
-            config.servers = parse_server_list(server_specs);
+            config.servers = parse_server_list(options.servers);
         }
-        else
-        {
-            config.servers = load_servers_file(servers_config_path());
-        }
-        config.show_think = show_think;
-        config.debug = debug;
-        config.questions = questions;
-        config.compress_tools = compress_tools;
+        config.show_think = options.show_think;
+        config.debug = options.debug;
+        config.questions = options.questions;
+        config.compress_tools = options.compress_tools;
         config.exec = exec_mode;
-        config.resume = resume;
+        config.resume = options.resume;
         config.prompt = prompt;
-        config.theme = theme_name;
-        if (approval == "auto")
+        config.theme = options.theme;
+        if (options.approval == "auto")
         {
             config.approval = ApprovalMode::Auto;
         }
-        else if (approval == "full")
+        else if (options.approval == "full")
         {
             config.approval = ApprovalMode::Full;
         }
@@ -307,9 +297,9 @@ int main(int argc, char **argv)
         {
             config.approval = ApprovalMode::ReadOnly;
         }
-        if (!resume_id.empty())
+        if (!options.session.empty())
         {
-            config.session = parse_session_id(resume_id);
+            config.session = parse_session_id(options.session);
         }
         agent_status = run_agent(config);
     };
@@ -338,11 +328,13 @@ int main(int argc, char **argv)
     auto *create = session->add_subcommand("create", "POST /v1/sessions");
     create->fallthrough();
     std::string system_text;
+    std::string create_id;
     bool create_questions = true;
     bool create_compress_tools = true;
     int max_tokens = -1;
     std::vector<std::string> history;
     std::vector<std::string> tool_json;
+    create->add_option("--id", create_id, "Resume this session id. It must have been created on this computer");
     create->add_option("-s,--system", system_text, "Extra system instructions");
     create->add_flag("--questions,!--no-questions", create_questions, "Pause when the model asks a question");
     create->add_flag("--compress-tools,!--no-compress-tools", create_compress_tools,
@@ -351,6 +343,28 @@ int main(int argc, char **argv)
     create->add_option("-m,--message", history, "History entry as role:text")->take_all();
     create->add_option("--tool", tool_json, "Tool JSON, OpenAI function or {name,description,parameters}")->take_all();
     create->callback([&] {
+        AgentConfig stored;
+        stored.host = options.host;
+        stored.port = options.port;
+        SessionStore store;
+        if (!create_id.empty())
+        {
+            const SessionID id = parse_session_id(create_id);
+            if (!store.owns(stored, id))
+            {
+                throw std::runtime_error("session was not created on this computer");
+            }
+            CreateSessionRequest request;
+            request.id = id;
+            const SessionResponse resumed = connect(options).create_session(request);
+            if (resumed.id != id)
+            {
+                throw std::runtime_error("server resumed a different session");
+            }
+            store.record(stored, resumed.id);
+            print_session(resumed, options.json);
+            return;
+        }
         CreateSessionRequest request;
         request.system = system_text;
         request.questions = create_questions;
@@ -364,7 +378,9 @@ int main(int argc, char **argv)
         {
             request.tools.push_back(ChatTool::from_json(nlohmann::json::parse(item)));
         }
-        print_session(connect(options).create_session(request), options.json);
+        const SessionResponse created = connect(options).create_session(request);
+        store.record(stored, created.id);
+        print_session(created, options.json);
     });
 
     auto *list = session->add_subcommand("list", "GET /v1/sessions");
@@ -554,9 +570,42 @@ int main(int argc, char **argv)
         start_agent(false, join_words(initial_prompt));
     });
 
+    // Registering an option writes its default into the bound value. Load the file after that,
+    // and parse flags after the file, so a flag replaces the file.
+    std::vector<std::string> raw_args;
+    if (argc > 1)
+    {
+        raw_args.assign(argv + 1, argv + argc);
+    }
+    ClientArgSplit split = split_client_args(raw_args);
+    if (!split.error.empty())
+    {
+        std::println(stderr, "{}", split.error);
+        return 1;
+    }
+    if (!split.help)
+    {
+        for (const std::string &path : split.config_files)
+        {
+            const std::string error = load_client_config_file(path, options);
+            if (!error.empty())
+            {
+                std::println(stderr, "{}", error);
+                return 1;
+            }
+        }
+    }
+    std::vector<char *> forwarded;
+    forwarded.reserve(split.args.size() + 1);
+    forwarded.push_back(argv[0]);
+    for (std::string &arg : split.args)
+    {
+        forwarded.push_back(arg.data());
+    }
+
     try
     {
-        app.parse(argc, argv);
+        app.parse(static_cast<int>(forwarded.size()), forwarded.data());
     }
     catch (const CLI::ParseError &error)
     {

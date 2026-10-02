@@ -56,7 +56,7 @@ void AgentSession::help() const
                     "/diff                 git diff --stat for this directory\n"
                     "/compact              summarize the chat into a new session and stop\n"
                     "/clear                start a new session\n"
-                    "/resume               continue a session still held by this server\n"
+                    "/resume               continue a session created on this computer\n"
                     "/exit                 leave\n"
                     "Ctrl-C cancels the current generation. A running command is aborted, and the server is told how long it ran.\n"
                     "Click a thinking or tool line, or the system box, or press Ctrl-O, to open or close it. "

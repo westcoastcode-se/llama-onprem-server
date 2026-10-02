@@ -9,6 +9,8 @@ Callisto is a local coding agent. Two programs share the work:
 
 llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.
 
+Build and day-to-day use are in [docs/](docs/README.md).
+
 ## The client
 
 With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. Thinking stays on one line until you open it. A tool call is one line, and opens while you answer the approval question. The assistant reply sits in a box. The context meter is in the upper right.
@@ -67,7 +69,7 @@ Download a GGUF model. This tree ships chat templates for Qwen3.8-27B and Ternar
 pip install huggingface_hub
 python <<EOF
 from huggingface_hub import snapshot_download
-snapshot_download(repo_id="unsloth/Qwen3.8-27B-GGUF", allow_patterns=["*Qwen3.8-27B-UD-Q4_K_XL.gguf"], local_dir="Qwen3.8-27B-GGUF")
+snapshot_download(repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", allow_patterns=["*Devstral-Small-2-24B-Instruct-2512-UD-Q3_K_XL.gguf"], local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF")
 EOF
 ```
 
@@ -79,7 +81,15 @@ Start the server. `-c` is the context length. `-ngl 99` offloads layers to the G
   -c 32768 -ngl 99
 ```
 
-The same arguments can be stored in a JSON file and passed with `--config-file`. Keys are the option names without leading dashes. `reasoning` is a boolean. `session-cache-size` is a byte count or a string such as `"8G"`. A later file overrides the keys it sets. Flags on the command line override the file.
+A GGUF whose file name contains `devstral` is parsed as Devstral. Run it on another port and list it after Qwen in the client config. Temperature `0.15` and `--min-p 0.01` match that model. Details are in [docs/using.md](docs/using.md).
+
+```bash
+./cmake-build-release/callisto_server \
+  -m Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf \
+  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081
+```
+
+The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p` and `port`. `reasoning` is a boolean. `session-cache-size` is a byte count or a string such as `"8G"`. A later file overrides the keys it sets. Flags on the command line override the file.
 
 ```bash
 ./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
@@ -87,14 +97,14 @@ The same arguments can be stored in a JSON file and passed with `--config-file`.
 
 ```json
 {
-  "m": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
-  "c": 32768,
-  "ngl": 99,
+  "model": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "context": 32768,
+  "gpu-layers": 99,
   "host": "127.0.0.1"
 }
 ```
 
-Each session is stored under `/tmp/.callisto/sessions`, or the directory given with `--session-dir`. `<id>.json` is the conversation: the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is that session's KV cache and token ids, written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. `--session-cache-size` caps the directory (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
+Each session is stored under `/tmp/.callisto/sessions`, or the directory given with `--session-dir`. `<id>.json` is the conversation: the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is that session's KV cache and token ids, written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. `--session-cache-size` caps the directory (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `POST /v1/sessions` with an `id` resumes that session, returns its conversation, and refreshes the same time. The other fields in that body are ignored. A missing or zero `id` creates a session. An unknown id is 404. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
 
 Start the client in the project you want it to edit:
 
@@ -102,7 +112,23 @@ Start the client in the project you want it to edit:
 ./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
 ```
 
-Several models means several servers. Pass them at startup, or keep the list in `~/.config/callisto/servers.json`. The client connects to every server and uses the first one that answers. `/model` opens a dialog to switch. Switching starts a new session on that server and copies the conversation so far, so the next turn continues there.
+The same client settings can live in a JSON file and be passed with `--config-file`. `server` is one `[model=]host:port` string, or an array of them. `show-think`, `questions`, `compress-tools`, `resume`, `json`, and `verbose` are booleans. A later file overrides the keys it sets. Flags on the command line override the file.
+
+```bash
+./cmake-build-release/callisto_cli --config-file callisto.json
+```
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "server": ["qwen=127.0.0.1:8080", "devstral=127.0.0.1:8081"],
+  "approval": "read-only",
+  "theme": "nord"
+}
+```
+
+Several models means several servers. Pass them with `--server`, or set `server` in the config file. The client uses the first server in that list when it answers, and otherwise the next one that answers. `/model` opens a dialog to switch. Switching starts a new session on that server and copies the conversation so far, so the next turn continues there.
 
 ```bash
 export COLORTERM=truecolor ./cmake-build-release/callisto_cli \
@@ -110,18 +136,9 @@ export COLORTERM=truecolor ./cmake-build-release/callisto_cli \
   --server devstral=127.0.0.1:8081
 ```
 
-Setting `COLORTERM=truecolor` is optional but gives you the best color experience
+Setting `COLORTERM=truecolor` is optional but gives you the best color experience.
 
-```json
-{
-  "servers": [
-    {"model": "qwen", "host": "127.0.0.1", "port": 8080},
-    {"model": "devstral", "host": "127.0.0.1", "port": 8081}
-  ]
-}
-```
-
-`--server` replaces the file. With neither, `--host` and `-p` are the single server. HTTP subcommands such as `health` and `session` still use `--host` and `-p`.
+`--server` replaces the `server` list from the config file. With neither, `--host` and `-p` are the single server. HTTP subcommands such as `health` and `session` still use `--host` and `-p`.
 
 The fullscreen client still opens when every server is down. Status stays `offline`, and a chat message reports that none are reachable. The next message connects to the first server that answers.
 
@@ -131,7 +148,7 @@ One task from a script:
 ./cmake-build-release/callisto_cli exec "Summarize the README"
 ```
 
-`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.agents/last-session` for this directory and server and shows its transcript. `--session ID` does the same for that id. `/resume` lists the sessions saved for this server, including ones restored after a restart. A session idle for 10 minutes is collected. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
+`--approval` is `read-only` by default. `auto` also allows writes inside the working directory. `full` asks for nothing. `--resume` continues the session saved in `~/.agents/last-session` for this directory and server, when this computer created it, and shows its transcript. `--session ID` does the same for an id listed in `~/.agents/sessions`. `/resume` lists only sessions this computer created that the server still holds, including ones restored after a restart. A session id from another computer is refused. A session idle for 10 minutes is collected. `--hide-think` hides the thinking line. `--debug` leaves tool-call XML in the assistant text.
 
 `web_search` calls a local SearXNG on port 4488. Start it with:
 
@@ -159,7 +176,7 @@ Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one
 | `/diff` | `git diff --stat` for the working directory |
 | `/compact` | Summarize the chat into a new session and stop |
 | `/clear` | Start a new session |
-| `/resume` | Continue a session still held by this server |
+| `/resume` | Continue a session created on this computer |
 | `/exit` | Leave |
 
 `AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md`. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.

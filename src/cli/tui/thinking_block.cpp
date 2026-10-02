@@ -61,10 +61,9 @@ std::string fit_columns(const std::string &line, int columns)
 std::string header_label(std::string_view title, bool live, std::int64_t duration_ms)
 {
     std::string label(title.empty() ? "thinking" : title);
-    if (!live && duration_ms >= 0)
+    if (!live)
     {
-        label += "  ";
-        label += format_think_duration(duration_ms);
+        label += visible_duration_suffix(duration_ms);
     }
     return label;
 }
@@ -113,6 +112,15 @@ std::string format_think_duration(std::int64_t milliseconds)
     }
     const auto tenths = (ms + 50) / 100;
     return std::format("{}.{}s", tenths / 10, tenths % 10);
+}
+
+std::string visible_duration_suffix(std::int64_t milliseconds)
+{
+    if (milliseconds < 1000)
+    {
+        return {};
+    }
+    return "  " + format_think_duration(milliseconds);
 }
 
 ftxui::Element thinking_transcript_block(std::string_view title, std::string_view content, bool expanded, bool live,

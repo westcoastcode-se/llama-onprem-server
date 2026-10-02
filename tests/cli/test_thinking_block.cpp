@@ -66,6 +66,26 @@ int test_live_thinking_shows_only_the_last_three_lines()
     return 0;
 }
 
+int test_visible_duration_suffix_starts_at_one_second()
+{
+    assertEquals(std::string(""), visible_duration_suffix(-1));
+    assertEquals(std::string(""), visible_duration_suffix(0));
+    assertEquals(std::string(""), visible_duration_suffix(999));
+    assertEquals(std::string("  1.0s"), visible_duration_suffix(1000));
+    assertEquals(std::string("  1.5s"), visible_duration_suffix(1500));
+    return 0;
+}
+
+int test_finished_thinking_hides_a_short_duration()
+{
+    ftxui::Box hit;
+    const std::string closed = draw_in_column(block("plan", false, false, 999, hit), 42, 4);
+    assertTrue(closed.find("▶ thinking") != std::string::npos);
+    assertTrue(closed.find("999") == std::string::npos);
+    assertTrue(closed.find("ms") == std::string::npos);
+    return 0;
+}
+
 int test_finished_thinking_collapses_to_the_header_and_duration()
 {
     const std::string text = "ALPHA stays hidden\nBETA second\nGAMMA third\nDELTA newest";
@@ -90,7 +110,9 @@ int test_thinking_block()
 {
     RUN_TEST(test_thinking_tail_keeps_the_last_three_lines);
     RUN_TEST(test_format_think_duration_uses_tenths_past_one_second);
+    RUN_TEST(test_visible_duration_suffix_starts_at_one_second);
     RUN_TEST(test_live_thinking_shows_only_the_last_three_lines);
+    RUN_TEST(test_finished_thinking_hides_a_short_duration);
     RUN_TEST(test_finished_thinking_collapses_to_the_header_and_duration);
     return 0;
 }

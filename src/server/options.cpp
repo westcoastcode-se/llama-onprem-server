@@ -224,23 +224,23 @@ bool apply_json_key(ServerOptions &options, const std::string_view key, const nl
         status.error = "config-file cannot be set inside a config file";
         return false;
     }
-    if (key == "m")
+    if (key == "model")
     {
         return json_string(value, key, options.config.model_path, status);
     }
-    if (key == "c")
+    if (key == "context")
     {
         return json_int(value, key, options.config.n_ctx, status);
     }
-    if (key == "b")
+    if (key == "batch")
     {
         return json_int(value, key, options.config.n_batch, status);
     }
-    if (key == "ngl")
+    if (key == "gpu-layers")
     {
         return json_int(value, key, options.config.n_gpu_layers, status);
     }
-    if (key == "t")
+    if (key == "temperature")
     {
         return json_float(value, key, options.config.temperature, status);
     }
@@ -361,7 +361,7 @@ bool apply_json_key(ServerOptions &options, const std::string_view key, const nl
     {
         return json_string(value, key, options.host, status);
     }
-    if (key == "port" || key == "p")
+    if (key == "port")
     {
         return json_int(value, key, options.port, status);
     }

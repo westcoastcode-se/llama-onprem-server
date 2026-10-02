@@ -2,10 +2,7 @@
 
 #include "common/tools.hpp"
 
-#include <nlohmann/json.hpp>
-
-#include <cstdlib>
-#include <fstream>
+#include <format>
 #include <stdexcept>
 
 namespace
@@ -66,35 +63,6 @@ namespace
         throw std::runtime_error("server host is missing");
     }
     return server;
-}
-
-[[nodiscard]] int json_port(const nlohmann::json &item)
-{
-    if (!item.contains("port"))
-    {
-        return 8080;
-    }
-    const nlohmann::json &port = item.at("port");
-    if (!port.is_number_integer())
-    {
-        throw std::runtime_error("port must be an integer from 1 to 65535");
-    }
-    const int value = port.get<int>();
-    if (value < 1 || value > 65535)
-    {
-        throw std::runtime_error("port must be an integer from 1 to 65535");
-    }
-    return value;
-}
-
-[[nodiscard]] std::string json_string(const nlohmann::json &item, const char *key)
-{
-    if (!item.contains(key) || !item.at(key).is_string())
-    {
-        return {};
-    }
-    const std::string value = item.at(key).get<std::string>();
-    return std::string(string_view_trim(value));
 }
 
 } // namespace
@@ -165,113 +133,6 @@ std::vector<ServerTarget> parse_server_list(const std::vector<std::string> &spec
         throw std::runtime_error("server list is empty");
     }
     return servers;
-}
-
-std::vector<ServerTarget> servers_from_json(std::string_view text)
-{
-    nlohmann::json doc;
-    try
-    {
-        doc = nlohmann::json::parse(text);
-    }
-    catch (const nlohmann::json::exception &error)
-    {
-        throw std::runtime_error(std::string("invalid JSON (") + error.what() + ")");
-    }
-    const nlohmann::json *list = &doc;
-    if (doc.is_object())
-    {
-        if (!doc.contains("servers"))
-        {
-            throw std::runtime_error("expected a list or an object with \"servers\"");
-        }
-        list = &doc.at("servers");
-    }
-    if (!list->is_array())
-    {
-        throw std::runtime_error("expected a list or an object with \"servers\"");
-    }
-    if (list->empty())
-    {
-        throw std::runtime_error("server list is empty");
-    }
-    std::vector<ServerTarget> servers;
-    servers.reserve(list->size());
-    for (const nlohmann::json &item : *list)
-    {
-        if (item.is_string())
-        {
-            servers.push_back(parse_server_spec(item.get<std::string>()));
-            continue;
-        }
-        if (!item.is_object())
-        {
-            throw std::runtime_error("each server must be a string or an object");
-        }
-        ServerTarget server;
-        server.name = json_string(item, "model");
-        if (server.name.empty())
-        {
-            server.name = json_string(item, "name");
-        }
-        if (item.contains("url"))
-        {
-            if (!item.at("url").is_string())
-            {
-                throw std::runtime_error("url must be a string");
-            }
-            const ServerTarget parsed = parse_server_spec(item.at("url").get<std::string>());
-            server.host = parsed.host;
-            server.port = parsed.port;
-            if (server.name.empty())
-            {
-                server.name = parsed.name;
-            }
-        }
-        else
-        {
-            server.host = json_string(item, "host");
-            server.port = json_port(item);
-        }
-        if (server.host.empty())
-        {
-            throw std::runtime_error("server host is missing");
-        }
-        servers.push_back(std::move(server));
-    }
-    return servers;
-}
-
-std::filesystem::path servers_config_path()
-{
-    const char *home = std::getenv("HOME");
-    if (home == nullptr || home[0] == '\0')
-    {
-        return {};
-    }
-    return std::filesystem::path(home) / ".config" / "callisto" / "servers.json";
-}
-
-std::vector<ServerTarget> load_servers_file(const std::filesystem::path &path)
-{
-    if (path.empty() || !std::filesystem::exists(path))
-    {
-        return {};
-    }
-    std::ifstream in(path);
-    if (!in)
-    {
-        throw std::runtime_error("cannot read " + path.string());
-    }
-    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    try
-    {
-        return servers_from_json(text);
-    }
-    catch (const std::exception &error)
-    {
-        throw std::runtime_error(std::format("{}: {}", path.string(), error.what()));
-    }
 }
 
 std::optional<std::size_t> first_reachable(std::size_t count, const std::function<bool(std::size_t)> &up)

@@ -112,6 +112,7 @@ add_executable(callisto_cli
         src/cli/agent/agent_commands.cpp
         src/cli/project/project_context.cpp
         src/cli/agent/reply_stream.cpp
+        src/cli/client_config.cpp
         src/cli/servers.cpp
         src/cli/session_store.cpp
         src/cli/tui/system_block.cpp
@@ -154,7 +155,9 @@ add_executable(tests
     tests/cli/test_theme.cpp
     tests/cli/test_tool_schema.cpp
     src/cli/tui/theme.cpp
+    tests/cli/test_client_config.cpp
     tests/cli/test_servers.cpp
+    src/cli/client_config.cpp
     tests/cli/test_project_context.cpp
     tests/cli/test_session_store.cpp
     tests/cli/test_transcript_scroll.cpp
@@ -192,6 +195,7 @@ add_executable(tests
     src/server/sessions/session_disk.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
+target_include_directories(tests BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/vendors/cli11)
 target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 enable_testing()
