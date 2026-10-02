@@ -5,84 +5,21 @@
 #include "server/http/routes.hpp"
 #include "server/jobs/jobs.hpp"
 #include "server/llm/llm_engine.hpp"
+#include "server/options.hpp"
 #include "server/sessions/sessions.hpp"
 #include <atomic>
 #include <csignal>
-#include <cstdint>
-#include <cstdlib>
 #include <format>
-#include <optional>
 #include <httplib.h>
 #include <poll.h>
 #include <print>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 namespace
 {
-
-std::optional<uint64_t> parse_byte_size(const std::string_view text)
-{
-    if (text.empty())
-    {
-        return std::nullopt;
-    }
-    std::size_t index = 0;
-    uint64_t value = 0;
-    for (; index < text.size() && text[index] >= '0' && text[index] <= '9'; ++index)
-    {
-        const uint64_t digit = static_cast<uint64_t>(text[index] - '0');
-        if (value > (UINT64_MAX - digit) / 10)
-        {
-            return std::nullopt;
-        }
-        value = value * 10 + digit;
-    }
-    if (index == 0)
-    {
-        return std::nullopt;
-    }
-    std::string suffix(text.substr(index));
-    for (char &ch : suffix)
-    {
-        if (ch >= 'A' && ch <= 'Z')
-        {
-            ch = static_cast<char>(ch - 'A' + 'a');
-        }
-    }
-    uint64_t scale = 1;
-    if (suffix.empty() || suffix == "b")
-    {
-        scale = 1;
-    }
-    else if (suffix == "k" || suffix == "kb")
-    {
-        scale = 1024ull;
-    }
-    else if (suffix == "m" || suffix == "mb")
-    {
-        scale = 1024ull * 1024;
-    }
-    else if (suffix == "g" || suffix == "gb")
-    {
-        scale = 1024ull * 1024 * 1024;
-    }
-    else if (suffix == "t" || suffix == "tb")
-    {
-        scale = 1024ull * 1024 * 1024 * 1024;
-    }
-    else
-    {
-        return std::nullopt;
-    }
-    if (scale != 1 && value > UINT64_MAX / scale)
-    {
-        return std::nullopt;
-    }
-    return value * scale;
-}
 
 int g_wake_fd = -1;
 volatile sig_atomic_t g_stop_flag = 0;
@@ -130,8 +67,14 @@ void print_usage(const char *argv0)
                  "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
                  "  --session-dir PATH     parked session files (default /tmp/.callisto/sessions)\n"
                  "  --session-cache-size SIZE  max bytes for that directory (K/M/G/T, 0 = no limit)\n"
+                 "  --config-file PATH  JSON object of these arguments\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
-                 "  -p/--port N   port (default 8080)",
+                 "  -p/--port N   port (default 8080)\n"
+                 "\n"
+                 "Config keys are the option names without leading dashes, such as m, c, ngl, top-p, host, and port.\n"
+                 "reasoning is true or false. session-cache-size is a byte count or a string such as \"8G\".\n"
+                 "A later --config-file overrides the keys it sets.\n"
+                 "Arguments on the command line override the file.",
                  argv0);
 }
 } // namespace
@@ -140,153 +83,32 @@ int main(int argc, char **argv)
 {
     Logger::set_level(Logger::LEVEL_DEBUG);
 
-    LlamaConfig config;
-    std::string host = "127.0.0.1";
-    int port = 8080;
-
-    for (int i = 1; i < argc; ++i)
+    std::vector<std::string> args;
+    if (argc > 1)
     {
-        std::string arg = argv[i];
-        auto need = [&](const char *name) -> const char * {
-            if (i + 1 >= argc)
-            {
-                std::println(stderr, "missing value for {}", name);
-                std::exit(1);
-            }
-            return argv[++i];
-        };
-        if (arg == "-m")
-        {
-            config.model_path = need("-m");
-        }
-        else if (arg == "-c")
-        {
-            config.n_ctx = std::stoi(need("-c"));
-        }
-        else if (arg == "-b")
-        {
-            config.n_batch = std::stoi(need("-b"));
-        }
-        else if (arg == "-ngl")
-        {
-            config.n_gpu_layers = std::stoi(need("-ngl"));
-        }
-        else if (arg == "-t")
-        {
-            config.temperature = std::stof(need("-t"));
-        }
-        else if (arg == "--top-p")
-        {
-            config.top_p = std::stof(need("--top-p"));
-        }
-        else if (arg == "--top-k")
-        {
-            config.top_k = std::stoi(need("--top-k"));
-        }
-        else if (arg == "--min-p")
-        {
-            config.min_p = std::stof(need("--min-p"));
-        }
-        else if (arg == "--presence-penalty")
-        {
-            config.presence_penalty = std::stof(need("--presence-penalty"));
-        }
-        else if (arg == "--repetition-penalty")
-        {
-            config.repetition_penalty = std::stof(need("--repetition-penalty"));
-        }
-        else if (arg == "--frequency-penalty")
-        {
-            config.frequency_penalty = std::stof(need("--frequency-penalty"));
-        }
-        else if (arg == "--penalty-last-n")
-        {
-            config.penalty_last_n = std::stoi(need("--penalty-last-n"));
-        }
-        else if (arg == "--seed")
-        {
-            config.seed = static_cast<uint32_t>(std::stoul(need("--seed")));
-        }
-        else if (arg == "--max-tokens")
-        {
-            config.max_tokens = std::stoi(need("--max-tokens"));
-        }
-        else if (arg == "--threads")
-        {
-            config.n_threads = std::stoi(need("--threads"));
-        }
-        else if (arg == "--threads-batch")
-        {
-            config.n_threads_batch = std::stoi(need("--threads-batch"));
-        }
-        else if (arg == "--flash-attn")
-        {
-            config.flash_attn = need("--flash-attn");
-        }
-        else if (arg == "--cache-type-k")
-        {
-            config.cache_type_k = need("--cache-type-k");
-        }
-        else if (arg == "--cache-type-v")
-        {
-            config.cache_type_v = need("--cache-type-v");
-        }
-        else if (arg == "--chat-template")
-        {
-            config.template_path = need("--chat-template");
-        }
-        else if (arg == "--reasoning")
-        {
-            config.reasoning = true;
-        }
-        else if (arg == "--no-reasoning")
-        {
-            config.reasoning = false;
-        }
-        else if (arg == "--kv-sessions")
-        {
-            config.kv_sessions = std::stoi(need("--kv-sessions"));
-        }
-        else if (arg == "--session-dir")
-        {
-            config.session_dir = need("--session-dir");
-        }
-        else if (arg == "--session-cache-size")
-        {
-            const auto size = parse_byte_size(need("--session-cache-size"));
-            if (!size)
-            {
-                std::println(stderr, "invalid --session-cache-size");
-                return 1;
-            }
-            config.session_cache_bytes = *size;
-        }
-        else if (arg == "--host")
-        {
-            host = need("--host");
-        }
-        else if (arg == "-p" || arg == "--port")
-        {
-            port = std::stoi(need(arg.c_str()));
-        }
-        else if (arg == "-h" || arg == "--help")
-        {
-            print_usage(argv[0]);
-            return 0;
-        }
-        else
-        {
-            std::println(stderr, "unknown argument: {}", arg);
-            print_usage(argv[0]);
-            return 1;
-        }
+        args.assign(argv + 1, argv + argc);
     }
-
-    if (config.model_path.empty())
+    const ServerArgParse parsed = parse_server_args(args);
+    if (parsed.help)
     {
         print_usage(argv[0]);
+        return 0;
+    }
+    if (!parsed.error.empty())
+    {
+        std::println(stderr, "{}", parsed.error);
+    }
+    if (parsed.usage)
+    {
+        print_usage(argv[0]);
+    }
+    if (!parsed.error.empty() || parsed.usage)
+    {
         return 1;
     }
+    const LlamaConfig &config = parsed.options.config;
+    const std::string &host = parsed.options.host;
+    const int port = parsed.options.port;
 
     LlamaEngine engine;
     try

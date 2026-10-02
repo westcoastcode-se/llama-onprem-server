@@ -79,6 +79,21 @@ Start the server. `-c` is the context length. `-ngl 99` offloads layers to the G
   -c 32768 -ngl 99
 ```
 
+The same arguments can be stored in a JSON file and passed with `--config-file`. Keys are the option names without leading dashes. `reasoning` is a boolean. `session-cache-size` is a byte count or a string such as `"8G"`. A later file overrides the keys it sets. Flags on the command line override the file.
+
+```bash
+./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
+```
+
+```json
+{
+  "m": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "c": 32768,
+  "ngl": 99,
+  "host": "127.0.0.1"
+}
+```
+
 Each session is stored under `/tmp/.callisto/sessions`, or the directory given with `--session-dir`. `<id>.json` is the conversation: the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is that session's KV cache and token ids, written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. `--session-cache-size` caps the directory (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
 
 Start the client in the project you want it to edit:

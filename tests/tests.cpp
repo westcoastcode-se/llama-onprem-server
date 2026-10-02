@@ -31,6 +31,7 @@ extern int test_session_gc();
 extern int test_tool_history();
 extern int test_session_kv_store();
 extern int test_session_disk();
+extern int test_server_options();
 
 int main()
 {
@@ -147,6 +148,10 @@ int main()
         return rc;
     }
     if (const int rc = test_session_disk())
+    {
+        return rc;
+    }
+    if (const int rc = test_server_options())
     {
         return rc;
     }

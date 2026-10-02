@@ -73,6 +73,7 @@ set(COMMON_TOOL_SOURCES
 add_executable(callisto_server
         src/api/models.cpp
         src/server/main.cpp
+        src/server/options.cpp
         src/server/http/routes.cpp
         src/server/jobs/jobs.cpp
         src/server/sessions/sessions.cpp
@@ -169,6 +170,8 @@ add_executable(tests
     tests/server/test_llama_engine.cpp
     tests/server/test_session_kv_store.cpp
     tests/server/test_session_disk.cpp
+    tests/server/test_server_options.cpp
+    src/server/options.cpp
     tests/server/test_context_params.cpp
     tests/server/test_session_gc.cpp
     tests/server/test_tool_history.cpp
