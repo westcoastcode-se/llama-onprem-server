@@ -31,9 +31,10 @@ sudo pacman -S --needed base-devel git cmake ninja curl
 
 Debian or Ubuntu: install the same packages with `apt` (`build-essential`, `cmake`, `ninja-build`, `libcurl4-openssl-dev`, `git`). Add the CUDA toolkit when you want GPU layers.
 
-From the repository root:
+From the repository root. `vendors/llama.cpp` and `vendors/ftxui` are git submodules, so a fresh clone needs them checked out first:
 
 ```bash
+git submodule update --init
 cmake -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build cmake-build-debug -j$(nproc)
 ```

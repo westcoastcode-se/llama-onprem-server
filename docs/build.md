@@ -1,6 +1,10 @@
 # Build
 
-Run the commands from the repository root.
+Run the commands from the repository root. `vendors/llama.cpp` and `vendors/ftxui` are git submodules. Check them out before configuring:
+
+```bash
+git submodule update --init
+```
 
 ## Dependencies
 

@@ -83,6 +83,18 @@ int test_visible_text_devstral()
     VisibleText open;
     assertEquals("Partial ", open.feed("Partial [TOOL_CALLS]read_file[ARGS]{\"path\":"));
     assertEquals("", open.finish());
+
+    // No prose before the call, so the assistant heading stays closed.
+    const std::string only = "[TOOL_CALLS]sub_agent[ARGS]{\"task\":\"Review the project\"}";
+    assertEquals("", visible(only));
+    VisibleText bytes;
+    std::string streamed;
+    for (const char ch : only)
+    {
+        streamed += bytes.feed(std::string_view(&ch, 1));
+    }
+    streamed += bytes.finish();
+    assertEquals("", streamed);
     return EXIT_SUCCESS;
 }
 

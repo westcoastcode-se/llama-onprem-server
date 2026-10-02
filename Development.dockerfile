@@ -9,3 +9,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 10 \
     && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-16 10
+
+# Add agents skills folder
+RUN mkdir -p /home/ubuntu/.agents/skills
+ADD .agents/skills /home/ubuntu/.agents/skills
+RUN chown -R ubuntu:ubuntu /home/ubuntu/.agents
+
+USER 1000

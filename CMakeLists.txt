@@ -94,17 +94,13 @@ target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_
 #
 # Coding-agent client. Tools run here; the server only generates.
 # CLI11 parses argv. The interactive session is an FTXUI view.
+# FTXUI is the git submodule vendors/ftxui, pinned to v6.1.9.
 #
-include(FetchContent)
 set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(ftxui
-        GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-        GIT_TAG v6.1.9
-        GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(ftxui)
+add_subdirectory(vendors/ftxui)
 
 add_executable(callisto_cli
         src/cli/main.cpp
