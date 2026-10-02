@@ -168,6 +168,8 @@ Reads run without a prompt. A write, a shell command, or a network tool asks fir
 
 Click a thinking line, a tool line, or the system row to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D`, `/exit`, or `/quit` leaves.
 
+When context is strictly over 80% and the server is waiting, you can continue, compact and continue, or compact and stop. A sub-agent past 80% compacts itself and continues. A message that does not fit is removed; you can then compact and continue, and a sub-agent does that on its own.
+
 | Command | What it does |
 |---|---|
 | `/help` | Show the commands |

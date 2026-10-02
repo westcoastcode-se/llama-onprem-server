@@ -106,9 +106,36 @@ static int test_create_resumes_existing_session()
     return EXIT_SUCCESS;
 }
 
+/**
+ * A cancel that never measured the window must leave the previous count in place.
+ * The compact offer reads that count. A later job that did measure replaces it.
+ */
+static int test_unmeasured_job_keeps_context()
+{
+    QwenAdapter adapter;
+    Session session(adapter);
+    session.set_context_usage(5000, 32000);
+    auto task = session.begin_generation();
+    task->set_cancelled();
+    session.complete_job(task);
+    const auto [used, size] = session.context_usage();
+    assertEquals(5000, used);
+    assertEquals(32000, size);
+
+    auto measured = session.begin_generation();
+    measured->note_context(9000, 32000);
+    measured->set_result("ok", JobState::Done, {});
+    session.complete_job(measured);
+    const auto [used2, size2] = session.context_usage();
+    assertEquals(9000, used2);
+    assertEquals(32000, size2);
+    return EXIT_SUCCESS;
+}
+
 int test_session_gc()
 {
     RUN_TEST(test_waiting_session_is_not_gc_idle);
     RUN_TEST(test_create_resumes_existing_session);
+    RUN_TEST(test_unmeasured_job_keeps_context);
     return EXIT_SUCCESS;
 }

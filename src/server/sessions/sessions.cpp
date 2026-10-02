@@ -336,9 +336,11 @@ void Session::complete_job(std::shared_ptr<Task> task)
     }
 
     const auto status = task->to_status();
-    context_used_ = std::max(0, task->context_used());
+    // A job that never measured the window (cancelled before it ran) must not
+    // wipe a count the previous turn already published. The offer reads this.
     if (const int size = task->context_size(); size > 0)
     {
+        context_used_ = std::max(0, task->context_used());
         context_size_ = size;
     }
     active_job_.reset();

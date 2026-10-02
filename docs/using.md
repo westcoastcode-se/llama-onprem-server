@@ -154,7 +154,7 @@ The client resumes only sessions created on this computer. The list is `~/.local
 
 The system prompt is fixed when the session is created. A changed prompt shows up in a new session on a server built after the change.
 
-When context is strictly over 80% and the server is waiting for tools or for an answer, you can choose `Continue`, `Compact and continue`, or `Compact and stop`. Exactly 80% does not offer the choice. Esc cancels without compacting. `exec` without a terminal, and sub-agents, are not prompted. `/compact` summarizes the chat into a new session and stops at the prompt.
+When context is strictly over 80% and the server is waiting for tools or for an answer, you can choose `Continue`, `Compact and continue`, or `Compact and stop`. Exactly 80% does not offer the choice. Esc cancels without compacting. `exec` without a terminal is not prompted. A sub-agent past 80% compacts itself and continues, without a prompt. If a message does not fit, it is removed. You can stop, or compact and continue. A sub-agent compacts and continues. `/compact` summarizes the chat into a new session and stops at the prompt.
 
 ## Approval
 

@@ -516,7 +516,21 @@ void Jobs::worker_loop(std::stop_token stop)
         // Devstral never writes </think>, so the tag would keep its tool calls in the thinking row.
         const bool opened_think = engine_.get_config().reasoning && adapter_.prompt_opens_think();
         const auto publish_context = [&] {
-            task->note_context(engine_.session_token_count(task->request.session_id), engine_.get_context_size());
+            const std::string &id = task->request.session_id;
+            int used = engine_.session_token_count(id);
+            const int live = engine_.get_used_context();
+            // chat() just wrote the only live sequence. If the session id does not
+            // match that sequence, the parked-file count is 0 and the offer never runs.
+            if (live > used && (engine_.active_session_id() == id || used == 0))
+            {
+                used = live;
+            }
+            const int size = engine_.get_context_size();
+            if (size > 0 && used > size)
+            {
+                used = size;
+            }
+            task->note_context(used, size);
         };
         try
         {

@@ -63,7 +63,9 @@ void AgentSession::help() const
                     "Thinking shows its last three lines while it runs, then closes. "
                     "A finished thinking or tool row shows how long it took once that time reaches one second.\n"
                     "When context is over 80% and the server is waiting, you can compact before the next request.\n"
-                    "Compact and continue keeps working from the summary. Compact and stop leaves you at the prompt.");
+                    "Compact and continue keeps working from the summary. Compact and stop leaves you at the prompt.\n"
+                    "A sub-agent past 80% compacts itself and continues. A message that does not fit is removed, "
+                    "and you can compact and continue.");
 }
 
 void AgentSession::diff() const

@@ -448,7 +448,9 @@ bool TuiUi::on_event(ftxui::Event event)
         }
         return true;
     }
-    if (asking && !question_mode && event.is_character())
+    // y/n/a/f answer a tool approval. A compact or model list uses Enter and Esc;
+    // those letters must not close it as a cancelled choice.
+    if (asking && !question_mode && !pick_mode && event.is_character())
     {
         const std::string key = event.character();
         Ask choice = Ask::Deny;

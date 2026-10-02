@@ -36,6 +36,7 @@ static bool should_ignore_dir_name(std::string_view name) {
 }
 
 // method extended: text1|text2 is either alternative, and the pipe itself is not searched for.
+// Each alternative may use * for any run of characters. A * in method text stays literal.
 static std::vector<std::string> literal_alternatives(std::string_view query)
 {
     std::vector<std::string> parts;
@@ -60,20 +61,69 @@ static std::vector<std::string> literal_alternatives(std::string_view query)
     return parts;
 }
 
-/**
- * @brief Case-insensitive substring search.
- */
-static bool icontains(std::string_view haystack, std::string_view needle_lower) {
-    if (needle_lower.empty()) return true;
-    if (haystack.size() < needle_lower.size()) return false;
+static bool same_char(char left, char right, bool case_sensitive)
+{
+    if (case_sensitive)
+    {
+        return left == right;
+    }
+    return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
+}
 
-    auto it = std::search(haystack.begin(), haystack.end(),
-                          needle_lower.begin(), needle_lower.end(),
-                          [](char ch1, char ch2) {
-                              return std::tolower(static_cast<unsigned char>(ch1)) ==
-                                     std::tolower(static_cast<unsigned char>(ch2));
-                          });
-    return it != haystack.end();
+static std::size_t find_from(std::string_view haystack, std::size_t from, std::string_view needle, bool case_sensitive)
+{
+    if (from > haystack.size())
+    {
+        return std::string_view::npos;
+    }
+    if (needle.empty())
+    {
+        return from;
+    }
+    const auto begin = haystack.begin() + static_cast<std::ptrdiff_t>(from);
+    const auto found = std::search(begin, haystack.end(), needle.begin(), needle.end(),
+                                    [case_sensitive](char left, char right) {
+                                        return same_char(left, right, case_sensitive);
+                                    });
+    if (found == haystack.end())
+    {
+        return std::string_view::npos;
+    }
+    return static_cast<std::size_t>(found - haystack.begin());
+}
+
+// Case-insensitive substring search. needle_lower is already lowercased.
+static bool icontains(std::string_view haystack, std::string_view needle_lower) {
+    return find_from(haystack, 0, needle_lower, false) != std::string_view::npos;
+}
+
+// * is any run of characters, including none. Literals stay in order, so Hej*123
+// matches Hej123 and Hej middle 123, and not 123 then Hej.
+static bool wildcard_contains(std::string_view haystack, std::string_view pattern, bool case_sensitive)
+{
+    std::size_t from = 0;
+    std::size_t start = 0;
+    while (start <= pattern.size())
+    {
+        const std::size_t star = pattern.find('*', start);
+        const std::size_t end = star == std::string_view::npos ? pattern.size() : star;
+        const std::string_view part = pattern.substr(start, end - start);
+        if (!part.empty())
+        {
+            const std::size_t found = find_from(haystack, from, part, case_sensitive);
+            if (found == std::string_view::npos)
+            {
+                return false;
+            }
+            from = found + part.size();
+        }
+        if (star == std::string_view::npos)
+        {
+            break;
+        }
+        start = star + 1;
+    }
+    return true;
 }
 
 std::string search_text(const nlohmann::json & args) {
@@ -147,7 +197,7 @@ std::string search_text(const nlohmann::json & args) {
     if (context < 0) context = 0;
     if (context > 5) context = 5;
 
-    // text is a literal. extended splits on |. regex is an ECMAScript pattern.
+    // text is a literal. extended splits on | and treats * as any text. regex is an ECMAScript pattern.
     std::regex reg_pattern;
     std::vector<std::string> needles;
     if (is_regex) {
@@ -219,8 +269,12 @@ std::string search_text(const nlohmann::json & args) {
             } else {
                 const std::string & line_text = lines[static_cast<std::size_t>(i)];
                 for (const std::string & needle : needles) {
-                    matches = case_sensitive ? line_text.find(needle) != std::string::npos
-                                             : icontains(line_text, needle);
+                    if (is_extended && needle.find('*') != std::string::npos) {
+                        matches = wildcard_contains(line_text, needle, case_sensitive);
+                    } else {
+                        matches = case_sensitive ? line_text.find(needle) != std::string::npos
+                                                 : icontains(line_text, needle);
+                    }
                     if (matches) {
                         break;
                     }
