@@ -176,6 +176,41 @@ static int test_tool_search_text_pipe_is_literal_unless_extended() {
 }
 
 /**
+ * extended treats * as any text, including none, and keeps the pieces in order.
+ * A star in plain text is a literal character. * combines with |.
+ */
+static int test_tool_search_text_extended_wildcard() {
+    const auto dir = make_temp_dir("search-text");
+    defer(std::filesystem::remove_all(dir));
+    const auto path = dir / "note.txt";
+    write_test_file(path, "Hej123\nHej middle 123\n123 then Hej\nstd::string_view item\nHej only\n");
+
+    const auto tool = Tools::create_search_text_tool();
+    const auto star = tool.execute(
+        {{"query", "Hej*123"}, {"path", path.string()}, {"method", "extended"}, {"before", 0}, {"context", 0}});
+    assertEquals(path.string() + "\n1: Hej123\n2: Hej middle 123\n", star);
+
+    const auto either = tool.execute({{"query", "Hej*123|std::string_view"},
+                                      {"path", path.string()},
+                                      {"method", "extended"},
+                                      {"before", 0},
+                                      {"context", 0}});
+    assertEquals(path.string() + "\n1: Hej123\n2: Hej middle 123\n4: std::string_view item\n", either);
+
+    const auto literal = tool.execute({{"query", "Hej*123"}, {"path", path.string()}, {"before", 0}, {"context", 0}});
+    assertEquals("no matches found for query 'Hej*123'", literal);
+
+    const auto sensitive = tool.execute({{"query", "hej*123"},
+                                         {"path", path.string()},
+                                         {"method", "extended"},
+                                         {"case_sensitive", true},
+                                         {"before", 0},
+                                         {"context", 0}});
+    assertEquals("no matches found for query 'hej*123'", sensitive);
+    return EXIT_SUCCESS;
+}
+
+/**
  * Spaces around the pipe are not part of either extended alternative.
  */
 static int test_tool_search_text_pipe_trims_alternatives() {
@@ -234,6 +269,7 @@ int test_tool_search_text() {
     RUN_TEST(test_tool_search_text_match);
     RUN_TEST(test_tool_search_text_pipe_is_literal_unless_extended);
     RUN_TEST(test_tool_search_text_pipe_trims_alternatives);
+    RUN_TEST(test_tool_search_text_extended_wildcard);
     RUN_TEST(test_tool_search_text_case_sensitive);
     RUN_TEST(test_tool_search_text_file_pattern);
     RUN_TEST(test_tool_search_text_skips_git);

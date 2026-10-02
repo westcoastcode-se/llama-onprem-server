@@ -100,25 +100,75 @@ bool server_waiting(const SessionResponse &session)
     return session.state.value == SessionState::AwaitingQuestion && session.pending_question.has_value();
 }
 
-// The server is paused for a client reply. Past 80% the user can compact before that POST.
-std::optional<TurnStatus> offer_compact(AgentState &state, const SessionResponse &session,
-                                        const std::function<TurnStatus(bool)> &compact)
+// Keep the tail of the conversation. The head stays so the goal is still visible.
+std::string summary_source(std::span<const ChatMessage> messages, int context_size)
 {
-    if (!compact || !should_offer_compact(session.context_used, session.context_size, server_waiting(session),
-                                          interactive_client(state)))
+    std::string transcript;
+    for (const ChatMessage &message : messages)
+    {
+        if (message.role == ChatMessage::ROLE_SYSTEM || message.content.empty())
+        {
+            continue;
+        }
+        transcript += message.role;
+        transcript += ":\n";
+        transcript += message.content;
+        transcript += "\n\n";
+    }
+    return truncate_transcript(transcript, context_size);
+}
+
+constexpr std::string_view kSummarizePrompt =
+    "Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
+    "files changed, commands that mattered, and what is still unfinished. Do not call tools.";
+
+// The server is paused for a client reply. Past 80% the user can compact before that POST.
+// A sub-agent compacts on its own. auto_blocked stops a failed attempt from repeating every tool round.
+std::optional<TurnStatus> offer_compact(AgentState &state, const SessionResponse &session,
+                                        const std::function<TurnStatus(bool)> &compact, bool &auto_blocked)
+{
+    if (!compact)
     {
         return std::nullopt;
     }
-    const auto picked = state.ui->choose(
-        std::format("Context is {}%. Compact before the next request?",
-                    context_percent(session.context_used, session.context_size)),
-        {"Continue", "Compact and continue", "Compact and stop"}, 0);
-    if (!picked || *picked == 0)
+    const bool waiting = server_waiting(session);
+    const bool automatic = should_auto_compact(session.context_used, session.context_size, waiting, state.subagent);
+    const bool ask = should_offer_compact(session.context_used, session.context_size, waiting, interactive_client(state));
+    if (!automatic && !ask)
     {
         return std::nullopt;
     }
+    if (automatic && auto_blocked)
+    {
+        return std::nullopt;
+    }
+    if (state.ui == nullptr)
+    {
+        return std::nullopt;
+    }
+    const int percent = context_percent(session.context_used, session.context_size);
     const SessionID before = state.session;
-    const TurnStatus status = compact(*picked == 1);
+    TurnStatus status = TurnStatus::Idle;
+    if (automatic)
+    {
+        state.ui->note(std::format("Context is {}%. Compacting and continuing.", percent));
+        status = compact(true);
+        if (state.session == before)
+        {
+            auto_blocked = true;
+        }
+    }
+    else
+    {
+        const auto picked = state.ui->choose(
+            std::format("Context is {}%. Compact before the next request?", percent),
+            {"Continue", "Compact and continue", "Compact and stop"}, 0);
+        if (!picked || *picked == 0)
+        {
+            return std::nullopt;
+        }
+        status = compact(*picked == 1);
+    }
     if (status == TurnStatus::Cancelled || status == TurnStatus::ContextFull)
     {
         return status;
@@ -127,9 +177,16 @@ std::optional<TurnStatus> offer_compact(AgentState &state, const SessionResponse
     {
         return TurnStatus::Idle;
     }
-    const SessionResponse now = state.client->get_session(state.session);
-    show_context(state, now);
-    if (!server_waiting(now))
+    try
+    {
+        const SessionResponse now = state.client->get_session(state.session);
+        show_context(state, now);
+        if (!server_waiting(now))
+        {
+            return TurnStatus::Idle;
+        }
+    }
+    catch (const RestClient::ClientError &)
     {
         return TurnStatus::Idle;
     }
@@ -137,7 +194,7 @@ std::optional<TurnStatus> offer_compact(AgentState &state, const SessionResponse
 }
 
 TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools,
-                    const std::function<TurnStatus(bool)> &compact = {})
+                    const std::function<TurnStatus(bool)> &compact, bool &auto_blocked, bool compacting)
 {
     RestClient &client = *state.client;
     for (int round = 0; round < state.max_rounds; ++round)
@@ -162,7 +219,21 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools,
             if (error.code == kContextFull)
             {
                 state.ui->note(error.what());
-                if (!state.subagent)
+                if (compact && !compacting && state.subagent)
+                {
+                    state.ui->note("Context is full. Compacting and continuing.");
+                    return compact(true);
+                }
+                if (compact && !compacting && interactive_client(state))
+                {
+                    const auto picked = state.ui->choose("The message was removed because the context is full.",
+                                                         {"Stop", "Compact and continue"}, 1);
+                    if (picked && *picked == 1)
+                    {
+                        return compact(true);
+                    }
+                }
+                if (!state.subagent && !compacting)
                 {
                     state.ui->note("The message was removed. /compact the session, or send a smaller task.");
                 }
@@ -178,7 +249,7 @@ TurnStatus run_turn(AgentState &state, JobKey key, std::span<const Tool> tools,
         {
             return TurnStatus::Idle;
         }
-        if (const std::optional<TurnStatus> stopped = offer_compact(state, session, compact))
+        if (const std::optional<TurnStatus> stopped = offer_compact(state, session, compact, auto_blocked))
         {
             return *stopped;
         }
@@ -260,10 +331,12 @@ std::string context_full_reply(bool inherit)
 std::string AgentSession::subagent(std::string_view task, bool inherit)
 {
     RestClient &client = *state_.client;
-    SessionID child = 0;
+    AgentState child_state = state_;
+    child_state.subagent = true;
+    child_state.session = 0;
     if (inherit)
     {
-        child = client.snapshot_session(state_.session).id;
+        child_state.session = client.snapshot_session(state_.session).id;
     }
     else
     {
@@ -273,16 +346,16 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
         {
             request.tools.push_back(ToolSchema::chat_tool(tool));
         }
-        child = client.create_session(request).id;
+        child_state.session = client.create_session(request).id;
     }
     auto forget = [&] {
-        if (child == 0 || child == state_.session)
+        if (child_state.session == 0 || child_state.session == state_.session)
         {
             return;
         }
         try
         {
-            client.delete_session(child);
+            client.delete_session(child_state.session);
         }
         catch (...)
         {
@@ -295,12 +368,14 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
         SessionMessageRequest message;
         message.role = "user";
         message.content = assignment;
-        auto queued = client.post_message(child, message);
-        AgentState child_state = state_;
-        child_state.session = child;
-        child_state.subagent = true;
+        auto queued = client.post_message(child_state.session, message);
         const SubagentLive live(state_.ui);
-        const TurnStatus work = run_turn(child_state, queued.key, base_tools_);
+        auto_compact_blocked_ = false;
+        const std::function<TurnStatus(bool)> compact_child = [this, &child_state](bool resume) {
+            return compact_session(child_state, base_tools_, resume, false);
+        };
+        const TurnStatus work =
+            run_turn(child_state, queued.key, base_tools_, compact_child, auto_compact_blocked_, false);
         if (work == TurnStatus::ContextFull)
         {
             forget();
@@ -313,8 +388,9 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
         }
         message.content = "Summarize the result for the parent. Cite file:line for each finding. "
                           "Include files changed and commands run. Do not paste file contents. Do not call tools.";
-        queued = client.post_message(child, message);
-        const TurnStatus summary_turn = run_turn(child_state, queued.key, base_tools_);
+        queued = client.post_message(child_state.session, message);
+        bool ignored = false;
+        const TurnStatus summary_turn = run_turn(child_state, queued.key, base_tools_, {}, ignored, false);
         if (summary_turn == TurnStatus::ContextFull)
         {
             forget();
@@ -325,7 +401,7 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
             forget();
             return "sub-agent stopped before the summary";
         }
-        std::string summary = last_assistant(client.get_messages(child));
+        std::string summary = last_assistant(client.get_messages(child_state.session));
         if (summary.empty())
         {
             summary = "sub-agent produced no summary";
@@ -347,12 +423,13 @@ std::string AgentSession::subagent(std::string_view task, bool inherit)
 
 TurnStatus AgentSession::drive(JobKey key)
 {
+    auto_compact_blocked_ = false;
     std::function<TurnStatus(bool)> compact;
     if (!compacting_)
     {
         compact = [this](bool resume) { return this->compact(resume); };
     }
-    return run_turn(state_, key, tools_, compact);
+    return run_turn(state_, key, tools_, compact, auto_compact_blocked_, compacting_);
 }
 
 TurnStatus AgentSession::submit(const std::string &prompt)
@@ -639,11 +716,99 @@ void AgentSession::refresh_status()
 
 TurnStatus AgentSession::compact(bool resume)
 {
-    if (compacting_)
+    return compact_session(state_, tools_, resume, true);
+}
+
+std::pair<TurnStatus, std::string> AgentSession::summarize_for_compact(AgentState &state, std::span<const Tool> tools)
+{
+    SessionMessageRequest message;
+    message.role = "user";
+    message.content = std::string(kSummarizePrompt);
+    const auto queued = state.client->post_message(state.session, message);
+    bool blocked = false;
+    const TurnStatus status = run_turn(state, queued.key, tools, {}, blocked, true);
+    if (status == TurnStatus::Idle)
+    {
+        return {TurnStatus::Idle, last_assistant(state.client->get_messages(state.session))};
+    }
+    if (status != TurnStatus::ContextFull)
+    {
+        return {status, {}};
+    }
+
+    // The summarize prompt did not fit in this session. Retry from a shortened transcript.
+    int window = 0;
+    std::string transcript;
+    try
+    {
+        window = state.client->get_session(state.session).context_size;
+        transcript = summary_source(state.client->get_messages(state.session), window);
+    }
+    catch (const RestClient::ClientError &)
+    {
+        return {TurnStatus::ContextFull, {}};
+    }
+    if (transcript.empty())
+    {
+        return {TurnStatus::ContextFull, {}};
+    }
+
+    CreateSessionRequest request = make_request(config_);
+    const SessionResponse scratch = state.client->create_session(request);
+    struct Forget
+    {
+        RestClient *client = nullptr;
+        SessionID id = 0;
+        ~Forget()
+        {
+            if (client == nullptr || id == 0)
+            {
+                return;
+            }
+            try
+            {
+                client->delete_session(id);
+            }
+            catch (...)
+            {
+            }
+        }
+    } forget{state.client, scratch.id};
+
+    message.content = std::format("{}\n\nConversation:\n{}", kSummarizePrompt, transcript);
+    const auto scratch_queued = state.client->post_message(scratch.id, message);
+    AgentState scratch_state = state;
+    scratch_state.session = scratch.id;
+    const TurnStatus scratch_status = run_turn(scratch_state, scratch_queued.key, tools, {}, blocked, true);
+    if (scratch_status != TurnStatus::Idle)
+    {
+        const TurnStatus failed = scratch_status == TurnStatus::Cancelled ? TurnStatus::Cancelled : TurnStatus::ContextFull;
+        return {failed, {}};
+    }
+    return {TurnStatus::Idle, last_assistant(state.client->get_messages(scratch.id))};
+}
+
+TurnStatus AgentSession::compact_session(AgentState &state, std::span<const Tool> tools, bool resume, bool install)
+{
+    if (compacting_ || state.client == nullptr || state.ui == nullptr)
     {
         return TurnStatus::Idle;
     }
-    std::string summary;
+    if (compact_depth_ >= 3)
+    {
+        return TurnStatus::ContextFull;
+    }
+    ++compact_depth_;
+    struct Depth
+    {
+        int &n;
+        ~Depth()
+        {
+            --n;
+        }
+    } depth{compact_depth_};
+
+    const SessionID source = state.session;
     {
         compacting_ = true;
         struct Clear
@@ -655,21 +820,20 @@ TurnStatus AgentSession::compact(bool resume)
             }
         } clear{compacting_};
 
-        const TurnStatus status =
-            submit("Summarize this conversation so a new session can continue the work. Include the goal, decisions, "
-                   "files changed, commands that mattered, and what is still unfinished. Do not call tools.");
-        if (status != TurnStatus::Idle)
+        const auto [status, summary] = summarize_for_compact(state, tools);
+        if (status == TurnStatus::Cancelled || status == TurnStatus::ContextFull)
         {
             return status;
         }
-        summary = last_assistant(state_.client->get_messages(state_.session));
         if (summary.empty())
         {
-            state_.ui->note("compact produced no summary");
+            state.ui->note("compact produced no summary");
             return TurnStatus::Idle;
         }
+
         CreateSessionRequest request = make_request(config_);
-        for (const Tool &tool : tools_)
+        request.tools.reserve(tools.size());
+        for (const Tool &tool : tools)
         {
             request.tools.push_back(ToolSchema::chat_tool(tool));
         }
@@ -680,12 +844,30 @@ TurnStatus AgentSession::compact(bool resume)
         ack.role = "assistant";
         ack.content = "I'll continue from that summary.";
         request.messages = {std::move(prior), std::move(ack)};
-        const SessionResponse created = state_.client->create_session(request);
-        bind_session(created.id);
-        SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
-        present_system(created);
-        refresh_status();
-        state_.ui->note("compacted into session " + std::to_string(created.id));
+        const SessionResponse created = state.client->create_session(request);
+        if (install)
+        {
+            bind_session(created.id);
+            SessionStore{}.remember(endpoint_config(config_), created.id, state_.cwd);
+            present_system(created);
+            refresh_status();
+            state.ui->note("compacted into session " + std::to_string(created.id));
+        }
+        else
+        {
+            state.session = created.id;
+            if (source != 0 && source != state_.session && source != created.id)
+            {
+                try
+                {
+                    state.client->delete_session(source);
+                }
+                catch (...)
+                {
+                }
+            }
+            state.ui->note("sub-agent compacted into session " + std::to_string(created.id));
+        }
     }
 
     if (!resume)
@@ -693,10 +875,22 @@ TurnStatus AgentSession::compact(bool resume)
         return TurnStatus::Idle;
     }
     constexpr std::string_view kContinue = "Continue the unfinished work from the summary. Use tools.";
-    state_.ui->begin("you");
-    state_.ui->append(std::string(kContinue));
-    state_.ui->end();
-    return submit(std::string(kContinue));
+    if (install)
+    {
+        state.ui->begin("you");
+        state.ui->append(std::string(kContinue));
+        state.ui->end();
+        return submit(std::string(kContinue));
+    }
+    state.ui->note("Continuing the sub-agent from the summary.");
+    SessionMessageRequest message;
+    message.role = "user";
+    message.content = std::string(kContinue);
+    const auto queued = state.client->post_message(state.session, message);
+    const std::function<TurnStatus(bool)> again = [this, &state, tools](bool resume_again) {
+        return compact_session(state, tools, resume_again, false);
+    };
+    return run_turn(state, queued.key, tools, again, auto_compact_blocked_, false);
 }
 
 std::string AgentSession::offline_message() const
