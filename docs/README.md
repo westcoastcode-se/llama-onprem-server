@@ -11,3 +11,4 @@ llama.cpp is vendored under `vendors/llama.cpp`. You do not start a separate `ll
 |---|---|
 | [Build](build.md) | Dependencies, Debug, Release, CUDA, and tests |
 | [Use](using.md) | Server, client, sessions, approval, and tools |
+| [Models](models.md) | Compatible Models |

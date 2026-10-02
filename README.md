@@ -13,7 +13,7 @@ Build and day-to-day use are in [docs/](docs/README.md).
 
 ## The client
 
-With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. Thinking stays on one line until you open it. A tool call is one line, and opens while you answer the approval question. The assistant reply sits in a box. The context meter is in the upper right.
+With no subcommand, `callisto_cli` opens a fullscreen session in the current directory. While the model is thinking, that row shows the last three lines, then closes. A finished thinking row and a finished tool row show how long they took once that time reaches one second. A tool call is one line, and opens while you answer the approval question. The assistant reply is a label and the text. The system prompt starts as a collapsed row. The context meter is in the upper right.
 
 ![Callisto client](example.gif)
 
@@ -60,17 +60,17 @@ cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
 cmake --build cmake-build-release --target callisto_server callisto_cli -j$(nproc)
 ```
 
-The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages the binaries already built in `cmake-build-debug`. Build those first.
+The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages `callisto_cli` already built in `cmake-build-release`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md`. The image has no server. Build the client first. The same steps are in [docs/build.md](docs/build.md).
 
 # Run
 
-Download a GGUF model. This tree ships chat templates for Qwen3.8-27B and Ternary-Bonsai-2-27B under `src/templates/`. Pass `--chat-template` when the file inside the GGUF is not the one you want.
+Download a GGUF model. The server uses the Jinja template stored in that file. Pass `--chat-template` when you want a different one. The file name of that template, or else the GGUF, selects the tool-call format. [docs/using.md](docs/using.md) lists the names.
 
 ```bash
 pip install huggingface_hub
 python <<EOF
 from huggingface_hub import snapshot_download
-snapshot_download(repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", allow_patterns=["*Devstral-Small-2-24B-Instruct-2512-UD-Q3_K_XL.gguf"], local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF")
+snapshot_download(repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", allow_patterns=["*Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"], local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF")
 EOF
 ```
 
@@ -105,7 +105,7 @@ The same arguments can be stored in a JSON file and passed with `--config-file`.
 }
 ```
 
-Each session's conversation is `<id>.json` under `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). `<id>.kv` is that session's KV cache and token ids under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores both files in that directory. `<id>.json` holds the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. `--session-cache-size` caps the combined size of the conversation files and the KV files (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `POST /v1/sessions` with an `id` resumes that session, returns its conversation, and refreshes the same time. The other fields in that body are ignored. A missing or zero `id` creates a session. An unknown id is 404. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
+Each session's conversation is `<id>.json` under `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). `<id>.kv` is that session's KV cache and token ids under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores both files in that directory. `<id>.json` holds the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn, and a restarted server loads those files back into the session list. `<id>.kv` is written by `llama_state_seq_save_file` when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted or after 10 minutes idle. A session that is generating, or waiting for tools or an answer, is kept. With no home directory and no XDG variable, both files are under `/tmp/callisto/sessions`. `--session-cache-size` caps the combined size of the conversation files and the KV files (for example `8G`; `0` means no cap). When the files no longer fit, the oldest sessions are removed. Opening a transcript, with `/resume` or `GET /v1/sessions/{id}/messages`, refreshes that session's updated time so a newer resume is kept. `POST /v1/sessions` with an `id` resumes that session, returns its conversation, and refreshes the same time. The other fields in that body are ignored. A missing or zero `id` creates a session. An unknown id is 404. `GET /v1/sessions/{id}` returns the session header. The transcript is `GET /v1/sessions/{id}/messages`.
 
 Start the client in the project you want it to edit:
 
@@ -166,23 +166,23 @@ Reads run without a prompt. A write, a shell command, or a network tool asks fir
 - **Always this tool** (`a`)
 - **Full access** (`f`)
 
-Click a thinking line or a tool line to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D` or `/exit` leaves.
+Click a thinking line, a tool line, or the system row to open it. `Ctrl-O` toggles the latest one. `Ctrl-C` cancels the current generation. `Ctrl-D`, `/exit`, or `/quit` leaves.
 
 | Command | What it does |
 |---|---|
 | `/help` | Show the commands |
 | `/model [name]` | Open the server dialog, or switch by name |
 | `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
-| `/status` | Session id, approval mode, and server |
+| `/status` | Model, session, approval, server, and directory |
 | `/diff` | `git diff --stat` for the working directory |
 | `/compact` | Summarize the chat into a new session and stop |
 | `/clear` | Start a new session |
 | `/resume` | Continue a session created on this computer |
-| `/exit` | Leave |
+| `/exit` | Leave. `/quit` does the same |
 
-`AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md` in the project, or `~/.agents/skills/<name>/SKILL.md` for the user. A project skill with the same name is the one listed. The prompt lists each skill's name and one line. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
+`AGENTS.md` in the project root is added to the system prompt when it has text. The prompt tells the model to look at the project root and determine what kind of project it is. When the question needs more than that listing, the model can call `sub_agent`. The sub-agent's result should describe what the question needs: the kind of project, how it is built and tested, and the paths that matter. A skill is `.agents/skills/<name>/SKILL.md` in the project, or `~/.agents/skills/<name>/SKILL.md` for the user. A project skill with the same name is the one listed. The prompt lists each skill's name, one line, and the path. The model reads the file only when the task needs that procedure. Wide exploration belongs in `sub_agent`, which returns a summary and leaves the file contents out of the parent session.
 
-Tools the client can run: `read_file`, `edit_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed.
+Tools the client can run: `read_file`, `write_file`, `edit_file`, `list_directory`, `file_search`, `search_text`, `execute_command`, `web_fetch`, `web_search`, and `sub_agent`. `write_file` replaces a whole file. `edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed.
 
 # Credits
 

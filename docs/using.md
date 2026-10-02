@@ -1,22 +1,7 @@
 # Use
 
-Start the server first, then the client in the project the agent should read and change. The default address is `127.0.0.1:8080`.
-
-## Model
-
-Download a GGUF. The server uses the Jinja template stored in that file. `--chat-template PATH` replaces it.
-
-```bash
-pip install huggingface_hub
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
-    allow_patterns=["*Devstral-Small-2-24B-Instruct-2512-UD-Q5_K_XL.gguf"],
-    local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF",
-)
-EOF
-```
+Start the server first, then the client in the project the agent should read and change. 
+The default address is `127.0.0.1:8080`.
 
 ## Server
 
@@ -28,7 +13,9 @@ EOF
   -c 32768 -ngl 99
 ```
 
-The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p` and `port`. `reasoning` is a boolean. `session-cache-size` is an integer or a string such as `"8G"`. A later file overrides the keys it sets. Flags on the command line override the file.
+The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, 
+such as `top-p` and `port`. `reasoning` is a boolean. `session-cache-size` is an integer or a string such as `"8G"`. 
+A later file overrides the keys it sets. Flags on the command line override the file.
 
 ```bash
 ./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
@@ -53,6 +40,11 @@ The same values can live in JSON. Short flags use names such as `model`, `contex
 | `--top-p F` | 0.95 | Nucleus sampling |
 | `--top-k N` | 20 | Top-k. `0` turns it off |
 | `--min-p F` | 0 | Min-p. `0` turns it off |
+| `--presence-penalty F` | 0 | Presence penalty |
+| `--frequency-penalty F` | 0 | Frequency penalty |
+| `--repetition-penalty F` | 1.0 | Repetition penalty. `1.0` turns it off |
+| `--penalty-last-n N` | 64 | Penalty window |
+| `--seed N` | random | Sampler seed |
 | `--max-tokens N` | -1 | Cap per reply. `-1` fills the context |
 | `--threads N` | 0 | Threads while generating. `0` leaves llama.cpp's choice |
 | `--threads-batch N` | 0 | Threads during prefill |
@@ -63,41 +55,10 @@ The same values can live in JSON. Short flags use names such as `model`, `contex
 | `--reasoning` / `--no-reasoning` | on | `enable_thinking` |
 | `--session-dir PATH` | `~/.local/state/callisto/sessions` and `~/.cache/callisto/sessions` | Conversation and KV. `PATH` stores both in one directory |
 | `--session-cache-size SIZE` | 0 | Cap in bytes. `0` means no cap. Suffixes `K`, `M`, `G`, `T` |
+| `--kv-sessions N` | unused | Accepted and unused. Parked KV is one file per session |
+| `--config-file PATH` | | JSON settings. A later file overrides the keys it sets. Flags override the file |
 | `--host HOST` | 127.0.0.1 | Bind address |
 | `-p`, `--port N` | 8080 | Port |
-
-`--kv-sessions` is accepted and unused. Parked KV is one file per session.
-
-### Devstral
-
-A GGUF whose file name contains `devstral` is the Devstral family. The same match applies to a `--chat-template` file name. Tool calls are `[TOOL_CALLS]name[ARGS]{"arg":"value"}`. Devstral does not open a `<think>` block, so the reply is the answer even when `--reasoning` is on. Use temperature `0.15`. `--min-p 0.01` is a good match for that model. Context of at least 16384 is the practical minimum.
-
-```bash
-pip install huggingface_hub
-python <<EOF
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF",
-    allow_patterns=["*UD-Q4_K_XL.gguf"],
-    local_dir="Devstral-Small-2-24B-Instruct-2512-GGUF",
-)
-EOF
-./cmake-build-release/callisto_server \
-  -m Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf \
-  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081
-```
-
-Point the client at Qwen first and Devstral second. The first server that answers is used. `/model` switches.
-
-```json
-{
-  "server": ["qwen=127.0.0.1:8080", "devstral=127.0.0.1:8081"]
-}
-```
-
-By default the conversation `<id>.json` is under `~/.local/state/callisto/sessions` and the KV cache `<id>.kv` is under `~/.cache/callisto/sessions`. `$XDG_STATE_HOME` and `$XDG_CACHE_HOME` replace those homes. `--session-dir PATH` stores both files in `PATH`. `<id>.json` holds the system prompt, messages, tools, and a pending tool call or question. It is written when the session is created and after each turn. A restarted server loads those files back. `<id>.kv` is written when another session takes the context and again on a clean shutdown. Both files are removed when the session is deleted, after 10 minutes idle, or when `--session-cache-size` is set and the oldest sessions no longer fit. The cap counts the conversation files and the KV files together. A session that is in use is not idle.
-
-`callisto_server --help` prints the same list.
 
 ## Client
 
@@ -126,13 +87,21 @@ Those settings can also come from a JSON file. `--config-file` may be repeated. 
 
 With no subcommand, a fullscreen session opens in the current directory. You can pass a first task as arguments.
 
-`COLORTERM=truecolor` gives more colors. The theme comes from `--theme`, or from `$XDG_CONFIG_HOME/callisto/theme.json` (default `~/.config/callisto/theme.json`) when that file exists. Built-in names are `default`, `ink`, `nord`, `forest`, and `ember`. A path is a JSON file. An object can set `"theme"` to a built-in name and override colors with a palette name or `#rrggbb`.
+`COLORTERM=truecolor` gives more colors. The theme comes from `--theme`, or from `$XDG_CONFIG_HOME/callisto/theme.json` (default `~/.config/callisto/theme.json`) when that file exists. 
+Built-in names are `default`, `ink`, `nord`, `forest`, and `ember`. A path is a JSON file. An object can set `"theme"` to a built-in name and override colors with a palette name or `#rrggbb`.
 
-Thinking stays on one line while it runs, the last three lines, then closes. A finished thinking row and a finished tool row show how long they took once that time reaches one second. A tool call is one line and opens while you answer the approval question. The reply sits in a box. The context meter is in the upper right. Click a thinking, tool, or system row, or press `Ctrl-O`, to open or close it. `Ctrl-C` cancels the current generation. A running command is aborted, and the server is told how long it ran. `Ctrl-D` or `/exit` leaves. `/quit` leaves as well.
+Thinking stays on one line while it runs, the last three lines, then closes. A finished thinking row and a finished tool row show how long 
+they took once that time reaches one second. A tool call is one line and opens while you answer the approval question. 
+The assistant reply is a label and the text. The system prompt starts as a collapsed row. The context meter is in the upper right. 
+Click a thinking, tool, or system row, or press `Ctrl-O`, to open or close it. `Ctrl-C` cancels the current generation. 
+A running command is aborted, and the server is told how long it ran. `Ctrl-D` or `/exit` leaves. `/quit` leaves as well.
 
 ### Several models
 
-One model is one server. Put the list in `server` in the config file, or pass `--server`. The client uses the first server in that list when it answers, and otherwise the next one that answers. `/model` opens a dialog. `/model name` or `/model 1` switches directly. Switching starts a new session on that server and copies the conversation, so the next turn continues there.
+One model is one server. Put the list in `server` in the config file, or pass `--server`. The client uses 
+the first server in that list when it answers, and otherwise the next one that answers. `/model` opens a dialog. 
+`/model name` or `/model 1` switches directly. Switching starts a new session on that server and copies the conversation, 
+so the next turn continues there.
 
 ```bash
 ./cmake-build-release/callisto_cli --config-file callisto.json
@@ -220,7 +189,7 @@ When context is strictly over 80% and the server is waiting for tools or for an 
 
 A skill is `.agents/skills/<name>/SKILL.md` in the project, or `~/.agents/skills/<name>/SKILL.md` for the user. A project skill with the same name is the one listed. The prompt lists the name, one line, and the path. The model reads the file when the task needs that procedure.
 
-Wide exploration belongs in `sub_agent`. The sub-agent runs, then is summarized, and the parent receives only the last assistant message. A sub-agent does not start its own sub-agents. `exec` does not register `sub_agent`.
+Wide exploration belongs in `sub_agent`. The sub-agent runs, then is summarized. The parent receives that summary, and `git diff --stat` when the working tree has changes. A sub-agent does not start its own sub-agents. `exec` does not register `sub_agent`.
 
 ## Tools
 
