@@ -125,6 +125,7 @@ add_executable(callisto_cli
         src/cli/tui/tui_input.cpp
         src/cli/tui/tui_menu.cpp
         src/cli/tui/tui_transcript.cpp
+        src/cli/tui/visible_text.cpp
         src/cli/rest_client.cpp
         src/api/models.cpp
         src/common/log.cpp
@@ -164,6 +165,7 @@ add_executable(tests
     tests/cli/test_system_block.cpp
     tests/cli/test_thinking_block.cpp
     src/cli/tui/thinking_block.cpp
+    src/cli/tui/visible_text.cpp
     tests/cli/test_context_pressure.cpp
     src/cli/tui/transcript_scroll.cpp
     src/cli/tui/system_block.cpp

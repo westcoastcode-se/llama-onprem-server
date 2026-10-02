@@ -1,242 +1,136 @@
 #pragma once
 
-#include "common/devstral_call.hpp"
-
 #include <array>
+#include <cstddef>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
-// Assistant text as the user should see it. Tool-call XML, question blocks, and
-// the same kind of protocol markup stay buffered until they close, then drop.
-struct VisibleText
+// One family's protocol markers in an assistant stream.
+// find_open, open_length, and held_prefix describe where a span starts.
+// classify commits to the open that is complete in the current buffer.
+class Markup
 {
-    std::string feed(std::string_view piece)
-    {
-        pending.append(piece);
-        return drain(false);
-    }
+  public:
+    virtual ~Markup();
 
-    std::string finish()
+    // How a committed open is finished.
+    // Paired tags drop `skip` bytes and then wait for `close`.
+    // A whole span keeps the open in the buffer and measures itself with span_end.
+    struct OpenSpan
     {
-        return drain(true);
-    }
+        std::string_view close;
+        std::size_t skip = 0;
+        bool whole = false;
+    };
 
-  private:
+    [[nodiscard]] virtual std::size_t find_open(std::string_view text) const = 0;
+    // Length of the open at text[0]. Zero when text does not start with one.
+    [[nodiscard]] virtual std::size_t open_length(std::string_view text) const = 0;
+    // Longest suffix of text that is a proper prefix of an open.
+    [[nodiscard]] virtual std::size_t held_prefix(std::string_view text) const = 0;
+    [[nodiscard]] virtual std::optional<OpenSpan> classify(std::string_view text) const = 0;
+    // Length of a whole span that starts at text[0]. npos when it is unfinished.
+    [[nodiscard]] virtual std::size_t span_end(std::string_view text) const;
+
+  protected:
+    Markup() = default;
+};
+
+// Case-insensitive open and close tags. The longest open at a position wins,
+// so <tool_calls> is not read as <tool_call>.
+class PairedTagMarkup : public Markup
+{
+  public:
     struct Tag
     {
         std::string_view open;
         std::string_view close;
     };
 
-    std::string pending;
-    bool hiding = false;
-    bool hiding_devstral = false;
-    std::string close;
+    [[nodiscard]] std::size_t find_open(std::string_view text) const override;
+    [[nodiscard]] std::size_t open_length(std::string_view text) const override;
+    [[nodiscard]] std::size_t held_prefix(std::string_view text) const override;
+    [[nodiscard]] std::optional<OpenSpan> classify(std::string_view text) const override;
 
-    static bool ieq(std::string_view text, std::size_t pos, std::string_view literal)
+  protected:
+    explicit PairedTagMarkup(std::span<const Tag> tags) : tags_(tags)
     {
-        if (literal.size() > text.size() || pos > text.size() - literal.size())
-        {
-            return false;
-        }
-        for (std::size_t i = 0; i < literal.size(); ++i)
-        {
-            unsigned char left = static_cast<unsigned char>(text[pos + i]);
-            unsigned char right = static_cast<unsigned char>(literal[i]);
-            if (left >= 'A' && left <= 'Z')
-            {
-                left = static_cast<unsigned char>(left - 'A' + 'a');
-            }
-            if (right >= 'A' && right <= 'Z')
-            {
-                right = static_cast<unsigned char>(right - 'A' + 'a');
-            }
-            if (left != right)
-            {
-                return false;
-            }
-        }
-        return true;
     }
 
-    static std::size_t find_ieq(std::string_view text, std::string_view literal)
+  private:
+    [[nodiscard]] const Tag *longest_at(std::string_view text, std::size_t pos) const;
+
+    std::span<const Tag> tags_;
+};
+
+// <tool_call><function=name><parameter=key>value</parameter></function></tool_call>
+// Bonsai writes the same tags.
+class QwenMarkup final : public PairedTagMarkup
+{
+  public:
+    QwenMarkup();
+};
+
+// <｜tool▁calls▁begin｜> … <｜tool▁call▁begin｜> … <｜tool▁call▁end｜>
+class DeepseekMarkup final : public PairedTagMarkup
+{
+  public:
+    DeepseekMarkup();
+};
+
+// [TOOL_CALLS]name[ARGS]{json} through the end of the JSON value.
+class DevstralMarkup final : public Markup
+{
+  public:
+    [[nodiscard]] std::size_t find_open(std::string_view text) const override;
+    [[nodiscard]] std::size_t open_length(std::string_view text) const override;
+    [[nodiscard]] std::size_t held_prefix(std::string_view text) const override;
+    [[nodiscard]] std::optional<OpenSpan> classify(std::string_view text) const override;
+    [[nodiscard]] std::size_t span_end(std::string_view text) const override;
+};
+
+// <question>, <answer>, and <tool_response>. Shared by every model.
+class ProtocolMarkup final : public PairedTagMarkup
+{
+  public:
+    ProtocolMarkup();
+};
+
+// Assistant text as the user should see it. Every family is applied, because a
+// transcript can mix turns from more than one server. The earliest span wins,
+// so a marker inside another family's span stays inside that span.
+class VisibleText
+{
+  public:
+    std::string feed(std::string_view piece);
+    std::string finish();
+
+  private:
+    enum class Family
     {
-        if (literal.empty() || literal.size() > text.size())
-        {
-            return std::string_view::npos;
-        }
-        const std::size_t last = text.size() - literal.size();
-        for (std::size_t i = 0; i <= last; ++i)
-        {
-            if (ieq(text, i, literal))
-            {
-                return i;
-            }
-        }
-        return std::string_view::npos;
-    }
+        None,
+        Protocol,
+        Qwen,
+        Deepseek,
+        Devstral
+    };
 
-    static const std::array<Tag, 9> &tags()
-    {
-        static constexpr std::array<Tag, 9> kTags = {{
-            {"<tool_calls>", "</tool_calls>"},
-            {"<tool_call>", "</tool_call>"},
-            {"<tool_response>", "</tool_response>"},
-            {"<question>", "</question>"},
-            {"<answer>", "</answer>"},
-            {"<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>"},
-            {"<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>"},
-            {"<function=", "</function>"},
-            {"<parameter=", "</parameter>"},
-        }};
-        return kTags;
-    }
+    std::string drain(bool end);
+    void stop_hiding();
+    [[nodiscard]] std::array<const Markup *, 4> families() const;
+    [[nodiscard]] Family family_of(const Markup *markup) const;
+    [[nodiscard]] const Markup &markup(Family family) const;
+    [[nodiscard]] std::size_t held(std::string_view text) const;
 
-    static std::size_t held_prefix(std::string_view text)
-    {
-        std::size_t held = 0;
-        const auto consider = [&](std::string_view open) {
-            if (open.size() < 2)
-            {
-                return;
-            }
-            const std::size_t max = std::min(text.size(), open.size() - 1);
-            for (std::size_t size = max; size > held; --size)
-            {
-                if (ieq(open, 0, text.substr(text.size() - size)))
-                {
-                    held = size;
-                    break;
-                }
-            }
-        };
-        for (const Tag &tag : tags())
-        {
-            consider(tag.open);
-        }
-        consider(kDevstralToolCalls);
-        return held;
-    }
-
-    static const Tag *earliest(std::string_view text, std::size_t &pos)
-    {
-        const Tag *found = nullptr;
-        pos = std::string_view::npos;
-        for (const Tag &tag : tags())
-        {
-            const std::size_t at = find_ieq(text, tag.open);
-            if (at < pos)
-            {
-                pos = at;
-                found = &tag;
-            }
-        }
-        return found;
-    }
-
-    std::string drain(bool end)
-    {
-        std::string out;
-        while (!pending.empty())
-        {
-            if (hiding)
-            {
-                const std::size_t at = find_ieq(pending, close);
-                if (at == std::string_view::npos)
-                {
-                    if (end)
-                    {
-                        pending.clear();
-                        hiding = false;
-                    }
-                    break;
-                }
-                pending.erase(0, at + close.size());
-                hiding = false;
-                while (!pending.empty() && (pending.front() == '\n' || pending.front() == '\r'))
-                {
-                    pending.erase(pending.begin());
-                }
-                continue;
-            }
-            if (hiding_devstral)
-            {
-                const std::size_t call_end = devstral_call_end(pending, 0);
-                if (call_end == std::string_view::npos)
-                {
-                    if (end)
-                    {
-                        pending.clear();
-                        hiding_devstral = false;
-                    }
-                    break;
-                }
-                pending.erase(0, call_end);
-                hiding_devstral = false;
-                while (!pending.empty() && (pending.front() == '\n' || pending.front() == '\r'))
-                {
-                    pending.erase(pending.begin());
-                }
-                continue;
-            }
-
-            std::size_t pos = 0;
-            const Tag *tag = earliest(pending, pos);
-            const std::size_t devstral = pending.find(kDevstralToolCalls);
-            if (devstral != std::string_view::npos && (tag == nullptr || devstral <= pos))
-            {
-                std::size_t cut = devstral;
-                bool broke = false;
-                while (cut > 0 && (pending[cut - 1] == '\n' || pending[cut - 1] == '\r'))
-                {
-                    broke = true;
-                    --cut;
-                }
-                out.append(pending, 0, cut);
-                if (broke)
-                {
-                    out.push_back('\n');
-                }
-                pending.erase(0, devstral);
-                hiding_devstral = true;
-                continue;
-            }
-            if (tag == nullptr)
-            {
-                const std::size_t hold = held_prefix(pending);
-                std::size_t emit = pending.size() - hold;
-                if (!end)
-                {
-                    while (emit > 0 && (pending[emit - 1] == '\n' || pending[emit - 1] == '\r'))
-                    {
-                        --emit;
-                    }
-                }
-                out.append(pending, 0, emit);
-                pending.erase(0, emit);
-                if (end)
-                {
-                    pending.clear();
-                }
-                break;
-            }
-
-            std::size_t cut = pos;
-            bool broke = false;
-            while (cut > 0 && (pending[cut - 1] == '\n' || pending[cut - 1] == '\r'))
-            {
-                broke = true;
-                --cut;
-            }
-            out.append(pending, 0, cut);
-            if (broke)
-            {
-                out.push_back('\n');
-            }
-            pending.erase(0, pos + tag->open.size());
-            hiding = true;
-            close.assign(tag->close);
-        }
-        return out;
-    }
+    ProtocolMarkup protocol_;
+    QwenMarkup qwen_;
+    DeepseekMarkup deepseek_;
+    DevstralMarkup devstral_;
+    std::string pending_;
+    bool hiding_ = false;
+    bool whole_ = false;
+    Family family_ = Family::None;
+    std::string_view close_;
 };

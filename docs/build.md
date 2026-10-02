@@ -40,7 +40,7 @@ cmake --build cmake-build-release --target callisto_server callisto_cli -j$(npro
 
 ## GPU
 
-Turn CUDA on and set the architecture. `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints the number. An RTX 40-series card is `89`.
+Turn CUDA on and set the architecture. `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints the number. An RTX 40-series card is `89` (8.9).
 
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \

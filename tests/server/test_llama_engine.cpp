@@ -122,6 +122,19 @@ int test_visible_text_open()
 }
 
 /**
+ * A marker inside another family's span stays hidden with that span.
+ */
+int test_visible_text_nested_markup()
+{
+    assertEquals("Before\nAfter",
+                 visible("Before\n[TOOL_CALLS]write_file[ARGS]{\"content\":\"<tool_call>x</tool_call>\"}\nAfter"));
+    assertEquals("Before\nAfter",
+                 visible("Before\n<tool_call>\n<function=write_file>\n<parameter=content>\n"
+                         "[TOOL_CALLS]read_file[ARGS]{}\n</parameter>\n</function>\n</tool_call>\nAfter"));
+    return EXIT_SUCCESS;
+}
+
+/**
  * The shared token prefix stops at the first difference.
  */
 int test_prefix()
@@ -464,6 +477,7 @@ int test_llama_engine()
     RUN_TEST(test_visible_text_deepseek);
     RUN_TEST(test_visible_text_chunked);
     RUN_TEST(test_visible_text_open);
+    RUN_TEST(test_visible_text_nested_markup);
     RUN_TEST(test_prefix);
     RUN_TEST(test_tool_parse_json);
     RUN_TEST(test_tool_parse_qwen);
