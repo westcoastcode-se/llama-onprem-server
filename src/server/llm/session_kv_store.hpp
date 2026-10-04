@@ -9,6 +9,10 @@
 #include <string_view>
 #include <vector>
 
+// llama_state_seq_get_data writes a uint32 magic and an int32 sequence id before the bytes
+// llama_state_seq_save_file stores after its token header. Those 8 bytes are not part of the file.
+inline constexpr std::size_t kSeqMemoryPrefix = sizeof(std::uint32_t) + sizeof(std::int32_t);
+
 struct llama_context;
 
 // Files named <session id>.kv. llama_state_seq_save_file writes the sequence state and the token
@@ -46,6 +50,15 @@ class SessionKvStore
 
     // Copy one session file onto another id. False when the source is missing.
     bool copy(std::string_view from, std::string_view to);
+
+    // Write a snapshot taken with llama_state_seq_get_data. The first 8 bytes are that
+    // function's magic and sequence id; the file stores the same body llama_state_seq_save_file writes.
+    // False leaves the previous file in place.
+    bool save_captured(std::string_view id, std::span<const int32_t> tokens, std::span<const uint8_t> state);
+
+    // Delete parked files older than max_age_days while the directory is over max_bytes.
+    // max_age_days < 0 deletes nothing. Returns the ids removed, oldest first.
+    [[nodiscard]] std::vector<std::string> trim_expired(int max_age_days, uint64_t max_bytes);
 
     void remove(std::string_view id);
 

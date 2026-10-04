@@ -51,8 +51,8 @@ The same values can live in JSON. Short flags use names such as `model`, `contex
 | `--chat-template PATH` | the template in the GGUF | Your own Jinja file |
 | `--reasoning` / `--no-reasoning` | on | `enable_thinking` |
 | `--session-dir PATH` | `$XDG_CACHE_HOME/callisto/sessions` | Parked KV files. `PATH` stores them in that directory |
-| `--session-cache-size SIZE` | unused | Accepted and unused |
-| `--kv-sessions N` | unused | Accepted and unused. Parked KV is one file per id |
+| `--session-memory-mb SIZE` | 0 | Keep parked sessions in RAM. A number is megabytes. `512MB` and `1GB` set the unit. `0` writes every session to disk |
+| `--session-disk-limit DAYS,SIZE` | off | On start, on shutdown, and after each disk write, delete files older than `DAYS` while the directory is larger than `SIZE`. `SIZE` is megabytes, or a value such as `512MB` or `1GB` |
 | `--api-key KEY` | empty | Require `Authorization: Bearer KEY`. Empty leaves the API open |
 | `--config-file PATH` | | JSON settings. A later file overrides the keys it sets. Flags override the file |
 | `--host HOST` | 127.0.0.1 | Bind address |
@@ -61,6 +61,10 @@ The same values can live in JSON. Short flags use names such as `model`, `contex
 `--api-key` and the config key `api-key` override the environment. When both are empty, `CALLISTO_API_KEY` is the key. A wrong or missing bearer token on any route except `GET /health` returns `401` with `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`.
 
 The process still creates `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). It does not write conversation files and it has no session HTTP API. KV files are `<id>.kv`. With no home directory and no XDG variable, KV files are under `/tmp/callisto/sessions`.
+
+`--session-memory-mb` keeps the newest parked sessions in RAM. When a new session does not fit, the oldest RAM sessions are written to disk. A session larger than the whole budget goes straight to disk. `0` is disk only. On shutdown every RAM session is written out.
+
+`--session-disk-limit 14,512` means 14 days and 512 megabytes. `14,1GB` is the same check with a 1 gigabyte cap. `MB` and `GB` may be written in either case. The check runs when the server starts, when it shuts down, and each time a session is written to disk. A file is deleted only when it is older than 14 days and the files together are larger than the size. Newer files stay even if the directory is still over that size. Omitting the flag keeps every file.
 
 ## Codex CLI
 

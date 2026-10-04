@@ -79,7 +79,7 @@ A GGUF whose file name contains `devstral` is parsed as Devstral. Temperature `0
 ```bash
 ./cmake-build-release/callisto_server \
   -m Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf \
-  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081
+  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081 --session-memory-mb 4GB
 ```
 
 The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave the key empty.
@@ -130,7 +130,7 @@ requires_openai_auth = false
 
 When the server requires a key, `env_key` is the name of an environment variable, not the secret. Add `env_key = "CALLISTO_API_KEY"` under `[model_providers.callisto]`. Interactive `codex` reads that variable from its background server, not from the terminal that launches it. Export `CALLISTO_API_KEY`, run `codex app-server daemon restart`, and then start `codex`. `codex --no-daemon` reads the variable from the current shell instead. The server reads that same variable when `--api-key` and the config-file key are both empty. Those two win when set, and the bearer token must match them. [docs/using.md](docs/using.md) has the full provider block.
 
-`prompt_cache_key` from Codex is the KV slot for that thread. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`, and the name is cut at 120 characters. With no key, the slot is `codex`. The file is `<id>.kv` under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores those files in `PATH`.
+`prompt_cache_key` from Codex is the KV slot for that thread. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`, and the name is cut at 120 characters. With no key, the slot is `codex`. The file is `<id>.kv` under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores those files in `PATH`. `--session-memory-mb SIZE` keeps parked sessions in RAM. A bare number is megabytes, and `MB` or `GB` sets the unit. `--session-disk-limit DAYS,SIZE` deletes files older than that many days when the directory is larger than that size. [docs/using.md](docs/using.md) has the details.
 
 Image, audio, and file inputs are rejected. The server does not run tools. Namespace tools are flattened to `namespace.member` and returned with a `namespace` field. `custom` and `tool_search` are accepted. Hosted tools such as `web_search` are skipped.
 

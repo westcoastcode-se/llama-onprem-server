@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace
@@ -131,9 +132,10 @@ LlamaEngine::~LlamaEngine() = default;
 LlamaEngine::LlamaEngine(LlamaEngine &&other) noexcept
     : config_(std::move(other.config_)), model_(std::move(other.model_)), vocab_(std::exchange(other.vocab_, nullptr)),
       ctx_(std::move(other.ctx_)), smpl_(std::move(other.smpl_)), templates_(std::move(other.templates_)),
-      trim_(std::move(other.trim_)),
+      merge_user_turns_(other.merge_user_turns_), keep_reasoning_(other.keep_reasoning_), trim_(std::move(other.trim_)),
       active_session_id_(std::move(other.active_session_id_)), active_tokens_(std::move(other.active_tokens_)),
-      message_ends_(std::move(other.message_ends_)), kv_store_(std::move(other.kv_store_))
+      message_ends_(std::move(other.message_ends_)), kv_store_(std::move(other.kv_store_)),
+      memory_(std::move(other.memory_))
 {
 }
 
@@ -147,11 +149,14 @@ LlamaEngine &LlamaEngine::operator=(LlamaEngine &&other) noexcept
         ctx_ = std::move(other.ctx_);
         smpl_ = std::move(other.smpl_);
         templates_ = std::move(other.templates_);
+        merge_user_turns_ = other.merge_user_turns_;
+        keep_reasoning_ = other.keep_reasoning_;
         trim_ = std::move(other.trim_);
         active_session_id_ = std::move(other.active_session_id_);
         active_tokens_ = std::move(other.active_tokens_);
         message_ends_ = std::move(other.message_ends_);
         kv_store_ = std::move(other.kv_store_);
+        memory_ = std::move(other.memory_);
     }
     return *this;
 }
@@ -193,10 +198,7 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
 {
     LlamaEngine engine;
     engine.config_ = config;
-    if (engine.config_.kv_sessions < 1)
-    {
-        engine.config_.kv_sessions = 1;
-    }
+    engine.memory_ = SessionMemory{config.session_memory_bytes};
     if (engine.config_.n_ctx <= 0)
     {
         throw LlamaModelInitError("n_ctx must be positive");
@@ -220,10 +222,20 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
     }
     log_info("[llm] session directory ", engine.config_.session_dir);
     log_info("[llm] session kv directory ", engine.config_.kv_dir);
+    if (engine.config_.session_memory_bytes > 0)
+    {
+        log_info("[llm] session memory limit ", engine.config_.session_memory_bytes, " bytes");
+    }
+    if (engine.config_.session_disk_max_age_days >= 0)
+    {
+        log_info("[llm] session disk limit ", engine.config_.session_disk_max_age_days, " days, ",
+                 engine.config_.session_disk_max_bytes, " bytes");
+    }
+    engine.trim_session_disk();
 
     llama_log_set(
         [](enum ggml_log_level level, const char *text, void *) {
-            if (level >= GGML_LOG_LEVEL_ERROR)
+            if (level >= GGML_LOG_LEVEL_ERROR && *text != '.' && *text != '\n')
             {
                 log_error(text);
             }
@@ -313,12 +325,46 @@ void LlamaEngine::clone_session(const std::string &from, const std::string &to)
         {
             return;
         }
+        if (config_.session_memory_bytes > 0)
+        {
+            try
+            {
+                if (std::optional<SessionSnapshot> snapshot = capture_live_sequence())
+                {
+                    if (store_snapshot(to, std::move(*snapshot)))
+                    {
+                        log_info("[llm] session ", from, " kv cloned to ", to, " (", active_tokens_.size(), " tokens)");
+                        return;
+                    }
+                }
+            }
+            catch (const std::bad_alloc &)
+            {
+                log_error("[llm] session ", from, " kv clone ran out of memory");
+            }
+        }
         if (!kv_store_.save(ctx_.get(), to, active_tokens_))
         {
             log_error("[llm] session ", from, " kv clone failed");
             return;
         }
+        trim_session_disk();
         log_info("[llm] session ", from, " kv cloned to ", to, " (", active_tokens_.size(), " tokens)");
+        return;
+    }
+
+    if (const SessionSnapshot *parked = memory_.find(from))
+    {
+        SessionSnapshot copy;
+        copy.tokens = parked->tokens;
+        copy.state = parked->state;
+        const size_t tokens = copy.tokens.size();
+        if (!store_snapshot(to, std::move(copy)))
+        {
+            log_error("[llm] session ", from, " kv clone failed");
+            return;
+        }
+        log_info("[llm] session ", from, " kv cloned to ", to, " (", tokens, " tokens)");
         return;
     }
 
@@ -326,6 +372,7 @@ void LlamaEngine::clone_session(const std::string &from, const std::string &to)
     {
         return;
     }
+    trim_session_disk();
     const size_t tokens = kv_store_.token_count(to).value_or(0);
     log_info("[llm] session ", from, " kv cloned to ", to, " (", tokens, " tokens)");
 }
@@ -333,6 +380,7 @@ void LlamaEngine::clone_session(const std::string &from, const std::string &to)
 void LlamaEngine::release_session(std::string_view session_id)
 {
     const std::string id(session_id);
+    memory_.erase(id);
     kv_store_.remove(id);
     if (active_session_id_ == id)
     {
@@ -366,21 +414,173 @@ bool LlamaEngine::trim_kv_to(size_t n_tokens)
 
 void LlamaEngine::park_active_session()
 {
-    // The context can hold one sequence. The file replaces it so another session can use sequence 0.
+    // The context can hold one sequence. Parking frees it so another session can use sequence 0.
     if (active_session_id_.empty() || !ctx_ || active_tokens_.empty())
     {
         return;
     }
-    if (!kv_store_.save(ctx_.get(), active_session_id_, active_tokens_))
+    if (config_.session_memory_bytes == 0)
     {
-        log_error("[llm] session ", active_session_id_, " kv save failed");
+        write_live_to_disk(active_session_id_);
         return;
     }
-    log_info("[llm] session ", active_session_id_, " kv parked (", active_tokens_.size(), " tokens)");
+    try
+    {
+        if (std::optional<SessionSnapshot> snapshot = capture_live_sequence())
+        {
+            if (store_snapshot(active_session_id_, std::move(*snapshot)))
+            {
+                return;
+            }
+        }
+    }
+    catch (const std::bad_alloc &)
+    {
+        log_error("[llm] session ", active_session_id_, " kv capture ran out of memory");
+    }
+    write_live_to_disk(active_session_id_);
+}
+
+void LlamaEngine::flush_parked_sessions()
+{
+    for (const std::string &id : memory_.ids_oldest_first())
+    {
+        std::optional<SessionSnapshot> snapshot = memory_.take(id);
+        if (!snapshot)
+        {
+            continue;
+        }
+        if (!kv_store_.save_captured(id, snapshot->tokens, snapshot->state))
+        {
+            log_error("[llm] session ", id, " kv flush failed");
+            memory_.insert(id, std::move(*snapshot));
+            continue;
+        }
+        log_info("[llm] session ", id, " kv flushed (", snapshot->tokens.size(), " tokens)");
+        trim_session_disk();
+    }
+    trim_session_disk();
+}
+
+std::optional<SessionSnapshot> LlamaEngine::capture_live_sequence()
+{
+    if (!ctx_ || active_tokens_.empty())
+    {
+        return std::nullopt;
+    }
+    const size_t size = llama_state_seq_get_size(ctx_.get(), 0);
+    if (size < kSeqMemoryPrefix)
+    {
+        return std::nullopt;
+    }
+    SessionSnapshot snapshot;
+    snapshot.tokens = active_tokens_;
+    snapshot.state.resize(size);
+    const size_t got = llama_state_seq_get_data(ctx_.get(), snapshot.state.data(), snapshot.state.size(), 0);
+    if (got < kSeqMemoryPrefix || got > snapshot.state.size())
+    {
+        return std::nullopt;
+    }
+    snapshot.state.resize(got);
+    return snapshot;
+}
+
+bool LlamaEngine::store_snapshot(const std::string &id, SessionSnapshot snapshot)
+{
+    if (snapshot.tokens.empty() || snapshot.state.size() < kSeqMemoryPrefix)
+    {
+        return false;
+    }
+    const MemoryAdmit admit = memory_.plan(parked_session_bytes(snapshot), id);
+    if (!admit.keep_incoming)
+    {
+        memory_.erase(id);
+        if (!kv_store_.save_captured(id, snapshot.tokens, snapshot.state))
+        {
+            log_error("[llm] session ", id, " kv save failed");
+            return false;
+        }
+        log_info("[llm] session ", id, " kv parked (", snapshot.tokens.size(), " tokens)");
+        trim_session_disk();
+        return true;
+    }
+    for (const std::string &spill_id : admit.spill)
+    {
+        std::optional<SessionSnapshot> spilled = memory_.take(spill_id);
+        if (!spilled)
+        {
+            continue;
+        }
+        const size_t spilled_tokens = spilled->tokens.size();
+        if (!kv_store_.save_captured(spill_id, spilled->tokens, spilled->state))
+        {
+            memory_.insert(spill_id, std::move(*spilled));
+            log_error("[llm] session ", spill_id, " kv spill failed");
+            memory_.erase(id);
+            if (!kv_store_.save_captured(id, snapshot.tokens, snapshot.state))
+            {
+                log_error("[llm] session ", id, " kv save failed");
+                return false;
+            }
+            log_info("[llm] session ", id, " kv parked (", snapshot.tokens.size(), " tokens)");
+            trim_session_disk();
+            return true;
+        }
+        log_info("[llm] session ", spill_id, " kv spilled (", spilled_tokens, " tokens)");
+        trim_session_disk();
+    }
+    const size_t tokens = snapshot.tokens.size();
+    memory_.insert(id, std::move(snapshot));
+    kv_store_.remove(id);
+    log_info("[llm] session ", id, " kv parked in memory (", tokens, " tokens, ", memory_.used_bytes(), " bytes)");
+    return true;
+}
+
+void LlamaEngine::write_live_to_disk(const std::string &id)
+{
+    memory_.erase(id);
+    if (!kv_store_.save(ctx_.get(), id, active_tokens_))
+    {
+        log_error("[llm] session ", id, " kv save failed");
+        return;
+    }
+    log_info("[llm] session ", id, " kv parked (", active_tokens_.size(), " tokens)");
+    trim_session_disk();
+}
+
+void LlamaEngine::trim_session_disk()
+{
+    if (config_.session_disk_max_age_days < 0)
+    {
+        return;
+    }
+    const std::vector<std::string> dropped =
+        kv_store_.trim_expired(config_.session_disk_max_age_days, config_.session_disk_max_bytes);
+    for (const std::string &id : dropped)
+    {
+        log_info("[llm] session ", id, " kv removed, older than ", config_.session_disk_max_age_days, " days");
+    }
 }
 
 bool LlamaEngine::unpark_session(const std::string &session_id)
 {
+    if (std::optional<SessionSnapshot> snapshot = memory_.take(session_id))
+    {
+        (void)trim_kv_to(0);
+        const size_t loaded =
+            ctx_ ? llama_state_seq_set_data(ctx_.get(), snapshot->state.data(), snapshot->state.size(), 0) : 0;
+        if (loaded == 0)
+        {
+            log_error("[llm] session ", session_id, " kv restore failed");
+            memory_.insert(session_id, std::move(*snapshot));
+            active_tokens_.clear();
+            message_ends_.clear();
+            return false;
+        }
+        active_tokens_ = std::move(snapshot->tokens);
+        message_ends_.clear();
+        return true;
+    }
     if (!kv_store_.token_count(session_id))
     {
         return false;
@@ -438,8 +638,19 @@ int LlamaEngine::session_token_count(std::string_view session_id) const
     {
         return 0;
     }
-    const size_t count = session_id == active_session_id_ ? active_tokens_.size()
-                                                          : kv_store_.token_count(session_id).value_or(0);
+    size_t count = 0;
+    if (session_id == active_session_id_)
+    {
+        count = active_tokens_.size();
+    }
+    else if (const std::optional<size_t> parked = memory_.token_count(session_id))
+    {
+        count = *parked;
+    }
+    else
+    {
+        count = kv_store_.token_count(session_id).value_or(0);
+    }
     const size_t cap = static_cast<size_t>(std::numeric_limits<int>::max());
     return static_cast<int>(std::min(count, cap));
 }

@@ -83,6 +83,7 @@ add_executable(callisto_server
         src/server/llm/llm_engine.cpp
         src/server/llm/kv_trim.cpp
         src/server/llm/session_kv_store.cpp
+        src/server/llm/session_park.cpp
         src/server/responses/responses.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
@@ -130,6 +131,7 @@ add_executable(tests
     src/server/llm/kv_trim.cpp
     src/server/llm/llm_engine.cpp
     src/server/llm/session_kv_store.cpp
+    src/server/llm/session_park.cpp
     src/server/sessions/sessions.cpp
     src/server/sessions/session_disk.cpp
     ${COMMON_TOOL_SOURCES})

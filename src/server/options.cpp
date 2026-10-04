@@ -22,8 +22,9 @@ bool takes_value(const std::string_view arg)
            arg == "--top-k" || arg == "--min-p" || arg == "--presence-penalty" || arg == "--frequency-penalty" ||
            arg == "--repetition-penalty" || arg == "--penalty-last-n" || arg == "--seed" || arg == "--max-tokens" ||
            arg == "--threads" || arg == "--threads-batch" || arg == "--flash-attn" || arg == "--cache-type-k" ||
-           arg == "--cache-type-v" || arg == "--chat-template" || arg == "--kv-sessions" || arg == "--session-dir" ||
-           arg == "--session-cache-size" || arg == "--host" || arg == "-p" || arg == "--port" || arg == "--api-key";
+           arg == "--cache-type-v" || arg == "--chat-template" || arg == "--session-dir" ||
+           arg == "--session-memory-mb" || arg == "--session-disk-limit" || arg == "--host" || arg == "-p" ||
+           arg == "--port" || arg == "--api-key";
 }
 
 bool is_bare_flag(const std::string_view arg)
@@ -75,65 +76,100 @@ bool parse_float(std::string_view text, float &out)
     return true;
 }
 
-std::optional<uint64_t> parse_byte_size(const std::string_view text)
+std::string_view trim_view(std::string_view text)
 {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t'))
+    {
+        text.remove_prefix(1);
+    }
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t'))
+    {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+bool mb_to_bytes(const uint64_t megabytes, uint64_t &bytes)
+{
+    constexpr uint64_t scale = 1024ull * 1024ull;
+    if (megabytes > std::numeric_limits<uint64_t>::max() / scale)
+    {
+        return false;
+    }
+    bytes = megabytes * scale;
+    return true;
+}
+
+// A bare number is megabytes. MB and GB are accepted in either case, with or without a space.
+std::optional<uint64_t> parse_size(std::string_view text)
+{
+    text = trim_view(text);
     if (text.empty())
     {
         return std::nullopt;
     }
-    std::size_t index = 0;
-    uint64_t value = 0;
-    for (; index < text.size() && text[index] >= '0' && text[index] <= '9'; ++index)
+    std::size_t split = text.size();
+    while (split > 0)
     {
-        const uint64_t digit = static_cast<uint64_t>(text[index] - '0');
-        if (value > (UINT64_MAX - digit) / 10)
+        const unsigned char ch = static_cast<unsigned char>(text[split - 1]);
+        const bool letter = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+        if (!letter)
         {
-            return std::nullopt;
+            break;
         }
-        value = value * 10 + digit;
+        --split;
     }
-    if (index == 0)
-    {
-        return std::nullopt;
-    }
-    std::string suffix(text.substr(index));
+    const std::string_view number = trim_view(text.substr(0, split));
+    std::string suffix(text.substr(split));
     for (char &ch : suffix)
     {
-        if (ch >= 'A' && ch <= 'Z')
+        if (ch >= 'a' && ch <= 'z')
         {
-            ch = static_cast<char>(ch - 'A' + 'a');
+            ch = static_cast<char>(ch - 'a' + 'A');
         }
     }
-    uint64_t scale = 1;
-    if (suffix.empty() || suffix == "b")
+    uint64_t scale = 1024ull * 1024ull;
+    if (suffix.empty() || suffix == "MB")
     {
-        scale = 1;
+        scale = 1024ull * 1024ull;
     }
-    else if (suffix == "k" || suffix == "kb")
+    else if (suffix == "GB")
     {
-        scale = 1024ull;
-    }
-    else if (suffix == "m" || suffix == "mb")
-    {
-        scale = 1024ull * 1024;
-    }
-    else if (suffix == "g" || suffix == "gb")
-    {
-        scale = 1024ull * 1024 * 1024;
-    }
-    else if (suffix == "t" || suffix == "tb")
-    {
-        scale = 1024ull * 1024 * 1024 * 1024;
+        scale = 1024ull * 1024ull * 1024ull;
     }
     else
     {
         return std::nullopt;
     }
-    if (scale != 1 && value > UINT64_MAX / scale)
+    uint64_t count = 0;
+    if (!parse_whole(number, count) || count > std::numeric_limits<uint64_t>::max() / scale)
     {
         return std::nullopt;
     }
-    return value * scale;
+    return count * scale;
+}
+
+// DAYS,SIZE. Days are a whole number. SIZE is megabytes, or a value with an MB or GB suffix.
+std::optional<std::pair<int, uint64_t>> parse_disk_limit(std::string_view text)
+{
+    text = trim_view(text);
+    const std::size_t comma = text.find(',');
+    if (comma == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+    const std::string_view days_text = trim_view(text.substr(0, comma));
+    int days = 0;
+    if (!parse_whole(days_text, days) || days < 0)
+    {
+        return std::nullopt;
+    }
+    const std::optional<uint64_t> bytes = parse_size(text.substr(comma + 1));
+    if (!bytes)
+    {
+        return std::nullopt;
+    }
+    return std::pair<int, uint64_t>{days, *bytes};
 }
 
 bool json_string(const nlohmann::json &value, const std::string_view key, std::string &dest, ServerArgParse &status)
@@ -314,47 +350,50 @@ bool apply_json_key(ServerOptions &options, const std::string_view key, const nl
         options.config.reasoning = value.get<bool>();
         return true;
     }
-    if (key == "kv-sessions")
-    {
-        return json_int(value, key, options.config.kv_sessions, status);
-    }
     if (key == "session-dir")
     {
         return json_string(value, key, options.config.session_dir, status);
     }
-    if (key == "session-cache-size")
+    if (key == "session-memory-mb")
     {
         if (value.is_string())
         {
-            const auto size = parse_byte_size(value.get<std::string>());
-            if (!size)
+            const std::optional<uint64_t> bytes = parse_size(value.get<std::string>());
+            if (!bytes)
             {
-                status.error = "invalid session-cache-size";
+                status.error = "invalid session-memory-mb";
                 return false;
             }
-            options.config.session_cache_bytes = *size;
+            options.config.session_memory_bytes = *bytes;
             return true;
         }
-        if (!value.is_number_integer())
+        int megabytes = 0;
+        if (!json_int(value, key, megabytes, status))
         {
-            status.error = "session-cache-size must be an integer or a size string";
             return false;
         }
-        try
+        if (megabytes < 0 || !mb_to_bytes(static_cast<uint64_t>(megabytes), options.config.session_memory_bytes))
         {
-            const auto number = value.get<std::int64_t>();
-            if (number < 0)
-            {
-                status.error = "invalid session-cache-size";
-                return false;
-            }
-            options.config.session_cache_bytes = static_cast<uint64_t>(number);
-        }
-        catch (const nlohmann::json::exception &)
-        {
-            status.error = "invalid session-cache-size";
+            status.error = "invalid session-memory-mb";
             return false;
         }
+        return true;
+    }
+    if (key == "session-disk-limit")
+    {
+        if (!value.is_string())
+        {
+            status.error = "session-disk-limit must be DAYS,SIZE";
+            return false;
+        }
+        const std::optional<std::pair<int, uint64_t>> parsed = parse_disk_limit(value.get<std::string>());
+        if (!parsed)
+        {
+            status.error = "invalid session-disk-limit";
+            return false;
+        }
+        options.config.session_disk_max_age_days = parsed->first;
+        options.config.session_disk_max_bytes = parsed->second;
         return true;
     }
     if (key == "host")
@@ -609,13 +648,6 @@ bool apply_args(ServerOptions &options, const std::vector<std::string> &args, Se
         {
             options.config.reasoning = false;
         }
-        else if (arg == "--kv-sessions")
-        {
-            if (!take_int("--kv-sessions", options.config.kv_sessions))
-            {
-                return false;
-            }
-        }
         else if (arg == "--session-dir")
         {
             if (!take_text("--session-dir", options.config.session_dir))
@@ -623,19 +655,35 @@ bool apply_args(ServerOptions &options, const std::vector<std::string> &args, Se
                 return false;
             }
         }
-        else if (arg == "--session-cache-size")
+        else if (arg == "--session-memory-mb")
         {
             if (i + 1 >= args.size())
             {
-                return missing("--session-cache-size");
+                return missing("--session-memory-mb");
             }
-            const auto size = parse_byte_size(args[++i]);
-            if (!size)
+            const std::string &text = args[++i];
+            const std::optional<uint64_t> bytes = parse_size(text);
+            if (!bytes)
             {
-                status.error = "invalid --session-cache-size";
+                status.error = std::format("invalid value for --session-memory-mb: {}", text);
                 return false;
             }
-            options.config.session_cache_bytes = *size;
+            options.config.session_memory_bytes = *bytes;
+        }
+        else if (arg == "--session-disk-limit")
+        {
+            if (i + 1 >= args.size())
+            {
+                return missing("--session-disk-limit");
+            }
+            const std::optional<std::pair<int, uint64_t>> parsed = parse_disk_limit(args[++i]);
+            if (!parsed)
+            {
+                status.error = "invalid --session-disk-limit";
+                return false;
+            }
+            options.config.session_disk_max_age_days = parsed->first;
+            options.config.session_disk_max_bytes = parsed->second;
         }
         else if (arg == "--host")
         {

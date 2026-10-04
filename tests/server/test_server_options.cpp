@@ -45,9 +45,9 @@ static int test_config_file_sets_every_argument()
         "cache-type-v": "q4_0",
         "chat-template": "/tmp/chat#template.jinja",
         "reasoning": false,
-        "kv-sessions": 3,
         "session-dir": "/tmp/session dir",
-        "session-cache-size": "8G",
+        "session-memory-mb": 256,
+        "session-disk-limit": "14,32",
         "host": "0.0.0.0",
         "port": 9090,
         "api-key": "file-secret"
@@ -79,9 +79,10 @@ static int test_config_file_sets_every_argument()
     assertEquals(std::string("q4_0"), config.cache_type_v);
     assertEquals(std::string("/tmp/chat#template.jinja"), config.template_path);
     assertTrue(!config.reasoning);
-    assertEquals(3, config.kv_sessions);
     assertEquals(std::string("/tmp/session dir"), config.session_dir);
-    assertEquals(static_cast<uint64_t>(8) * 1024 * 1024 * 1024, config.session_cache_bytes);
+    assertEquals(static_cast<uint64_t>(256) * 1024 * 1024, config.session_memory_bytes);
+    assertEquals(14, config.session_disk_max_age_days);
+    assertEquals(static_cast<uint64_t>(32) * 1024 * 1024, config.session_disk_max_bytes);
     assertEquals(std::string("0.0.0.0"), parsed.options.host);
     assertEquals(9090, parsed.options.port);
     assertEquals(std::string("file-secret"), parsed.options.api_key);
@@ -123,10 +124,11 @@ static int test_server_args_keep_defaults()
     assertEquals(std::string("f16"), config.cache_type_v);
     assertTrue(config.template_path.empty());
     assertTrue(config.reasoning);
-    assertEquals(2, config.kv_sessions);
     assertTrue(config.session_dir.empty());
     assertTrue(config.kv_dir.empty());
-    assertEquals(static_cast<uint64_t>(0), config.session_cache_bytes);
+    assertEquals(static_cast<uint64_t>(0), config.session_memory_bytes);
+    assertEquals(-1, config.session_disk_max_age_days);
+    assertEquals(static_cast<uint64_t>(0), config.session_disk_max_bytes);
     assertEquals(std::string("127.0.0.1"), parsed.options.host);
     assertEquals(8080, parsed.options.port);
     assertTrue(parsed.options.api_key.empty());
@@ -149,13 +151,11 @@ static int test_command_line_overrides_config_file()
         "host": "1.1.1.1",
         "port": 2222,
         "reasoning": false,
-        "session-cache-size": "1K",
         "api-key": "from-file"
     })");
     write_test_file(second, R"({
         "context": 222,
-        "port": 3333,
-        "session-cache-size": 2097152
+        "port": 3333
     })");
 
     const ServerArgParse parsed = parse_server_args({
@@ -172,8 +172,6 @@ static int test_command_line_overrides_config_file()
         "--reasoning",
         "--max-tokens",
         "-1",
-        "--session-cache-size",
-        "0",
         "--api-key",
         "from-cli",
     });
@@ -184,12 +182,10 @@ static int test_command_line_overrides_config_file()
     assertEquals(9, parsed.options.port);
     assertTrue(parsed.options.config.reasoning);
     assertEquals(-1, parsed.options.config.max_tokens);
-    assertEquals(static_cast<uint64_t>(0), parsed.options.config.session_cache_bytes);
 
     const ServerArgParse from_files = parse_server_args({"-m", "cli.gguf", "--config-file", first, "--config-file", second});
     assertEquals(222, from_files.options.config.n_ctx);
     assertEquals(3333, from_files.options.port);
-    assertEquals(static_cast<uint64_t>(2) * 1024 * 1024, from_files.options.config.session_cache_bytes);
     assertTrue(!from_files.options.config.reasoning);
     assertEquals(std::string("1.1.1.1"), from_files.options.host);
     assertEquals(std::string("from-file"), from_files.options.api_key);
@@ -258,8 +254,39 @@ static int test_server_help_and_unknown_arguments()
     assertTrue(bad_number.error.find("invalid value for -c: 12x") != std::string::npos);
     assertTrue(!bad_number.usage);
 
-    const ServerArgParse bad_size = parse_server_args({"-m", "model.gguf", "--session-cache-size", "12xigs"});
-    assertEquals(std::string("invalid --session-cache-size"), bad_size.error);
+    const ServerArgParse old_kv = parse_server_args({"-m", "model.gguf", "--kv-sessions", "2"});
+    assertTrue(old_kv.usage);
+    assertTrue(old_kv.error.find("unknown argument: --kv-sessions") != std::string::npos);
+
+    const ServerArgParse old_cache = parse_server_args({"-m", "model.gguf", "--session-cache-size", "8G"});
+    assertTrue(old_cache.usage);
+    assertTrue(old_cache.error.find("unknown argument: --session-cache-size") != std::string::npos);
+
+    const ServerArgParse bad_memory = parse_server_args({"-m", "model.gguf", "--session-memory-mb", "-1"});
+    assertTrue(bad_memory.error.find("invalid value for --session-memory-mb") != std::string::npos);
+
+    const ServerArgParse bad_limit = parse_server_args({"-m", "model.gguf", "--session-disk-limit", "7"});
+    assertEquals(std::string("invalid --session-disk-limit"), bad_limit.error);
+
+    const ServerArgParse memory_gb = parse_server_args({"-m", "model.gguf", "--session-memory-mb", "1GB"});
+    assertTrue(memory_gb.error.empty());
+    assertEquals(static_cast<uint64_t>(1024) * 1024 * 1024, memory_gb.options.config.session_memory_bytes);
+
+    const ServerArgParse memory_mb = parse_server_args({"-m", "model.gguf", "--session-memory-mb", "512 mb"});
+    assertTrue(memory_mb.error.empty());
+    assertEquals(static_cast<uint64_t>(512) * 1024 * 1024, memory_mb.options.config.session_memory_bytes);
+
+    const ServerArgParse memory_bare = parse_server_args({"-m", "model.gguf", "--session-memory-mb", "4"});
+    assertTrue(memory_bare.error.empty());
+    assertEquals(static_cast<uint64_t>(4) * 1024 * 1024, memory_bare.options.config.session_memory_bytes);
+
+    const ServerArgParse disk_gb = parse_server_args({"-m", "model.gguf", "--session-disk-limit", "14,2GB"});
+    assertTrue(disk_gb.error.empty());
+    assertEquals(14, disk_gb.options.config.session_disk_max_age_days);
+    assertEquals(static_cast<uint64_t>(2) * 1024 * 1024 * 1024, disk_gb.options.config.session_disk_max_bytes);
+
+    const ServerArgParse bad_unit = parse_server_args({"-m", "model.gguf", "--session-memory-mb", "1TB"});
+    assertTrue(bad_unit.error.find("invalid value for --session-memory-mb") != std::string::npos);
     return EXIT_SUCCESS;
 }
 
@@ -314,10 +341,24 @@ static int test_config_file_errors()
     const ServerArgParse bad_flag_type = parse_server_args({"--config-file", flag});
     assertTrue(bad_flag_type.error.find("reasoning must be a boolean") != std::string::npos);
 
-    const auto bad_size = config_path(dir, "size.json");
-    write_test_file(bad_size, R"({"model": "model.gguf", "session-cache-size": "12xigs"})");
-    const ServerArgParse size = parse_server_args({"--config-file", bad_size});
-    assertTrue(size.error.find("invalid session-cache-size") != std::string::npos);
+    const auto bad_limit = config_path(dir, "limit.json");
+    write_test_file(bad_limit, R"({"model": "model.gguf", "session-disk-limit": 7})");
+    const ServerArgParse limit = parse_server_args({"--config-file", bad_limit});
+    assertTrue(limit.error.find("session-disk-limit must be DAYS,SIZE") != std::string::npos);
+
+    const auto sized = config_path(dir, "sized.json");
+    write_test_file(sized, R"({"model": "model.gguf", "session-memory-mb": "1GB", "session-disk-limit": "7,512MB"})");
+    const ServerArgParse from_sized = parse_server_args({"--config-file", sized});
+    assertTrue(from_sized.error.empty());
+    assertEquals(static_cast<uint64_t>(1024) * 1024 * 1024, from_sized.options.config.session_memory_bytes);
+    assertEquals(7, from_sized.options.config.session_disk_max_age_days);
+    assertEquals(static_cast<uint64_t>(512) * 1024 * 1024, from_sized.options.config.session_disk_max_bytes);
+
+    const auto old_keys = config_path(dir, "retired.json");
+    write_test_file(old_keys, R"({"model": "model.gguf", "kv-sessions": 2, "session-cache-size": "8G"})");
+    const ServerArgParse retired = parse_server_args({"--config-file", old_keys});
+    assertTrue(retired.usage);
+    assertTrue(retired.error.find("unknown argument: kv-sessions") != std::string::npos);
     return EXIT_SUCCESS;
 }
 

@@ -613,11 +613,11 @@ void Jobs::worker_loop(std::stop_token stop)
         task->set_result(split.visible, JobState::Done, std::move(actions));
         finish_task(task);
     }
-    // The live sequence is the only copy of the active session until this write.
-    // A kill skips it; the conversation file from the last finished turn remains.
+    // RAM and the live sequence are copied to disk here. A kill skips both.
     try
     {
         engine_.park_active_session();
+        engine_.flush_parked_sessions();
     }
     catch (const std::exception &e)
     {
