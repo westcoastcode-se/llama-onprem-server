@@ -11,7 +11,12 @@ namespace
 
 ChatMessage message(std::string role, std::string content, std::string reasoning = {})
 {
-    return ChatMessage{.role = std::move(role), .content = std::move(content), .reasoning_content = std::move(reasoning)};
+    return ChatMessage{.role = std::move(role),
+                       .content = std::move(content),
+                       .reasoning_content = std::move(reasoning),
+                       .tool_call_id = {},
+                       .tool_name = {},
+                       .tool_calls = {}};
 }
 
 SessionRecord awaiting_tools_record()

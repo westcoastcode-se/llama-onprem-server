@@ -269,7 +269,12 @@ void Session::accept_user_message(const SessionMessageRequest &msg)
     {
         shrink_stored_tool_results_unlocked();
     }
-    messages_.push_back(ChatMessage{.role = msg.role, .content = msg.content, .reasoning_content = {}});
+    messages_.push_back(ChatMessage{.role = msg.role,
+                                    .content = msg.content,
+                                    .reasoning_content = {},
+                                    .tool_call_id = {},
+                                    .tool_name = {},
+                                    .tool_calls = {}});
     turn_max_tokens_ = msg.max_tokens >= 0 ? msg.max_tokens : max_tokens_;
     mark_updated_unlocked();
 }
@@ -292,7 +297,10 @@ void Session::accept_tool_results(const SessionToolResultsRequest &body)
     // Qwen3.5 cannot drop that suffix, so the whole prompt would be prefilled again.
     messages_.push_back(ChatMessage{.role = std::string(ChatMessage::ROLE_USER),
                                     .content = format_tool_results(body, compress_tools_),
-                                    .reasoning_content = {}});
+                                    .reasoning_content = {},
+                                    .tool_call_id = {},
+                                    .tool_name = {},
+                                    .tool_calls = {}});
     turn_max_tokens_ = max_tokens_;
     clear_pending_unlocked();
     state_ = SessionState::Idle;

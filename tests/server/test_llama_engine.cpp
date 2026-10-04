@@ -1,4 +1,3 @@
-#include "cli/tui/visible_text.hpp"
 #include "common/span_prefix.hpp"
 #include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
@@ -16,134 +15,12 @@
 namespace
 {
 
-std::string visible(std::string_view text)
-{
-    VisibleText filter;
-    std::string out = filter.feed(text);
-    out += filter.finish();
-    return out;
-}
-
 std::string read_template(const std::string &path)
 {
     std::ifstream in(path);
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
-}
-
-/**
- * Plain text is shown as it is.
- */
-int test_visible_text_plain()
-{
-    assertEquals("Just the answer.", visible("Just the answer."));
-    assertEquals("a < b and c > d", visible("a < b and c > d"));
-    return EXIT_SUCCESS;
-}
-
-/**
- * A finished tool call is hidden. The answer on either side stays.
- */
-int test_visible_text_tool_call()
-{
-    assertEquals("I'll read it.\nDone.",
-                 visible("I'll read it.\n<tool_call>\n<function=read_file>\n<parameter=path>\n/tmp/a\n</parameter>\n"
-                         "</function>\n</tool_call>\nDone."));
-    assertEquals("Before\nAfter", visible("Before\n<tool_calls>\n{\"name\":\"read_file\"}\n</tool_calls>\nAfter"));
-    assertEquals("Ok.", visible("<function=read_file>\n<parameter=path>\nx\n</parameter>\n</function>\nOk."));
-    return EXIT_SUCCESS;
-}
-
-/**
- * Question and answer tags are hidden.
- */
-int test_visible_text_question()
-{
-    assertEquals("Thanks.", visible("<question>\nWhich one?\n</question>\n<answer>\nThe first\n</answer>\nThanks."));
-    return EXIT_SUCCESS;
-}
-
-/**
- * A Devstral call is hidden through the end of its JSON arguments.
- */
-int test_visible_text_devstral()
-{
-    assertEquals("I'll read it.\nDone.",
-                 visible("I'll read it.\n[TOOL_CALLS]read_file[ARGS]{\"path\":\"/tmp/a\"}\nDone."));
-    assertEquals("A\nB",
-                 visible("A\n[TOOL_CALLS]write_file[ARGS]{\"content\":\"x}y\"}[TOOL_CALLS]read_file[ARGS]{}\nB"));
-
-    VisibleText chunked;
-    std::string out = chunked.feed("Look.\n[TOOL_CAL");
-    out += chunked.feed("LS]read_file[ARGS]{\"path\":\"/tmp/a\"}\nDone.");
-    out += chunked.finish();
-    assertEquals("Look.\nDone.", out);
-
-    VisibleText open;
-    assertEquals("Partial ", open.feed("Partial [TOOL_CALLS]read_file[ARGS]{\"path\":"));
-    assertEquals("", open.finish());
-
-    // No prose before the call, so the assistant heading stays closed.
-    const std::string only = "[TOOL_CALLS]sub_agent[ARGS]{\"task\":\"Review the project\"}";
-    assertEquals("", visible(only));
-    VisibleText bytes;
-    std::string streamed;
-    for (const char ch : only)
-    {
-        streamed += bytes.feed(std::string_view(&ch, 1));
-    }
-    streamed += bytes.finish();
-    assertEquals("", streamed);
-    return EXIT_SUCCESS;
-}
-
-/**
- * Deepseek tool markers are hidden.
- */
-int test_visible_text_deepseek()
-{
-    assertEquals("Seen.",
-                 visible("<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>read_file\n```json\n{}\n```\n"
-                         "<｜tool▁call▁end｜><｜tool▁calls▁end｜>\nSeen."));
-    return EXIT_SUCCESS;
-}
-
-/**
- * A tool call split across chunks is still hidden.
- */
-int test_visible_text_chunked()
-{
-    VisibleText chunked;
-    std::string out = chunked.feed("I'll read it.\n<tool_ca");
-    out += chunked.feed("ll>\n<function=read_file>\n</function>\n</tool_call>\nDone.");
-    out += chunked.finish();
-    assertEquals("I'll read it.\nDone.", out);
-    return EXIT_SUCCESS;
-}
-
-/**
- * An unfinished tool call is dropped when the stream ends.
- */
-int test_visible_text_open()
-{
-    VisibleText open;
-    assertEquals("Partial ", open.feed("Partial <tool_call>\n<function=read_file>"));
-    assertEquals("", open.finish());
-    return EXIT_SUCCESS;
-}
-
-/**
- * A marker inside another family's span stays hidden with that span.
- */
-int test_visible_text_nested_markup()
-{
-    assertEquals("Before\nAfter",
-                 visible("Before\n[TOOL_CALLS]write_file[ARGS]{\"content\":\"<tool_call>x</tool_call>\"}\nAfter"));
-    assertEquals("Before\nAfter",
-                 visible("Before\n<tool_call>\n<function=write_file>\n<parameter=content>\n"
-                         "[TOOL_CALLS]read_file[ARGS]{}\n</parameter>\n</function>\n</tool_call>\nAfter"));
-    return EXIT_SUCCESS;
 }
 
 /**
@@ -482,14 +359,6 @@ int test_model_adapter_selection()
 
 int test_llama_engine()
 {
-    RUN_TEST(test_visible_text_plain);
-    RUN_TEST(test_visible_text_tool_call);
-    RUN_TEST(test_visible_text_question);
-    RUN_TEST(test_visible_text_devstral);
-    RUN_TEST(test_visible_text_deepseek);
-    RUN_TEST(test_visible_text_chunked);
-    RUN_TEST(test_visible_text_open);
-    RUN_TEST(test_visible_text_nested_markup);
     RUN_TEST(test_prefix);
     RUN_TEST(test_tool_parse_json);
     RUN_TEST(test_tool_parse_qwen);

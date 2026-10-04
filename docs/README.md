@@ -1,14 +1,11 @@
 # Callisto
 
-Callisto is a local coding agent. Two programs share the work:
-
-- `callisto_server` keeps sessions, generates text, and exposes it over HTTP. The server does not run tools.
-- `callisto_cli` is the agent. It talks to the server and runs tools in the directory where you start it.
+Callisto is a local model server. `callisto_server` loads one GGUF and speaks the OpenAI Responses API, so Codex CLI and Copilot CLI can use it. The server generates text and returns `function_call` items. The client runs the tools.
 
 llama.cpp is vendored under `vendors/llama.cpp`. You do not start a separate `llama-server`.
 
 | Guide | Contents |
 |---|---|
 | [Build](build.md) | Dependencies, Debug, Release, CUDA, and tests |
-| [Use](using.md) | Server, client, sessions, approval, and tools |
+| [Use](using.md) | Server flags, API key, Codex CLI, and Copilot CLI |
 | [Models](models.md) | Compatible Models |

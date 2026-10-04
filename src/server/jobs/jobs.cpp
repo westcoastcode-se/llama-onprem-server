@@ -507,7 +507,12 @@ void Jobs::worker_loop(std::stop_token stop)
         if (!system.empty())
         {
             msgs.insert(msgs.begin(),
-                        ChatMessage{.role = std::string(ChatMessage::ROLE_SYSTEM), .content = std::move(system), .reasoning_content = {}});
+                        ChatMessage{.role = std::string(ChatMessage::ROLE_SYSTEM),
+                                    .content = std::move(system),
+                                    .reasoning_content = {},
+                                    .tool_call_id = {},
+                                    .tool_name = {},
+                                    .tool_calls = {}});
         }
 
         // Start stream the LLM response
@@ -537,6 +542,7 @@ void Jobs::worker_loop(std::stop_token stop)
             LlamaRequest call;
             call.should_stop = [task] { return task->is_cancel_requested(); };
             call.max_tokens = task->request.max_tokens;
+            call.temp_override = task->request.temperature;
             call.session_id = task->request.session_id;
             call.tools = task->request.tools;
             call.on_prompt = [&] { publish_context(); };

@@ -49,7 +49,8 @@ static int test_config_file_sets_every_argument()
         "session-dir": "/tmp/session dir",
         "session-cache-size": "8G",
         "host": "0.0.0.0",
-        "port": 9090
+        "port": 9090,
+        "api-key": "file-secret"
     })");
 
     const ServerArgParse parsed = parse_server_args({"--config-file", path});
@@ -83,6 +84,7 @@ static int test_config_file_sets_every_argument()
     assertEquals(static_cast<uint64_t>(8) * 1024 * 1024 * 1024, config.session_cache_bytes);
     assertEquals(std::string("0.0.0.0"), parsed.options.host);
     assertEquals(9090, parsed.options.port);
+    assertEquals(std::string("file-secret"), parsed.options.api_key);
     return EXIT_SUCCESS;
 }
 
@@ -127,6 +129,7 @@ static int test_server_args_keep_defaults()
     assertEquals(static_cast<uint64_t>(0), config.session_cache_bytes);
     assertEquals(std::string("127.0.0.1"), parsed.options.host);
     assertEquals(8080, parsed.options.port);
+    assertTrue(parsed.options.api_key.empty());
     return EXIT_SUCCESS;
 }
 
@@ -146,7 +149,8 @@ static int test_command_line_overrides_config_file()
         "host": "1.1.1.1",
         "port": 2222,
         "reasoning": false,
-        "session-cache-size": "1K"
+        "session-cache-size": "1K",
+        "api-key": "from-file"
     })");
     write_test_file(second, R"({
         "context": 222,
@@ -170,6 +174,8 @@ static int test_command_line_overrides_config_file()
         "-1",
         "--session-cache-size",
         "0",
+        "--api-key",
+        "from-cli",
     });
     assertTrue(parsed.error.empty());
     assertEquals(std::string("from-cli.gguf"), parsed.options.config.model_path);
@@ -186,6 +192,11 @@ static int test_command_line_overrides_config_file()
     assertEquals(static_cast<uint64_t>(2) * 1024 * 1024, from_files.options.config.session_cache_bytes);
     assertTrue(!from_files.options.config.reasoning);
     assertEquals(std::string("1.1.1.1"), from_files.options.host);
+    assertEquals(std::string("from-file"), from_files.options.api_key);
+    assertEquals(std::string("from-cli"), parsed.options.api_key);
+
+    const ServerArgParse missing_key = parse_server_args({"-m", "model.gguf", "--api-key"});
+    assertEquals(std::string("missing value for --api-key"), missing_key.error);
     return EXIT_SUCCESS;
 }
 

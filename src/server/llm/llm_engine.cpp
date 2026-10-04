@@ -446,6 +446,17 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
         // The next prompt has to reproduce the <think> block that was generated. Qwen3.5
         // cannot drop a KV suffix, so a mismatch prefills the whole prompt again.
         msg.reasoning_content = message.reasoning_content;
+        msg.tool_call_id = message.tool_call_id;
+        msg.tool_name = message.tool_name;
+        msg.tool_calls.reserve(message.tool_calls.size());
+        for (const auto &call : message.tool_calls)
+        {
+            common_chat_tool_call tool_call;
+            tool_call.name = call.name;
+            tool_call.id = call.id;
+            tool_call.arguments = call.arguments.is_string() ? call.arguments.get<std::string>() : call.arguments.dump();
+            msg.tool_calls.push_back(std::move(tool_call));
+        }
         inputs.messages.push_back(std::move(msg));
     }
     inputs.tools.reserve(tools.size());

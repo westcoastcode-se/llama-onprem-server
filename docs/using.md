@@ -1,7 +1,6 @@
 # Use
 
-Start the server first, then the client in the project the agent should read and change. 
-The default address is `127.0.0.1:8080`.
+Start the server, then point Codex CLI or Copilot CLI at it. The default address is `127.0.0.1:8080`. The API is open unless you set an API key. `GET /health` never checks that key.
 
 ## Server
 
@@ -13,9 +12,7 @@ The default address is `127.0.0.1:8080`.
   -c 32768 -ngl 99
 ```
 
-The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, 
-such as `top-p` and `port`. `reasoning` is a boolean. `session-cache-size` is an integer or a string such as `"8G"`. 
-A later file overrides the keys it sets. Flags on the command line override the file.
+The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave `api-key` empty.
 
 ```bash
 ./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
@@ -53,184 +50,163 @@ A later file overrides the keys it sets. Flags on the command line override the 
 | `--cache-type-v TYPE` | f16 | KV type for V |
 | `--chat-template PATH` | the template in the GGUF | Your own Jinja file |
 | `--reasoning` / `--no-reasoning` | on | `enable_thinking` |
-| `--session-dir PATH` | `~/.local/state/callisto/sessions` and `~/.cache/callisto/sessions` | Conversation and KV. `PATH` stores both in one directory |
-| `--session-cache-size SIZE` | 0 | Cap in bytes. `0` means no cap. Suffixes `K`, `M`, `G`, `T` |
-| `--kv-sessions N` | unused | Accepted and unused. Parked KV is one file per session |
+| `--session-dir PATH` | `$XDG_CACHE_HOME/callisto/sessions` | Parked KV files. `PATH` stores them in that directory |
+| `--session-cache-size SIZE` | unused | Accepted and unused |
+| `--kv-sessions N` | unused | Accepted and unused. Parked KV is one file per id |
+| `--api-key KEY` | empty | Require `Authorization: Bearer KEY`. Empty leaves the API open |
 | `--config-file PATH` | | JSON settings. A later file overrides the keys it sets. Flags override the file |
 | `--host HOST` | 127.0.0.1 | Bind address |
 | `-p`, `--port N` | 8080 | Port |
 
-## Client
+`--api-key` and the config key `api-key` override the environment. When both are empty, `CALLISTO_API_KEY` is the key. A wrong or missing bearer token on any route except `GET /health` returns `401` with `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`.
+
+The process still creates `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). It does not write conversation files and it has no session HTTP API. KV files are `<id>.kv`. With no home directory and no XDG variable, KV files are under `/tmp/callisto/sessions`.
+
+## Codex CLI
+
+Codex sends one stateless `POST /v1/responses` per turn, with the whole history in `input`. The server generates. Codex runs the tools and sends the results back as `function_call_output`.
+
+### Install
+
+Install [Codex CLI](https://learn.chatgpt.com/docs/codex/cli) with one of these. The same command updates an existing install. Homebrew uses `brew upgrade --cask codex` instead.
+
+macOS or Linux, without Node.js:
 
 ```bash
-./cmake-build-release/callisto_cli --host 127.0.0.1 -p 8080
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-Those settings can also come from a JSON file. `--config-file` may be repeated. A later file overrides the keys it sets, and a flag overrides the file. `server` is one `[model=]host:port` string or an array of them.
+Windows, from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"
+```
+
+npm. The package name is `@openai/codex`:
 
 ```bash
-./cmake-build-release/callisto_cli --config-file callisto.json --approval auto
+npm install -g @openai/codex
 ```
 
-```json
-{
-  "host": "127.0.0.1",
-  "port": 8080,
-  "server": ["qwen=127.0.0.1:8080"],
-  "approval": "read-only",
-  "theme": "nord",
-  "show-think": true,
-  "questions": true,
-  "compress-tools": true
-}
-```
-
-With no subcommand, a fullscreen session opens in the current directory. You can pass a first task as arguments.
-
-`COLORTERM=truecolor` gives more colors. The theme comes from `--theme`, or from `$XDG_CONFIG_HOME/callisto/theme.json` (default `~/.config/callisto/theme.json`) when that file exists. 
-Built-in names are `default`, `ink`, `nord`, `forest`, and `ember`. A path is a JSON file. An object can set `"theme"` to a built-in name and override colors with a palette name or `#rrggbb`.
-
-Thinking stays on one line while it runs, the last three lines, then closes. A finished thinking row and a finished tool row show how long 
-they took once that time reaches one second. A tool call is one line and opens while you answer the approval question. 
-The assistant reply is a label and the text. The system prompt starts as a collapsed row. The context meter is in the upper right. 
-Click a thinking, tool, or system row, or press `Ctrl-O`, to open or close it. `Ctrl-C` cancels the current generation. 
-A running command is aborted, and the server is told how long it ran. `Ctrl-D` or `/exit` leaves. `/quit` leaves as well.
-
-### Several models
-
-One model is one server. Put the list in `server` in the config file, or pass `--server`. The client uses 
-the first server in that list when it answers, and otherwise the next one that answers. `/model` opens a dialog. 
-`/model name` or `/model 1` switches directly. Switching starts a new session on that server and copies the conversation, 
-so the next turn continues there.
+Homebrew:
 
 ```bash
-./cmake-build-release/callisto_cli --config-file callisto.json
+brew install --cask codex
 ```
 
-```json
-{
-  "server": ["qwen=127.0.0.1:8080", "devstral=127.0.0.1:8081"]
-}
+Run `codex` in a project directory. The first run asks you to sign in with ChatGPT or another method. Then point it at this server.
+
+Put this in `~/.codex/config.toml`. Provider keys in a project `.codex/config.toml` are ignored.
+
+```toml
+model = "local"
+model_provider = "callisto"
+
+[model_providers.callisto]
+name = "Callisto"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+requires_openai_auth = false
+```
+
+`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. Any `model` string is accepted and echoed. `requires_openai_auth = false` skips the ChatGPT login. Leave out `env_key` when the server has no API key. Codex then sends no `Authorization` header.
+
+### API key
+
+`env_key` is the name of an environment variable, not the secret. Writing that name in `config.toml` does not set the variable. Codex reads it from the process that sends the request. An empty value counts as missing.
+
+Interactive `codex` uses a shared background server. That server keeps the environment it had when it started. Exporting `CALLISTO_API_KEY` in a terminal does not change a server that is already running, so Codex reports `Missing environment variable: CALLISTO_API_KEY`.
+
+Export the same secret this server requires, restart the background server from that shell, and then start Codex:
+
+```toml
+requires_openai_auth = false
+env_key = "CALLISTO_API_KEY"
 ```
 
 ```bash
-./cmake-build-release/callisto_cli \
-  --server qwen=127.0.0.1:8080 \
-  --server devstral=127.0.0.1:8081
+export CALLISTO_API_KEY=the-secret
+codex app-server daemon restart
+codex
 ```
 
-`--server` replaces the `server` list from the config file. With neither, `--host` and `-p` are the single server. HTTP subcommands such as `health` and `session` always use `--host` and `-p`.
+`codex --no-daemon` skips the background server and reads the variable from that shell. `codex exec` does too.
 
-The fullscreen client still opens when no server answers. Status stays `offline`. The next message connects to the first server in the list that answers.
+Codex sends `Authorization: Bearer` with that value. The server must require the same secret. Start it in a shell where `CALLISTO_API_KEY` is already set and pass neither `--api-key` nor `api-key` in the config file, and the server reads the variable itself. Restart the server after exporting it. `--api-key` and the config-file key win over the environment variable, so a server started that way still accepts this bearer token only when the values match. A missing or different token is `401` with `invalid_api_key`. `GET /health` does not check it.
 
-### Flags
+`POST /responses` is the same handler when the base URL has no `/v1`.
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--config-file PATH` | | JSON settings. Repeat to layer files. Flags override the file |
-| `--host` | 127.0.0.1 | Server |
-| `-p`, `--port` | 8080 | Port |
-| `--server SPEC` | | `[model=]host:port`. Repeat it, or separate entries with commas |
-| `--approval` | read-only | `read-only`, `auto`, or `full` |
-| `--resume` | off | Continue the session in `~/.local/state/callisto/last-session` for this directory and server |
-| `--session ID` | | Continue an id created on this computer |
-| `--show-think` / `--hide-think` | shown | The thinking line |
-| `--debug` | off | Leave tool-call XML in the assistant text |
-| `--questions` / `--no-questions` | on | Let the model pause and ask a question |
-| `--compress-tools` / `--no-compress-tools` | on | Applies to a new session. Finished tool results shrink when the next message is saved |
-| `--theme` | `theme.json` when that file exists | Name or path |
-| `--json` | off | Print the API object as JSON |
-| `-v`, `--verbose` | off | HTTP log |
+The reply is server-sent events when `stream` is true, which is what Codex sends. The final event is `response.completed`, `response.incomplete` with reason `interrupted` when the turn is cancelled, or `response.failed`. A request the server will not run returns `400` with `{"error":{"message","type":"invalid_request_error"}}`.
 
-`callisto_cli --help` and `--help-all` list the subcommands.
+`prompt_cache_key` is the KV slot. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`. The name is at most 120 characters. With no key, the slot is `codex`. One engine sequence is live. Another key parks the current sequence in `<id>.kv` and loads that key's file.
 
-## Sessions
+`instructions` is the system text. `developer` messages are treated as system text and folded into that first message. A reasoning item whose content and summary are empty is skipped, unless `encrypted_content` is plain text rather than a ciphertext blob. `previous_response_id` is ignored, because the client resends the input. Image, audio, and file inputs are rejected.
 
-The client resumes only sessions created on this computer. The list is `~/.local/state/callisto/known-sessions` (`$XDG_STATE_HOME/callisto/known-sessions`). A session from another computer is refused. `/resume` lists your sessions that the server still holds, newest first, including ones restored after a restart. `--resume` takes the latest session for this directory and this server. `--session ID` takes an id from that list.
+Tools of type `function` and `custom` are sent to the model. A `namespace` tool is flattened: each member is named `namespace.member`, and a `function_call` for that tool is returned with the leaf `name` and the `namespace` field. `tool_search` is accepted as a function named `tool_search` when the request omits a name. Hosted tools such as `web_search` are skipped. A flat tool whose name contains `.` is left as one name unless that prefix was declared as a namespace.
 
-`POST /v1/sessions` with an `id` resumes that session, leaves the conversation unchanged, and refreshes its timestamp. The other fields in that body are ignored. A missing or zero `id` creates a session. An unknown id is 404.
+`GET /v1/models` and `GET /models` return the loaded GGUF file name, without the directory or the `.gguf` suffix. `owned_by` is `callisto`. Codex does not fill its `/model` picker from that list.
 
-`GET /v1/sessions/{id}` is the header. The transcript is `GET /v1/sessions/{id}/messages`. Opening a transcript refreshes the timestamp, so a newer resume is kept.
+## Copilot CLI
 
-The system prompt is fixed when the session is created. A changed prompt shows up in a new session on a server built after the change.
+Copilot CLI uses the same `POST /v1/responses` route as Codex. Start the server first, then start Copilot in a project directory with the variables below. Copilot runs the tools. The server generates and returns `function_call` items.
 
-When context is strictly over 80% and the server is waiting for tools or for an answer, you can choose `Continue`, `Compact and continue`, or `Compact and stop`. Exactly 80% does not offer the choice. Esc cancels without compacting. `exec` without a terminal is not prompted. A sub-agent past 80% compacts itself and continues, without a prompt. If a message does not fit, it is removed. You can stop, or compact and continue. A sub-agent compacts and continues. `/compact` summarizes the chat into a new session and stops at the prompt.
+### Install
 
-## Approval
+Install [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli) with one of these. The same command updates an existing install.
 
-`--approval read-only` is the default. Reads run immediately. A write, a shell command, or a network tool asks first.
-
-- `y` this once
-- `n` no
-- `a` always this tool
-- `f` full access for the rest of the session
-
-`auto` also allows writes whose path is inside the working directory. Shell and network tools still ask. `full` asks for nothing. In `exec` without a terminal, a call that would have asked is denied.
-
-`/approval` shows the mode. `/approval read-only`, `/approval auto`, and `/approval full` change it. `suggest` is the same mode as `read-only`.
-
-## Commands in the session
-
-| Command | What it does |
-|---|---|
-| `/help` | Show the commands |
-| `/model [name]` | Open the server dialog, or switch by name or number |
-| `/approval [mode]` | Show or set `read-only`, `auto`, or `full` |
-| `/status` | Session, approval, server, and directory |
-| `/diff` | `git diff --stat` in the working directory |
-| `/compact` | Summarize the chat into a new session and stop |
-| `/clear` | Start a new session |
-| `/resume` | Continue a session created on this computer |
-| `/exit` | Leave |
-
-## Project files
-
-`AGENTS.md` in the project root is added to the system prompt when the file has text. The prompt tells the model to look at the root files and determine what kind of project this is.
-
-A skill is `.agents/skills/<name>/SKILL.md` in the project, or `~/.agents/skills/<name>/SKILL.md` for the user. A project skill with the same name is the one listed. The prompt lists the name, one line, and the path. The model reads the file when the task needs that procedure.
-
-Wide exploration belongs in `sub_agent`. The sub-agent runs, then is summarized. The parent receives that summary, and `git diff --stat` when the working tree has changes. A sub-agent does not start its own sub-agents. `exec` does not register `sub_agent`.
-
-## Tools
-
-| Tool | Kind | Approval in `read-only` |
-|---|---|---|
-| `read_file` | read | runs |
-| `list_directory` | read | runs |
-| `file_search` | read | runs |
-| `search_text` | read | runs |
-| `edit_file` | write | asks |
-| `write_file` | write | asks |
-| `execute_command` | shell | asks |
-| `web_fetch` | network | asks |
-| `web_search` | network | asks |
-| `sub_agent` | other | asks |
-
-`edit_file` applies a unified diff. A patch of only added lines creates the file. A change is matched by its context lines. The result is the diff that landed. `web_search` calls SearXNG at `http://localhost:4488`. Start it with `docker compose up -d`.
-
-With `--compress-tools`, tool results stay in full while calls are in progress. They shrink to one line when the next user message is saved. Small results, at most 240 characters and 3 lines, and sub-agent results stay whole.
-
-## One task from a script
+macOS or Linux, with Homebrew:
 
 ```bash
-./cmake-build-release/callisto_cli exec "Summarize the README"
+brew install --cask copilot-cli
 ```
 
-`exec` prints plain text and then exits. The same session and approval flags apply.
-
-## HTTP from the terminal
-
-These subcommands talk to the API. They do not run local tools.
+macOS or Linux, with the install script:
 
 ```bash
-./cmake-build-release/callisto_cli health
-./cmake-build-release/callisto_cli session list
-./cmake-build-release/callisto_cli session create --json
-./cmake-build-release/callisto_cli session get ID
-./cmake-build-release/callisto_cli session delete ID
-./cmake-build-release/callisto_cli send ID "the text"
-./cmake-build-release/callisto_cli job get ID JOB
-./cmake-build-release/callisto_cli job cancel ID JOB
+curl -fsSL https://gh.io/copilot-install | bash
 ```
 
-`session create --id ID` resumes a session created on this computer. `session snapshot ID` clones a session. `send` with no text reads stdin. `tools ID` posts a tool result and streams the reply. `--file` is a JSON array, or an object with `tool_results`. `--help-all` shows the remaining flags.
+npm, on any platform. The package name is `@github/copilot`. Node.js 22 or later is required:
+
+```bash
+npm install -g @github/copilot
+```
+
+Windows, from PowerShell:
+
+```powershell
+winget install GitHub.Copilot
+```
+
+### Start
+
+The default provider wire is Chat Completions (`POST /v1/chat/completions`). This server does not implement that route. Set `COPILOT_PROVIDER_WIRE_API=responses` so Copilot posts to `{base_url}/responses`.
+
+`COPILOT_PROVIDER_BASE_URL` must end in `/v1`. `COPILOT_PROVIDER_TYPE=openai` is the OpenAI-compatible provider. `COPILOT_MODEL` is required for a custom provider. Any string is accepted and echoed. The server does not switch GGUF files.
+
+`COPILOT_OFFLINE=true` skips GitHub login, telemetry, and other calls to GitHub. Prompts still go to this server. Without it, Copilot may ask you to sign in with GitHub even though the model requests use the local provider.
+
+In the project directory, with the server already listening:
+
+```bash
+export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080/v1
+export COPILOT_PROVIDER_TYPE=openai
+export COPILOT_PROVIDER_WIRE_API=responses
+export COPILOT_MODEL=local
+export COPILOT_OFFLINE=true
+copilot
+```
+
+Leave `COPILOT_PROVIDER_API_KEY` unset when the server has no API key. An empty value can make the request fail. When the server was started with `--api-key`, or with `api-key` in the config file, or with `CALLISTO_API_KEY`, set the same secret before `copilot`:
+
+```bash
+export COPILOT_PROVIDER_API_KEY=the-same-key
+```
+
+Copilot sends it as `Authorization: Bearer`. `GET /health` does not check the key.
+
+If `~/.copilot/providers.json` declares any provider or model, that file overrides `COPILOT_PROVIDER_*`. `COPILOT_PROVIDERS_CONFIG` selects another path. Remove those entries, or point the file at this server, before relying on the variables above.
+
+Copilot requires a model that streams and can call tools. GitHub recommends a context of at least 128k tokens. `-c` on the server is that limit. Image, audio, and file inputs are rejected. Namespace tools are flattened to `namespace.member` and returned with a `namespace` field, as described above.
+
+The request and event shapes are in [src/api/openapi.yaml](../src/api/openapi.yaml). Provider variables are documented by GitHub under [Using your own LLM models](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models).

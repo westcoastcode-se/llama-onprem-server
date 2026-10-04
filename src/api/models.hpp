@@ -106,6 +106,18 @@ struct ChatTool
 
 };
 
+/** Structured tool call. Codex sends these; the server does not run them. */
+struct ParsedToolCall
+{
+    std::string id;
+    std::string name;
+    nlohmann::json arguments = nlohmann::json::object();
+
+    [[nodiscard]] nlohmann::json to_json() const;
+
+    static ParsedToolCall from_json(const nlohmann::json &j);
+};
+
 struct ChatMessage
 {
     static constexpr std::string_view ROLE_ASSISTANT = "assistant";
@@ -117,6 +129,11 @@ struct ChatMessage
     std::string content;
     // Think body kept apart from content so the next turn can round-trip the template.
     std::string reasoning_content;
+    // Set on a tool-role message. The chat template uses them to place the result.
+    std::string tool_call_id;
+    std::string tool_name;
+    // Calls on an assistant message. Arguments stay JSON so the template can render them.
+    std::vector<ParsedToolCall> tool_calls;
 
     /**
      * Validate required properties. Assistant content may be empty when the turn
@@ -171,19 +188,6 @@ struct CreateSessionRequest
     [[nodiscard]] nlohmann::json to_json() const;
 
     static CreateSessionRequest from_json(const nlohmann::json &j);
-
-};
-
-/** Structured tool call the model wants the *client* to execute. */
-struct ParsedToolCall
-{
-    std::string id;
-    std::string name;
-    nlohmann::json arguments = nlohmann::json::object();
-
-    [[nodiscard]] nlohmann::json to_json() const;
-
-    static ParsedToolCall from_json(const nlohmann::json &j);
 
 };
 
