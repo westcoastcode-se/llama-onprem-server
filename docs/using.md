@@ -7,7 +7,7 @@ Start the server, then point Codex CLI or Copilot CLI at it. The default address
 `-c` is the context length. `-ngl 99` puts the layers on the GPU when the server is built with CUDA.
 
 ```bash
-./cmake-build-release/callisto_server \
+./cmake-build-release/callisto \
   -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf \
   -c 32768 -ngl 99
 ```
@@ -15,7 +15,7 @@ Start the server, then point Codex CLI or Copilot CLI at it. The default address
 The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave `api-key` empty.
 
 ```bash
-./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
+./cmake-build-release/callisto --config-file callisto.json -p 8081
 ```
 
 ```json

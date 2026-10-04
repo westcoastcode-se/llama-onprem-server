@@ -3,7 +3,7 @@ info:
   title: Callisto server
   version: 1.0.0
   description: |
-    HTTP API for `callisto_server`. One loaded model generates text. Codex CLI and
+    HTTP API for `callisto`. One loaded model generates text. Codex CLI and
     Copilot CLI use `POST /v1/responses` (`wire_api = "responses"`). The server does
     not execute tools. It returns `function_call` items, and the client runs them.
 

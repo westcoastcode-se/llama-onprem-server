@@ -2,9 +2,9 @@
 
 # Callisto
 
-Callisto is a local model server. `callisto_server` loads one GGUF and speaks the OpenAI Responses API, so [Codex CLI](https://github.com/openai/codex) can use it. The server generates text and returns `function_call` items. Codex runs the tools.
+Callisto is a local model server. `callisto` loads one GGUF and speaks the OpenAI Responses API, so [Codex CLI](https://github.com/openai/codex) can use it. The server generates text and returns `function_call` items. Codex runs the tools.
 
-Example how it looks like running callisto via Codex CLI. Remember that performance and quality of the result depends on the model you are using.
+This is Callisto answering through Codex CLI. Speed and quality follow the model you load.
 
 ![Codex Example](example.gif)
 
@@ -34,14 +34,14 @@ cmake --build cmake-build-debug -j$(nproc)
 
 That produces:
 
-- `cmake-build-debug/callisto_server`
+- `cmake-build-debug/callisto`
 - `cmake-build-debug/tests`
 
 A Release build is the one to run a model with:
 
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
+cmake --build cmake-build-release --target callisto -j$(nproc)
 ```
 
 GPU layers need CUDA turned on. `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints the architecture number. An RTX 40-series card is `89`.
@@ -49,10 +49,10 @@ GPU layers need CUDA turned on. `nvidia-smi --query-gpu=name,compute_cap --forma
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
+cmake --build cmake-build-release --target callisto -j$(nproc)
 ```
 
-The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages `callisto_server` already built in `cmake-build-release`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md`. Build the server first. The same steps are in [docs/build.md](docs/build.md).
+The devcontainer image has no CUDA. `docker build . -t callisto:latest` copies `cmake-build-release/callisto` to `/callisto`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md`. Build the server first. The same steps are in [docs/build.md](docs/build.md).
 
 # Run
 
@@ -69,28 +69,22 @@ EOF
 Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`. The API is open unless `--api-key` or `CALLISTO_API_KEY` is set. `GET /health` never checks the key.
 
 ```bash
-./cmake-build-release/callisto_server \
-  -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf \
-  -c 32768 -ngl 99
-```
-
-A GGUF whose file name contains `devstral` is parsed as Devstral. Temperature `0.15` and `--min-p 0.01` match that model.
-
-```bash
-./cmake-build-release/callisto_server \
+./cmake-build-release/callisto \
   -m Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf \
-  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081 --session-memory-mb 4GB
+  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 --session-memory-mb 4GB
 ```
+
+A GGUF whose file name contains `devstral` is parsed as Devstral. Temperature `0.15` and `--min-p 0.01` match that model. Other models and their starting flags are in [docs/models.md](docs/models.md).
 
 The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave the key empty.
 
 ```bash
-./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
+./cmake-build-release/callisto --config-file callisto.json -p 8081
 ```
 
 ```json
 {
-  "model": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "model": "Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf",
   "context": 32768,
   "gpu-layers": 99,
   "host": "127.0.0.1"
@@ -165,7 +159,7 @@ Callisto sits on other people's work. Thank you.
 
 | Project | Role | License |
 |---|---|---|
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) and ggml | Model runtime in `callisto_server` | MIT, © 2023-2026 The ggml authors |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) and ggml | Model runtime in `callisto` | MIT, © 2023-2026 The ggml authors |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON | MIT, © 2013-2025 Niels Lohmann |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | HTTP | MIT, © Yuji Hirose |
 | [subprocess.h](https://github.com/sheredom/subprocess.h) | Process helper inside llama.cpp | The Unlicense |

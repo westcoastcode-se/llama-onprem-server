@@ -1,3 +1,3 @@
-REST models for `callisto_server`.
+REST models for `callisto`.
 
 The HTTP API is described in [openapi.yaml](openapi.yaml).

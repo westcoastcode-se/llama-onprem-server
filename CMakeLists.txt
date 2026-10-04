@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.1)
-project(localai)
+project(callisto)
 
 #
 # Properties
@@ -70,7 +70,7 @@ set(COMMON_TOOL_SOURCES
 #
 # HTTP server. One model and a job queue. Codex and Copilot use POST /v1/responses.
 #
-add_executable(callisto_server
+add_executable(callisto
         src/api/models.cpp
         src/server/main.cpp
         src/server/options.cpp
@@ -85,10 +85,10 @@ add_executable(callisto_server
         src/server/llm/session_kv_store.cpp
         src/server/llm/session_park.cpp
         src/server/responses/responses.cpp)
-configure_localai_target(callisto_server)
-target_include_directories(callisto_server BEFORE PRIVATE
+configure_localai_target(callisto)
+target_include_directories(callisto BEFORE PRIVATE
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
-target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(callisto PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # Unit tests. No model weights required. llama is linked for the chat template.

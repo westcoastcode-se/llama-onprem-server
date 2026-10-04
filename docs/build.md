@@ -29,7 +29,7 @@ cmake --build cmake-build-debug -j$(nproc)
 
 That produces:
 
-- `cmake-build-debug/callisto_server`
+- `cmake-build-debug/callisto`
 - `cmake-build-debug/tests`
 
 ## Release
@@ -38,7 +38,7 @@ Release is the build to run a model with.
 
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
+cmake --build cmake-build-release --target callisto -j$(nproc)
 ```
 
 ## GPU
@@ -48,7 +48,7 @@ Turn CUDA on and set the architecture. `nvidia-smi --query-gpu=name,compute_cap 
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
+cmake --build cmake-build-release --target callisto -j$(nproc)
 ```
 
 ## Tests
@@ -64,9 +64,11 @@ ctest --test-dir cmake-build-debug --output-on-failure
 
 ## Docker
 
-The `Dockerfile` packages a server that is already built. Build Release first. The image contains `callisto_server`, the license, and `THIRD_PARTY_NOTICES.md`. It has no CUDA. The process still binds `127.0.0.1` unless you pass `--host`.
+The `Dockerfile` packages a server that is already built. Build Release first. The image copies that binary to `/callisto`, and also copies the license and `THIRD_PARTY_NOTICES.md`. It has no CUDA and no default command. The process still binds `127.0.0.1` unless you pass `--host`. From another machine, pass `--host 0.0.0.0` and mount the GGUF.
 
 ```bash
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
-docker build . -t local_ai:latest
+cmake --build cmake-build-release --target callisto -j$(nproc)
+docker build . -t callisto:latest
+docker run --rm -p 8080:8080 -v "$PWD:/models" callisto:latest \
+  /callisto -m /models/model.gguf --host 0.0.0.0
 ```

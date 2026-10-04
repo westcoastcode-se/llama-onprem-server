@@ -1,0 +1,9 @@
+model = "local"
+model_provider = "callisto"
+
+[model_providers.callisto]
+name = "Callisto"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+requires_openai_auth = false
+env_key = "CALLISTO_API_KEY"

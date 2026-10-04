@@ -2,13 +2,13 @@
 
 Callisto is MIT, copyright (c) 2026 westcoastcode-se. See `LICENSE`.
 
-The program `callisto_server` also contains the projects below. Source copies keep their own license files. This file repeats the notices those licenses require when the binary is distributed. It is not an endorsement by the copyright holders.
+The program `callisto` also contains the projects below. Source copies keep their own license files. This file repeats the notices those licenses require when the binary is distributed. It is not an endorsement by the copyright holders.
 
 ## llama.cpp and ggml
 
 https://github.com/ggml-org/llama.cpp
 
-Used by `callisto_server`. License text: `vendors/llama.cpp/LICENSE`.
+Used by `callisto`. License text: `vendors/llama.cpp/LICENSE`.
 
 ```
 MIT License
@@ -99,7 +99,7 @@ SOFTWARE.
 
 https://github.com/sheredom/subprocess.h
 
-Linked into `callisto_server` through `llama-common`. Public domain, the Unlicense. Notice: `vendors/llama.cpp/vendor/sheredom/subprocess.h`.
+Linked into `callisto` through `llama-common`. Public domain, the Unlicense. Notice: `vendors/llama.cpp/vendor/sheredom/subprocess.h`.
 
 ```
 This is free and unencumbered software released into the public domain.
@@ -132,7 +132,7 @@ For more information, please refer to <http://unlicense.org/>
 
 https://curl.se
 
-The `tests` binary links the system libcurl. `callisto_server` does not. This repository does not vendor curl. Curl's own license applies to that library: https://curl.se/docs/copyright.html
+The `tests` binary links the system libcurl. `callisto` does not. This repository does not vendor curl. Curl's own license applies to that library: https://curl.se/docs/copyright.html
 
 ## Not part of the binaries
 

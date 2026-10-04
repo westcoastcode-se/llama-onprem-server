@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-// Command line of callisto_server. Host and port are not model settings.
+// Command line of callisto. Host and port are not model settings.
 struct ServerOptions
 {
     LlamaConfig config;
