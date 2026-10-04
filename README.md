@@ -2,13 +2,21 @@
 
 # Callisto
 
-Callisto is a local model server. `callisto_server` loads one GGUF and speaks the OpenAI Responses API, so [Codex CLI](https://github.com/openai/codex) can use it. The server generates text and returns `function_call` items. Codex runs the tools.
+Clone the project with:
 
-Example how it looks like running callisto via Codex CLI. Remember that performance and quality of the result depends on the model you are using.
+Callisto is a local model server. `callisto` loads one GGUF and speaks the OpenAI Responses API, so [Codex CLI](https://github.com/openai/codex) can use it. The server generates text and returns `function_call` items. 
+The server is compatible with API's used by both Codex or Copilot CLI.
+
+```bash
+git clone --recurse-submodules https://github.com/westcoastcode-se/llama-onprem-server.git 
+```
+
+The speed and quality depends on what model you are using, how good your hardware is and what
+parameters you're using.
+
+Example on how it looks like running in Codex:
 
 ![Codex Example](example.gif)
-
-llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.
 
 Build and day-to-day use are in [docs/](docs/README.md).
 
@@ -34,14 +42,14 @@ cmake --build cmake-build-debug -j$(nproc)
 
 That produces:
 
-- `cmake-build-debug/callisto_server`
+- `cmake-build-debug/callisto`
 - `cmake-build-debug/tests`
 
 A Release build is the one to run a model with:
 
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
+cmake --build cmake-build-release --target callisto -j$(nproc)
 ```
 
 GPU layers need CUDA turned on. `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints the architecture number. An RTX 40-series card is `89`.
@@ -49,10 +57,10 @@ GPU layers need CUDA turned on. `nvidia-smi --query-gpu=name,compute_cap --forma
 ```bash
 cmake -B cmake-build-release -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
-cmake --build cmake-build-release --target callisto_server -j$(nproc)
+cmake --build cmake-build-release --target callisto -j$(nproc)
 ```
 
-The devcontainer image has no CUDA. `docker build . -t local_ai:latest` packages `callisto_server` already built in `cmake-build-release`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md`. Build the server first. The same steps are in [docs/build.md](docs/build.md).
+The devcontainer image has no CUDA. `docker build . -t callisto:latest` copies `cmake-build-release/callisto` to `/callisto`, plus `LICENSE` and `THIRD_PARTY_NOTICES.md`. Build the server first. The same steps are in [docs/build.md](docs/build.md).
 
 # Run
 
@@ -66,31 +74,25 @@ snapshot_download(repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", all
 EOF
 ```
 
-Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`. The API is open unless `--api-key` or `CALLISTO_API_KEY` is set. `GET /health` never checks the key.
+Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`. When `--api-key`, the config key `api-key`, and `CALLISTO_API_KEY` are all empty, the server generates a 32-character key and writes it to the log. `GET /health` never checks the key.
 
 ```bash
-./cmake-build-release/callisto_server \
-  -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf \
-  -c 32768 -ngl 99
-```
-
-A GGUF whose file name contains `devstral` is parsed as Devstral. Temperature `0.15` and `--min-p 0.01` match that model.
-
-```bash
-./cmake-build-release/callisto_server \
+./cmake-build-release/callisto \
   -m Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf \
-  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081
+  -c 32768 -ngl 99 -t 0.15 --min-p 0.01 --session-memory-mb 4GB
 ```
 
-The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave the key empty.
+A GGUF whose file name contains `devstral` is parsed as Devstral. Temperature `0.15` and `--min-p 0.01` match that model. Other models and their starting flags are in [docs/models.md](docs/models.md).
+
+The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave the key empty. When that variable is empty too, the server generates a 32-character key and writes it to the log.
 
 ```bash
-./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
+./cmake-build-release/callisto --config-file callisto.json -p 8081
 ```
 
 ```json
 {
-  "model": "Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+  "model": "Devstral-Small-2-24B-Instruct-2512-GGUF/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf",
   "context": 32768,
   "gpu-layers": 99,
   "host": "127.0.0.1"
@@ -126,11 +128,11 @@ wire_api = "responses"
 requires_openai_auth = false
 ```
 
-`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. The server accepts any `model` string and echoes it. `requires_openai_auth = false` skips the ChatGPT login. Leave out `env_key` when the server has no API key.
+`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. The server accepts any `model` string and echoes it. `requires_openai_auth = false` skips the ChatGPT login. The server always requires a bearer token. Set `env_key` to the variable that holds the same secret the server is using.
 
-When the server requires a key, `env_key` is the name of an environment variable, not the secret. Add `env_key = "CALLISTO_API_KEY"` under `[model_providers.callisto]`. Interactive `codex` reads that variable from its background server, not from the terminal that launches it. Export `CALLISTO_API_KEY`, run `codex app-server daemon restart`, and then start `codex`. `codex --no-daemon` reads the variable from the current shell instead. The server reads that same variable when `--api-key` and the config-file key are both empty. Those two win when set, and the bearer token must match them. [docs/using.md](docs/using.md) has the full provider block.
+When the server requires a key, `env_key` is the name of an environment variable, not the secret. Add `env_key = "CALLISTO_API_KEY"` under `[model_providers.callisto]`. Interactive `codex` reads that variable from its background server, not from the terminal that launches it. Export `CALLISTO_API_KEY`, run `codex app-server daemon restart`, and then start `codex`. `codex --no-daemon` reads the variable from the current shell instead. The server reads that same variable when `--api-key` and the config-file key are both empty. Those two win when set, and the bearer token must match them. When the flag, the file, and the variable are all empty, copy the generated key from the server log. [docs/using.md](docs/using.md) has the full provider block.
 
-`prompt_cache_key` from Codex is the KV slot for that thread. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`, and the name is cut at 120 characters. With no key, the slot is `codex`. The file is `<id>.kv` under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores those files in `PATH`.
+`prompt_cache_key` from Codex is the KV slot for that thread. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`, and the name is cut at 120 characters. With no key, the slot is `codex`. The file is `<id>.kv` under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores those files in `PATH`. `--session-memory-mb SIZE` keeps parked sessions in RAM. A bare number is megabytes, and `MB` or `GB` sets the unit. `--session-disk-limit DAYS,SIZE` deletes files older than that many days when the directory is larger than that size. [docs/using.md](docs/using.md) has the details.
 
 Image, audio, and file inputs are rejected. The server does not run tools. Namespace tools are flattened to `namespace.member` and returned with a `namespace` field. `custom` and `tool_search` are accepted. Hosted tools such as `web_search` are skipped.
 
@@ -146,7 +148,7 @@ brew install --cask copilot-cli
 
 The other official installs are `npm install -g @github/copilot` (Node.js 22 or later) and `curl -fsSL https://gh.io/copilot-install | bash`. On Windows, from PowerShell: `winget install GitHub.Copilot`. [docs/using.md](docs/using.md) has the same steps next to the server flags.
 
-The default wire is Chat Completions. This server implements `POST /v1/responses` only, so set `COPILOT_PROVIDER_WIRE_API=responses`. `COPILOT_PROVIDER_BASE_URL` must end in `/v1`. `COPILOT_MODEL` is any string and is echoed. `COPILOT_OFFLINE=true` skips GitHub login. Leave `COPILOT_PROVIDER_API_KEY` unset unless the server was given an API key.
+The default wire is Chat Completions. This server implements `POST /v1/responses` only, so set `COPILOT_PROVIDER_WIRE_API=responses`. `COPILOT_PROVIDER_BASE_URL` must end in `/v1`. `COPILOT_MODEL` is any string and is echoed. `COPILOT_OFFLINE=true` skips GitHub login. Set `COPILOT_PROVIDER_API_KEY` to the server key. When the server generated one, copy it from the log.
 
 ```bash
 export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080/v1
@@ -165,7 +167,7 @@ Callisto sits on other people's work. Thank you.
 
 | Project | Role | License |
 |---|---|---|
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) and ggml | Model runtime in `callisto_server` | MIT, © 2023-2026 The ggml authors |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) and ggml | Model runtime in `callisto` | MIT, © 2023-2026 The ggml authors |
 | [nlohmann/json](https://github.com/nlohmann/json) | JSON | MIT, © 2013-2025 Niels Lohmann |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | HTTP | MIT, © Yuji Hirose |
 | [subprocess.h](https://github.com/sheredom/subprocess.h) | Process helper inside llama.cpp | The Unlicense |

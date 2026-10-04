@@ -1,0 +1,11 @@
+model = "local"
+model_provider = "callisto"
+sandbox_mode = "danger-full-access"
+approval_policy = "on-request"
+
+[model_providers.callisto]
+name = "Callisto"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+requires_openai_auth = false
+env_key = "CALLISTO_API_KEY"

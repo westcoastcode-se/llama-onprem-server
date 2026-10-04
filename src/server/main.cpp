@@ -65,19 +65,26 @@ void print_usage(const char *argv0)
                  "  --cache-type-v TYPE    KV cache V type (default f16)\n"
                  "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
                  "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
-                 "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
                  "  --session-dir PATH     parked KV files. Default is\n"
                  "                         $XDG_CACHE_HOME/callisto/sessions. PATH stores them there.\n"
-                 "  --session-cache-size SIZE  accepted, unused\n"
+                 "  --session-memory-mb SIZE  park sessions in RAM (default 0 = disk only).\n"
+                 "                         A number is megabytes. MB and GB are accepted.\n"
+                 "  --session-disk-limit DAYS,SIZE\n"
+                 "                         on start, on shutdown, and after each disk write, delete files\n"
+                 "                         older than DAYS while the directory is larger than SIZE.\n"
+                 "                         SIZE is megabytes, or a value with an MB or GB suffix.\n"
                  "  --config-file PATH  JSON object of these settings\n"
-                 "  --api-key KEY require Authorization: Bearer KEY. Empty leaves the API open.\n"
+                 "  --api-key KEY require Authorization: Bearer KEY.\n"
                  "                CALLISTO_API_KEY is used when this flag and the config file leave it empty.\n"
+                 "                When all three are empty, a 32-character key is generated and written to the log.\n"
                  "                GET /health never checks the key.\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)\n"
                  "\n"
                  "JSON keys use these flag names. Short flags are model, context, batch, gpu-layers, and temperature.\n"
-                 "reasoning is true or false. api-key is a string. session-cache-size is accepted and unused.\n"
+                 "reasoning is true or false. api-key is a string.\n"
+                 "session-memory-mb is megabytes, or a string such as 512MB or 1GB.\n"
+                 "session-disk-limit is DAYS,SIZE, for example 14,512MB or 14,1GB.\n"
                  "A later --config-file overrides the keys it sets.\n"
                  "Arguments on the command line override the file. The environment variable does not override them.",
                  argv0);
@@ -112,11 +119,25 @@ int main(int argc, char **argv)
         return 1;
     }
     ServerOptions options = parsed.options;
+    bool generated_api_key = false;
     if (options.api_key.empty())
     {
-        if (const char *from_env = std::getenv("CALLISTO_API_KEY"))
+        if (const char *from_env = std::getenv("CALLISTO_API_KEY"); from_env != nullptr && *from_env != '\0')
         {
             options.api_key = from_env;
+        }
+        else
+        {
+            try
+            {
+                options.api_key = generate_api_key();
+            }
+            catch (const std::exception &e)
+            {
+                log_error("failed to generate API key: ", e.what());
+                return 1;
+            }
+            generated_api_key = true;
         }
     }
     const LlamaConfig &config = options.config;
@@ -171,10 +192,11 @@ int main(int argc, char **argv)
     svr.set_write_timeout(300, 0);
     svr.set_keep_alive_timeout(300);
 
-    if (!api_key.empty())
+    if (generated_api_key)
     {
-        log_info("API key required for every route except GET /health");
+        log_info("generated API key ", api_key);
     }
+    log_info("API key required for every route except GET /health");
 
     // Reject a missing or wrong bearer token before the handler runs. The header is not logged.
     svr.set_pre_routing_handler([api_key](const auto &req, auto &res) {

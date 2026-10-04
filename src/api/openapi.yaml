@@ -3,17 +3,17 @@ info:
   title: Callisto server
   version: 1.0.0
   description: |
-    HTTP API for `callisto_server`. One loaded model generates text. Codex CLI and
+    HTTP API for `callisto`. One loaded model generates text. Codex CLI and
     Copilot CLI use `POST /v1/responses` (`wire_api = "responses"`). The server does
     not execute tools. It returns `function_call` items, and the client runs them.
 
     Copilot's default wire is Chat Completions. Set `COPILOT_PROVIDER_WIRE_API=responses`
     and `COPILOT_PROVIDER_BASE_URL` to a URL that ends in `/v1`.
 
-    Authentication is off unless `--api-key`, the config key `api-key`, or
-    `CALLISTO_API_KEY` sets a key. The flag and the file win over the environment
-    variable. When a key is set, every route except `GET /health` requires
-    `Authorization: Bearer <key>`. A missing or wrong key is `401` with
+    Every route except `GET /health` requires `Authorization: Bearer <key>`.
+    `--api-key` and the config key `api-key` win over `CALLISTO_API_KEY`. When all
+    three are empty, the server generates a 32-character key and writes it to the
+    log. A missing or wrong key is `401` with
     `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`.
 
     The process binds `127.0.0.1:8080` unless `--host` and `-p` / `--port` say otherwise.
@@ -179,7 +179,7 @@ paths:
 components:
   responses:
     Unauthorized:
-      description: API key is configured and the bearer token is missing or wrong.
+      description: The bearer token is missing or wrong. `GET /health` does not use this response.
       content:
         application/json:
           schema:

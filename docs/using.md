@@ -1,21 +1,21 @@
 # Use
 
-Start the server, then point Codex CLI or Copilot CLI at it. The default address is `127.0.0.1:8080`. The API is open unless you set an API key. `GET /health` never checks that key.
+Start the server, then point Codex CLI or Copilot CLI at it. The default address is `127.0.0.1:8080`. The server requires `Authorization: Bearer`. When `--api-key`, the config key `api-key`, and `CALLISTO_API_KEY` are all empty, it generates a 32-character key and writes it to the log. `GET /health` never checks that key.
 
 ## Server
 
 `-c` is the context length. `-ngl 99` puts the layers on the GPU when the server is built with CUDA.
 
 ```bash
-./cmake-build-release/callisto_server \
+./cmake-build-release/callisto \
   -m Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf \
   -c 32768 -ngl 99
 ```
 
-The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave `api-key` empty.
+The same values can live in JSON. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave `api-key` empty. When that variable is empty too, the server generates a 32-character key and writes it to the log.
 
 ```bash
-./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
+./cmake-build-release/callisto --config-file callisto.json -p 8081
 ```
 
 ```json
@@ -51,16 +51,20 @@ The same values can live in JSON. Short flags use names such as `model`, `contex
 | `--chat-template PATH` | the template in the GGUF | Your own Jinja file |
 | `--reasoning` / `--no-reasoning` | on | `enable_thinking` |
 | `--session-dir PATH` | `$XDG_CACHE_HOME/callisto/sessions` | Parked KV files. `PATH` stores them in that directory |
-| `--session-cache-size SIZE` | unused | Accepted and unused |
-| `--kv-sessions N` | unused | Accepted and unused. Parked KV is one file per id |
-| `--api-key KEY` | empty | Require `Authorization: Bearer KEY`. Empty leaves the API open |
+| `--session-memory-mb SIZE` | 0 | Keep parked sessions in RAM. A number is megabytes. `512MB` and `1GB` set the unit. `0` writes every session to disk |
+| `--session-disk-limit DAYS,SIZE` | off | On start, on shutdown, and after each disk write, delete files older than `DAYS` while the directory is larger than `SIZE`. `SIZE` is megabytes, or a value such as `512MB` or `1GB` |
+| `--api-key KEY` | generated | Require `Authorization: Bearer KEY`. When this flag, the config key, and `CALLISTO_API_KEY` are empty, the server generates 32 characters and writes them to the log |
 | `--config-file PATH` | | JSON settings. A later file overrides the keys it sets. Flags override the file |
 | `--host HOST` | 127.0.0.1 | Bind address |
 | `-p`, `--port N` | 8080 | Port |
 
-`--api-key` and the config key `api-key` override the environment. When both are empty, `CALLISTO_API_KEY` is the key. A wrong or missing bearer token on any route except `GET /health` returns `401` with `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`.
+`--api-key` and the config key `api-key` override the environment. When both are empty, `CALLISTO_API_KEY` is the key. When that variable is empty too, the server generates a 32-character key and writes it to the log. A wrong or missing bearer token on any route except `GET /health` returns `401` with `{"error":{"message":"invalid api key","type":"invalid_request_error","code":"invalid_api_key"}}`.
 
 The process still creates `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). It does not write conversation files and it has no session HTTP API. KV files are `<id>.kv`. With no home directory and no XDG variable, KV files are under `/tmp/callisto/sessions`.
+
+`--session-memory-mb` keeps the newest parked sessions in RAM. When a new session does not fit, the oldest RAM sessions are written to disk. A session larger than the whole budget goes straight to disk. `0` is disk only. On shutdown every RAM session is written out.
+
+`--session-disk-limit 14,512` means 14 days and 512 megabytes. `14,1GB` is the same check with a 1 gigabyte cap. `MB` and `GB` may be written in either case. The check runs when the server starts, when it shuts down, and each time a session is written to disk. A file is deleted only when it is older than 14 days and the files together are larger than the size. Newer files stay even if the directory is still over that size. Omitting the flag keeps every file.
 
 ## Codex CLI
 
@@ -109,7 +113,7 @@ wire_api = "responses"
 requires_openai_auth = false
 ```
 
-`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. Any `model` string is accepted and echoed. `requires_openai_auth = false` skips the ChatGPT login. Leave out `env_key` when the server has no API key. Codex then sends no `Authorization` header.
+`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. Any `model` string is accepted and echoed. `requires_openai_auth = false` skips the ChatGPT login. The server always requires a bearer token, so set `env_key` to the variable that holds the same secret.
 
 ### API key
 
@@ -132,7 +136,7 @@ codex
 
 `codex --no-daemon` skips the background server and reads the variable from that shell. `codex exec` does too.
 
-Codex sends `Authorization: Bearer` with that value. The server must require the same secret. Start it in a shell where `CALLISTO_API_KEY` is already set and pass neither `--api-key` nor `api-key` in the config file, and the server reads the variable itself. Restart the server after exporting it. `--api-key` and the config-file key win over the environment variable, so a server started that way still accepts this bearer token only when the values match. A missing or different token is `401` with `invalid_api_key`. `GET /health` does not check it.
+Codex sends `Authorization: Bearer` with that value. The server must require the same secret. Start it in a shell where `CALLISTO_API_KEY` is already set and pass neither `--api-key` nor `api-key` in the config file, and the server reads the variable itself. Restart the server after exporting it. `--api-key` and the config-file key win over the environment variable, so a server started that way still accepts this bearer token only when the values match. When the flag, the file, and `CALLISTO_API_KEY` are all empty, the server generates a 32-character key and writes it to the log. Copy that value into the variable Codex reads. A missing or different token is `401` with `invalid_api_key`. `GET /health` does not check it.
 
 `POST /responses` is the same handler when the base URL has no `/v1`.
 
@@ -197,7 +201,7 @@ export COPILOT_OFFLINE=true
 copilot
 ```
 
-Leave `COPILOT_PROVIDER_API_KEY` unset when the server has no API key. An empty value can make the request fail. When the server was started with `--api-key`, or with `api-key` in the config file, or with `CALLISTO_API_KEY`, set the same secret before `copilot`:
+Set `COPILOT_PROVIDER_API_KEY` to the same secret the server requires. An empty value can make the request fail. That secret is `--api-key`, the config key `api-key`, `CALLISTO_API_KEY`, or the 32-character key written to the server log when none of those are set:
 
 ```bash
 export COPILOT_PROVIDER_API_KEY=the-same-key

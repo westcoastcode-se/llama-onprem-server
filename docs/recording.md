@@ -1,10 +1,9 @@
-# Screen Recording
+# Screen recording
 
-You can screen-record into a GIF using `asciinema`.
+Record a terminal session with `asciinema`, then turn the cast into a GIF. `example.gif` in the repository root was made this way.
 
 ```bash
 asciinema rec demo.cast
-# Do stuff
-# Then convert to GIF
-sudo docker run --rm -u $(id -u):$(id -g) -v $PWD:/data ghcr.io/asciinema/agg demo.cast demo.gif --speed 2
+# use Callisto, then stop the recording
+sudo docker run --rm -u $(id -u):$(id -g) -v "$PWD":/data ghcr.io/asciinema/agg demo.cast demo.gif --speed 2
 ```

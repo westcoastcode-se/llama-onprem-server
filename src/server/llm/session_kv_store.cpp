@@ -1,7 +1,10 @@
 #include "session_kv_store.hpp"
 
+#include "session_park.hpp"
+
 #include "llama.h"
 
+#include <chrono>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -165,6 +168,102 @@ bool SessionKvStore::copy(const std::string_view from, const std::string_view to
     }
     std::filesystem::copy_file(source, path_for(to), std::filesystem::copy_options::overwrite_existing, error);
     return !error;
+}
+
+bool SessionKvStore::save_captured(const std::string_view id, const std::span<const int32_t> tokens,
+                                   const std::span<const uint8_t> state)
+{
+    if (!valid_id(id) || tokens.empty() || tokens.size() > kMaxTokens || state.size() < kSeqMemoryPrefix)
+    {
+        return false;
+    }
+    const auto final_path = path_for(id);
+    const auto tmp_path = dir_ / (std::string(id) + ".kv.tmp");
+    {
+        std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+        const uint32_t magic = LLAMA_STATE_SEQ_MAGIC;
+        const uint32_t version = LLAMA_STATE_SEQ_VERSION;
+        const uint32_t n_tokens = static_cast<uint32_t>(tokens.size());
+        out.write(reinterpret_cast<const char *>(&magic), sizeof(magic));
+        out.write(reinterpret_cast<const char *>(&version), sizeof(version));
+        out.write(reinterpret_cast<const char *>(&n_tokens), sizeof(n_tokens));
+        out.write(reinterpret_cast<const char *>(tokens.data()),
+                  static_cast<std::streamsize>(tokens.size() * sizeof(int32_t)));
+        const auto body = state.subspan(kSeqMemoryPrefix);
+        if (!body.empty())
+        {
+            out.write(reinterpret_cast<const char *>(body.data()), static_cast<std::streamsize>(body.size()));
+        }
+        out.close();
+        if (!out)
+        {
+            remove_file(tmp_path);
+            return false;
+        }
+    }
+    std::error_code error;
+    std::filesystem::rename(tmp_path, final_path, error);
+    if (error)
+    {
+        remove_file(tmp_path);
+        return false;
+    }
+    return true;
+}
+
+std::vector<std::string> SessionKvStore::trim_expired(const int max_age_days, const uint64_t max_bytes)
+{
+    if (!opened_ || max_age_days < 0)
+    {
+        return {};
+    }
+    std::vector<DiskSessionStat> stats;
+    std::error_code error;
+    std::filesystem::directory_iterator it(dir_, error);
+    if (error)
+    {
+        return {};
+    }
+    while (it != std::filesystem::directory_iterator{})
+    {
+        const std::filesystem::directory_entry entry = *it;
+        std::error_code stat_error;
+        if (entry.is_regular_file(stat_error) && !stat_error)
+        {
+            const std::string name = entry.path().filename().string();
+            constexpr std::string_view suffix = ".kv";
+            if (name.size() > suffix.size() && name.ends_with(suffix))
+            {
+                const std::string id = name.substr(0, name.size() - suffix.size());
+                if (valid_id(id))
+                {
+                    stat_error.clear();
+                    const auto bytes = entry.file_size(stat_error);
+                    if (!stat_error)
+                    {
+                        stat_error.clear();
+                        const auto mtime = entry.last_write_time(stat_error);
+                        if (!stat_error)
+                        {
+                            stats.push_back(DiskSessionStat{id, static_cast<uint64_t>(bytes), mtime});
+                        }
+                    }
+                }
+            }
+        }
+        error.clear();
+        it.increment(error);
+        if (error)
+        {
+            break;
+        }
+    }
+    const DiskGcPlan plan = plan_session_disk_gc(stats, max_age_days, max_bytes, std::chrono::file_clock::now());
+    for (const std::string &id : plan.drop)
+    {
+        remove(id);
+    }
+    return plan.drop;
 }
 
 void SessionKvStore::remove(const std::string_view id)

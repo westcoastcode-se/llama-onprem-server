@@ -2,12 +2,14 @@
 
 #include "../api/messages.hpp"
 #include "session_kv_store.hpp"
+#include "session_park.hpp"
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -52,10 +54,13 @@ struct LlamaConfig
     uint32_t seed = 0xFFFFFFFFu;
     // New tokens per turn. Negative means "until the context is full".
     int max_tokens = -1;
-    // Parsed so older command lines still start. The value is unused. Parked KV is one file per session.
-    int kv_sessions = 2;
-    // 0 does not limit the session files. Otherwise the oldest conversation and KV files are removed until they fit.
-    uint64_t session_cache_bytes = 0;
+    // 0 parks every session as a file. Otherwise the newest parked sessions stay in RAM
+    // until they exceed this many bytes, and the oldest are written to disk.
+    uint64_t session_memory_bytes = 0;
+    // Negative disables deletion. Otherwise, on start, on shutdown, and after each disk write,
+    // files older than this many days are removed while the directory is over session_disk_max_bytes.
+    int session_disk_max_age_days = -1;
+    uint64_t session_disk_max_bytes = 0;
     // Conversation files (<id>.json). Empty means the XDG state directory.
     std::string session_dir;
     // KV files (<id>.kv). Empty means the XDG cache directory, or session_dir when that was set.
@@ -109,7 +114,7 @@ struct LlamaRequest
 // One loaded GGUF and one llama_context.
 //
 // The context holds a single KV sequence. active_tokens_ is the token ids that sequence contains.
-// Other sessions are parked with llama_state_seq_save_file: the sequence state and those ids.
+// Other sessions are parked in RAM while they fit in session_memory_bytes, and on disk otherwise.
 // Switching sessions writes the live sequence out and reads the next one back, so a change is not
 // a full prefill.
 //
@@ -147,9 +152,13 @@ class LlamaEngine
     // Call from the worker thread, never during llama_decode.
     void clone_session(const std::string &from, const std::string &to);
 
-    // Write the live sequence. The worker calls this when it stops, so a restart can load it.
+    // Write the live sequence into RAM or, when it does not fit, to disk.
     // Call from the worker thread, never during llama_decode.
     void park_active_session();
+
+    // Write every in-memory session to disk, then apply the disk age and size limit.
+    // The worker calls this on shutdown after park_active_session. A kill skips both.
+    void flush_parked_sessions();
 
     // Tokenize prompt, reuse the matching KV prefix, then sample until EOG, max_tokens, or abort.
     // An aborted or failed turn rolls the cache back to the prefix it started from.
@@ -202,8 +211,16 @@ class LlamaEngine
     void rebuild_sampler(float temperature);
     // Make session_id the sequence in the context, parking the previous one if it differs.
     void activate_session(const std::string &session_id);
-    // Load a parked file into sequence 0. False when this session has nothing saved.
+    // Load a parked session into sequence 0. Memory wins over a file with the same id.
+    // False when this session has nothing saved.
     bool unpark_session(const std::string &session_id);
+    // Copy sequence 0 into a snapshot. Empty when the context has no sequence to copy.
+    [[nodiscard]] std::optional<SessionSnapshot> capture_live_sequence();
+    // Keep snapshot in RAM when it fits. Otherwise write it to disk. False when the disk write fails.
+    bool store_snapshot(const std::string &id, SessionSnapshot snapshot);
+    // Stream the live sequence to disk. Used when RAM parking is off or the capture does not fit.
+    void write_live_to_disk(const std::string &id);
+    void trim_session_disk();
     // Keep the first n_tokens of the live sequence. The family's KvTrim decides whether a suffix
     // can be dropped. False clears the sequence, and the caller decodes its prompt from the start.
     [[nodiscard]] bool trim_kv_to(size_t n_tokens);
@@ -235,6 +252,8 @@ class LlamaEngine
     std::vector<size_t> message_ends_;
     // Parked sessions live here as files. The live sequence stays in the context.
     SessionKvStore kv_store_;
+    // Sessions parked in RAM. Empty when session_memory_bytes is 0.
+    SessionMemory memory_;
 
     // End offset of each message inside prompt_tokens. Reuses message_ends_ while that prefix still matches.
     [[nodiscard]] std::vector<size_t> message_token_ends(std::span<const ChatMessage> messages,
