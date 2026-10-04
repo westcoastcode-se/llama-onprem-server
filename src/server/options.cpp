@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <format>
@@ -9,8 +10,10 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/random.h>
 #include <utility>
 
 namespace
@@ -783,4 +786,21 @@ ServerArgParse parse_server_args(const std::vector<std::string> &args)
         result.usage = true;
     }
     return result;
+}
+
+std::string generate_api_key()
+{
+    std::array<unsigned char, 16> bytes{};
+    if (::getentropy(bytes.data(), bytes.size()) != 0)
+    {
+        throw std::runtime_error("getentropy failed");
+    }
+    std::string key(bytes.size() * 2, '\0');
+    constexpr char hex[] = "0123456789abcdef";
+    for (std::size_t i = 0; i < bytes.size(); ++i)
+    {
+        key[i * 2] = hex[bytes[i] >> 4];
+        key[i * 2 + 1] = hex[bytes[i] & 0x0f];
+    }
+    return key;
 }

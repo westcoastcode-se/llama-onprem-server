@@ -363,6 +363,29 @@ static int test_config_file_errors()
 }
 
 /**
+ * A generated key is 32 lowercase hex characters and a second call differs.
+ */
+static int test_generate_api_key()
+{
+    const std::string first = generate_api_key();
+    const std::string second = generate_api_key();
+    assertEquals(static_cast<std::size_t>(32), first.size());
+    assertEquals(static_cast<std::size_t>(32), second.size());
+    assertTrue(first != second);
+    for (const char ch : first)
+    {
+        const bool hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+        assertTrue(hex);
+    }
+    for (const char ch : second)
+    {
+        const bool hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+        assertTrue(hex);
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
  * Run all server argument tests
  */
 int test_server_options()
@@ -373,5 +396,6 @@ int test_server_options()
     RUN_TEST(test_config_file_strings_and_flag_like_values);
     RUN_TEST(test_server_help_and_unknown_arguments);
     RUN_TEST(test_config_file_errors);
+    RUN_TEST(test_generate_api_key);
     return EXIT_SUCCESS;
 }
