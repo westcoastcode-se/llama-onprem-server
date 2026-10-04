@@ -4,6 +4,10 @@
 
 Callisto is a local model server. `callisto_server` loads one GGUF and speaks the OpenAI Responses API, so [Codex CLI](https://github.com/openai/codex) can use it. The server generates text and returns `function_call` items. Codex runs the tools.
 
+Example how it looks like running callisto via Codex CLI. Remember that performance and quality of the result depends on the model you are using.
+
+![Codex Example](example.gif)
+
 llama.cpp is vendored under `vendors/llama.cpp`. You do not clone or start `llama-server` yourself.
 
 Build and day-to-day use are in [docs/](docs/README.md).
