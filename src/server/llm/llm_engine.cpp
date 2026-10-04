@@ -1,5 +1,6 @@
 #include "llm_engine.hpp"
 
+#include "chat_prompt.hpp"
 #include "common/log.hpp"
 #include "common/xdg.hpp"
 #include "context_params.hpp"
@@ -259,8 +260,26 @@ LlamaEngine LlamaEngine::create(const LlamaConfig &config)
     {
         log_info("[llm] chat template from model");
     }
+    std::string template_src = override_src;
+    if (template_src.empty())
+    {
+        if (const char *embedded = llama_model_chat_template(engine.model_.get(), nullptr))
+        {
+            template_src = embedded;
+        }
+    }
     // A non-empty override replaces the GGUF template. An empty string reads the template from the model.
-    engine.templates_.reset(common_chat_templates_init(engine.model_.get(), override_src).release());
+    // Devstral is the exception: its source is patched and then passed in, so the raise is gone.
+    std::string init_src = override_src;
+    if (template_requires_alternating_roles(template_src))
+    {
+        init_src = relax_strict_role_template(template_src);
+        template_src = init_src;
+        engine.merge_user_turns_ = true;
+        log_info("[llm] chat template allows a user turn after tools");
+    }
+    engine.keep_reasoning_ = template_src.empty() || template_renders_reasoning(template_src);
+    engine.templates_.reset(common_chat_templates_init(engine.model_.get(), init_src).release());
 
     llama_context_params ctx_params = llama_context_default_params();
     apply_context_knobs(ctx_params, config.n_ctx, config.n_batch, config.n_threads, config.n_threads_batch,
@@ -425,27 +444,109 @@ int LlamaEngine::session_token_count(std::string_view session_id) const
     return static_cast<int>(std::min(count, cap));
 }
 
-std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, bool add_assistant,
-                                         std::span<const ChatTool> tools) const
+namespace
 {
-    if (!templates_)
+
+std::string replace_all(std::string text, std::string_view from, std::string_view to)
+{
+    if (from.empty())
     {
-        throw LlamaRuntimeError("no chat template");
+        return text;
     }
+    std::string out;
+    out.reserve(text.size());
+    size_t start = 0;
+    while (start < text.size())
+    {
+        const size_t at = text.find(from, start);
+        if (at == std::string::npos)
+        {
+            out.append(text, start, std::string::npos);
+            break;
+        }
+        out.append(text, start, at - start);
+        out.append(to);
+        start = at + from.size();
+    }
+    return out;
+}
+
+std::vector<ChatMessage> merge_consecutive_users(std::span<const ChatMessage> messages)
+{
+    std::vector<ChatMessage> merged;
+    merged.reserve(messages.size());
+    for (const ChatMessage &message : messages)
+    {
+        if (!merged.empty() && message.role == ChatMessage::ROLE_USER && merged.back().role == ChatMessage::ROLE_USER)
+        {
+            if (!message.content.empty())
+            {
+                if (!merged.back().content.empty())
+                {
+                    merged.back().content.push_back('\n');
+                }
+                merged.back().content += message.content;
+            }
+            continue;
+        }
+        merged.push_back(message);
+    }
+    return merged;
+}
+
+} // namespace
+
+bool template_requires_alternating_roles(const std::string_view source)
+{
+    return source.find("conversation roles must alternate") != std::string_view::npos;
+}
+
+std::string relax_strict_role_template(std::string source)
+{
+    constexpr std::string_view kSingle =
+        "raise_exception('After the optional system message, conversation roles must alternate user and assistant "
+        "roles except for tool calls and results.')";
+    constexpr std::string_view kDouble =
+        "raise_exception(\"After the optional system message, conversation roles must alternate user and assistant "
+        "roles except for tool calls and results.\")";
+    source = replace_all(std::move(source), kSingle, "''");
+    source = replace_all(std::move(source), kDouble, "''");
+    return source;
+}
+
+bool template_renders_reasoning(const std::string_view source)
+{
+    return source.find("reasoning_content") != std::string_view::npos || source.find("<think>") != std::string_view::npos ||
+           source.find("[THINK]") != std::string_view::npos;
+}
+
+std::string render_chat_prompt(const common_chat_templates *templates, const std::span<const ChatMessage> messages,
+                               const std::span<const ChatTool> tools, const ChatPromptPolicy &policy)
+{
+    if (!templates)
+    {
+        throw std::runtime_error("no chat template");
+    }
+
+    const std::vector<ChatMessage> merged = policy.merge_users ? merge_consecutive_users(messages) : std::vector<ChatMessage>{};
+    const std::span<const ChatMessage> turns = policy.merge_users ? std::span<const ChatMessage>{merged} : messages;
 
     common_chat_templates_inputs inputs;
     inputs.use_jinja = true;
-    inputs.add_generation_prompt = add_assistant;
-    inputs.enable_thinking = config_.reasoning;
-    inputs.messages.reserve(messages.size());
-    for (const auto &message : messages)
+    inputs.add_generation_prompt = policy.add_assistant;
+    inputs.enable_thinking = policy.enable_thinking;
+    inputs.messages.reserve(turns.size());
+    for (const auto &message : turns)
     {
         common_chat_msg msg;
         msg.role = message.role;
         msg.content = message.content;
         // The next prompt has to reproduce the <think> block that was generated. Qwen3.5
         // cannot drop a KV suffix, so a mismatch prefills the whole prompt again.
-        msg.reasoning_content = message.reasoning_content;
+        if (policy.keep_reasoning)
+        {
+            msg.reasoning_content = message.reasoning_content;
+        }
         msg.tool_call_id = message.tool_call_id;
         msg.tool_name = message.tool_name;
         msg.tool_calls.reserve(message.tool_calls.size());
@@ -464,7 +565,7 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
     {
         if (tool.name.empty())
         {
-            throw LlamaRuntimeError("tool name is required");
+            throw std::runtime_error("tool name is required");
         }
         common_chat_tool spec;
         spec.name = tool.name;
@@ -475,17 +576,17 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
             const auto parsed = nlohmann::json::parse(parameters);
             if (!parsed.is_object())
             {
-                throw LlamaRuntimeError("tool parameters must be a JSON object");
+                throw std::runtime_error("tool parameters must be a JSON object");
             }
             spec.parameters = parsed.dump();
         }
-        catch (const LlamaRuntimeError &)
+        catch (const std::runtime_error &)
         {
             throw;
         }
         catch (const std::exception &e)
         {
-            throw LlamaRuntimeError(std::format("tool parameters are not JSON: {}", e.what()));
+            throw std::runtime_error(std::format("tool parameters are not JSON: {}", e.what()));
         }
         inputs.tools.push_back(std::move(spec));
     }
@@ -494,7 +595,7 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
     // Templates that cannot build that parser still render; force_pure_content asks for the text only.
     auto render = [&](bool pure) {
         inputs.force_pure_content = pure;
-        return common_chat_templates_apply(templates_.get(), inputs).prompt;
+        return common_chat_templates_apply(templates, inputs).prompt;
     };
     try
     {
@@ -508,8 +609,26 @@ std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, 
         }
         catch (const std::exception &e)
         {
-            throw LlamaRuntimeError(std::format("failed to format chat template: {}", e.what()));
+            throw std::runtime_error(std::format("failed to format chat template: {}", e.what()));
         }
+    }
+}
+
+std::string LlamaEngine::format_messages(std::span<const ChatMessage> messages, bool add_assistant,
+                                         std::span<const ChatTool> tools) const
+{
+    ChatPromptPolicy policy;
+    policy.add_assistant = add_assistant;
+    policy.enable_thinking = config_.reasoning;
+    policy.keep_reasoning = keep_reasoning_;
+    policy.merge_users = merge_user_turns_;
+    try
+    {
+        return render_chat_prompt(templates_.get(), messages, tools, policy);
+    }
+    catch (const std::exception &e)
+    {
+        throw LlamaRuntimeError(e.what());
     }
 }
 

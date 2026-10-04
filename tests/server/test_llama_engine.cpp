@@ -1,6 +1,7 @@
 #include "common/span_prefix.hpp"
 #include "server/agent/model_adapter.hpp"
 #include "server/agent/response_parse.hpp"
+#include "server/llm/chat_prompt.hpp"
 #include "server/llm/kv_match.hpp"
 #include "server/llm/kv_trim.hpp"
 #include "server/llm/token_offset.hpp"
@@ -8,6 +9,7 @@
 
 #include "chat.h"
 
+#include <array>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -355,6 +357,90 @@ int test_model_adapter_selection()
     return EXIT_SUCCESS;
 }
 
+/**
+ * Codex sends the environment and the question as two user messages, then a user turn
+ * after a tool result. Devstral's template raises on both. The prompt still has to
+ * carry the tools and the tool result.
+ */
+int test_devstral_template_accepts_codex_turns()
+{
+    const auto path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "devstral-small-2.jinja";
+    const std::string source = read_template(path.string());
+    assertTrue(!source.empty());
+    assertTrue(template_requires_alternating_roles(source));
+    assertTrue(!template_renders_reasoning(source));
+    assertTrue(template_renders_reasoning("<think>{{ messages }}</think>"));
+    assertTrue(!template_requires_alternating_roles("<think>{{ messages }}</think>"));
+
+    ChatTool tool;
+    tool.name = "shell";
+    tool.description = "Run a command";
+    tool.parameters = R"({"type":"object","properties":{"command":{"type":"string"}},"required":["command"]})";
+
+    ChatMessage system;
+    system.role = std::string(ChatMessage::ROLE_SYSTEM);
+    system.content = "You are a coding agent.";
+    ChatMessage environment;
+    environment.role = std::string(ChatMessage::ROLE_USER);
+    environment.content = "<environment_context>cwd</environment_context>";
+    ChatMessage question;
+    question.role = std::string(ChatMessage::ROLE_USER);
+    question.content = "Skapa en hello world";
+
+    const auto strict = common_chat_templates_init(nullptr, source, "<s>", "</s>");
+    ChatPromptPolicy plain;
+    plain.merge_users = false;
+    plain.keep_reasoning = false;
+    bool strict_rejected = false;
+    try
+    {
+        (void)render_chat_prompt(strict.get(), std::array{system, environment, question}, std::array{tool}, plain);
+    }
+    catch (const std::exception &error)
+    {
+        strict_rejected = std::string(error.what()).find("must alternate") != std::string::npos;
+    }
+    assertTrue(strict_rejected);
+
+    const auto relaxed = common_chat_templates_init(nullptr, relax_strict_role_template(source), "<s>", "</s>");
+    ChatPromptPolicy codex;
+    codex.merge_users = true;
+    codex.keep_reasoning = false;
+    const std::string prompt = render_chat_prompt(relaxed.get(), std::array{system, environment, question}, std::array{tool}, codex);
+    assertTrue(prompt.find("[AVAILABLE_TOOLS]") != std::string::npos);
+    assertTrue(prompt.find("shell") != std::string::npos);
+    assertTrue(prompt.find("<environment_context>cwd</environment_context>\nSkapa en hello world") != std::string::npos);
+    const auto inst = prompt.find("[INST]");
+    assertTrue(inst != std::string::npos);
+    assertTrue(prompt.find("[INST]", inst + 1) == std::string::npos);
+
+    ChatMessage assistant;
+    assistant.role = std::string(ChatMessage::ROLE_ASSISTANT);
+    assistant.content = "Jag kör kommandot.";
+    assistant.reasoning_content = "thinking about the command";
+    ParsedToolCall call;
+    call.name = "shell";
+    call.id = "call_1";
+    call.arguments = nlohmann::json::parse(R"({"command":"ls"})");
+    assistant.tool_calls.push_back(call);
+    ChatMessage result;
+    result.role = std::string(ChatMessage::ROLE_TOOL);
+    result.content = "main.cpp";
+    result.tool_name = "shell";
+    result.tool_call_id = "call_1";
+    ChatMessage follow_up;
+    follow_up.role = std::string(ChatMessage::ROLE_USER);
+    follow_up.content = "ändra filen";
+
+    const std::string continued =
+        render_chat_prompt(relaxed.get(), std::array{system, question, assistant, result, follow_up}, std::array{tool}, codex);
+    assertTrue(continued.find("[TOOL_CALLS]shell[ARGS]") != std::string::npos);
+    assertTrue(continued.find("[TOOL_RESULTS]main.cpp[/TOOL_RESULTS]") != std::string::npos);
+    assertTrue(continued.find("[INST]ändra filen[/INST]") != std::string::npos);
+    assertTrue(continued.find("thinking about the command") == std::string::npos);
+    return EXIT_SUCCESS;
+}
+
 } // namespace
 
 int test_llama_engine()
@@ -371,6 +457,7 @@ int test_llama_engine()
     RUN_TEST(test_tool_parse_question);
     RUN_TEST(test_system_prompt_uses_client_tools);
     RUN_TEST(test_model_adapter_selection);
+    RUN_TEST(test_devstral_template_accepts_codex_turns);
     RUN_TEST(test_checkpoint_uses_server_offsets);
     RUN_TEST(test_kv_trim_follows_the_cache);
     RUN_TEST(test_kv_tail_matches_hybrid_suffix);

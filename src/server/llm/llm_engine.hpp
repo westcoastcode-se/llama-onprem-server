@@ -221,6 +221,9 @@ class LlamaEngine
     std::unique_ptr<llama_sampler, SamplerDeleter> smpl_;
     // Parsed Jinja. Owned here; llama.cpp's C chat API does not execute Jinja.
     std::unique_ptr<common_chat_templates, TemplatesDeleter> templates_;
+    // Set from the template source at load. See ChatPromptPolicy.
+    bool merge_user_turns_ = false;
+    bool keep_reasoning_ = true;
     // How this model's cache drops a suffix. Chosen from the loaded architecture.
     std::unique_ptr<KvTrim> trim_;
 
