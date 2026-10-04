@@ -23,7 +23,7 @@ bool takes_value(const std::string_view arg)
            arg == "--repetition-penalty" || arg == "--penalty-last-n" || arg == "--seed" || arg == "--max-tokens" ||
            arg == "--threads" || arg == "--threads-batch" || arg == "--flash-attn" || arg == "--cache-type-k" ||
            arg == "--cache-type-v" || arg == "--chat-template" || arg == "--kv-sessions" || arg == "--session-dir" ||
-           arg == "--session-cache-size" || arg == "--host" || arg == "-p" || arg == "--port";
+           arg == "--session-cache-size" || arg == "--host" || arg == "-p" || arg == "--port" || arg == "--api-key";
 }
 
 bool is_bare_flag(const std::string_view arg)
@@ -365,6 +365,10 @@ bool apply_json_key(ServerOptions &options, const std::string_view key, const nl
     {
         return json_int(value, key, options.port, status);
     }
+    if (key == "api-key")
+    {
+        return json_string(value, key, options.api_key, status);
+    }
     status.error = std::format("unknown argument: {}", key);
     status.usage = true;
     return false;
@@ -643,6 +647,13 @@ bool apply_args(ServerOptions &options, const std::vector<std::string> &args, Se
         else if (arg == "-p" || arg == "--port")
         {
             if (!take_int(arg, options.port))
+            {
+                return false;
+            }
+        }
+        else if (arg == "--api-key")
+        {
+            if (!take_text("--api-key", options.api_key))
             {
                 return false;
             }

@@ -68,7 +68,7 @@ set(COMMON_TOOL_SOURCES
 )
 
 #
-# HTTP server. One model, sessions, and a job queue.
+# HTTP server. One model and a job queue. Codex and Copilot use POST /v1/responses.
 #
 add_executable(callisto_server
         src/api/models.cpp
@@ -76,8 +76,6 @@ add_executable(callisto_server
         src/server/options.cpp
         src/server/http/routes.cpp
         src/server/jobs/jobs.cpp
-        src/server/sessions/sessions.cpp
-        src/server/sessions/session_disk.cpp
         src/server/agent/response_parse.cpp
         src/server/agent/model_adapter.cpp
         src/common/log.cpp
@@ -85,7 +83,6 @@ add_executable(callisto_server
         src/server/llm/llm_engine.cpp
         src/server/llm/kv_trim.cpp
         src/server/llm/session_kv_store.cpp
-        src/server/sessions/tool_history.cpp
         src/server/responses/responses.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE

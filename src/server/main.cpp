@@ -6,9 +6,10 @@
 #include "server/jobs/jobs.hpp"
 #include "server/llm/llm_engine.hpp"
 #include "server/options.hpp"
-#include "server/sessions/sessions.hpp"
+#include "server/responses/responses.hpp"
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 #include <format>
 #include <httplib.h>
 #include <poll.h>
@@ -65,18 +66,20 @@ void print_usage(const char *argv0)
                  "  --chat-template PATH   Jinja template, overrides the GGUF template\n"
                  "  --reasoning / --no-reasoning   enable_thinking (default on)\n"
                  "  --kv-sessions N        accepted, unused; parked KV is one file per session\n"
-                 "  --session-dir PATH     session files. Default puts conversations in\n"
-                 "                         $XDG_STATE_HOME/callisto/sessions and KV in\n"
-                 "                         $XDG_CACHE_HOME/callisto/sessions. PATH stores both.\n"
-                 "  --session-cache-size SIZE  max bytes for those files (K/M/G/T, 0 = no limit)\n"
+                 "  --session-dir PATH     parked KV files. Default is\n"
+                 "                         $XDG_CACHE_HOME/callisto/sessions. PATH stores them there.\n"
+                 "  --session-cache-size SIZE  accepted, unused\n"
                  "  --config-file PATH  JSON object of these settings\n"
+                 "  --api-key KEY require Authorization: Bearer KEY. Empty leaves the API open.\n"
+                 "                CALLISTO_API_KEY is used when this flag and the config file leave it empty.\n"
+                 "                GET /health never checks the key.\n"
                  "  --host HOST   bind host (default 127.0.0.1)\n"
                  "  -p/--port N   port (default 8080)\n"
                  "\n"
                  "JSON keys use these flag names. Short flags are model, context, batch, gpu-layers, and temperature.\n"
-                 "reasoning is true or false. session-cache-size is a byte count or a string such as \"8G\".\n"
+                 "reasoning is true or false. api-key is a string. session-cache-size is accepted and unused.\n"
                  "A later --config-file overrides the keys it sets.\n"
-                 "Arguments on the command line override the file.",
+                 "Arguments on the command line override the file. The environment variable does not override them.",
                  argv0);
 }
 } // namespace
@@ -108,9 +111,18 @@ int main(int argc, char **argv)
     {
         return 1;
     }
-    const LlamaConfig &config = parsed.options.config;
-    const std::string &host = parsed.options.host;
-    const int port = parsed.options.port;
+    ServerOptions options = parsed.options;
+    if (options.api_key.empty())
+    {
+        if (const char *from_env = std::getenv("CALLISTO_API_KEY"))
+        {
+            options.api_key = from_env;
+        }
+    }
+    const LlamaConfig &config = options.config;
+    const std::string &host = options.host;
+    const int port = options.port;
+    const std::string api_key = options.api_key;
 
     LlamaEngine engine;
     try
@@ -126,11 +138,6 @@ int main(int argc, char **argv)
     const auto adapter = make_model_adapter(config.model_path, config.template_path);
     log_info("[llm] assistant format ", adapter->name());
     Jobs jobs(engine, *adapter);
-    Sessions sessions(jobs, *adapter);
-    // The conversation is on disk. KV stays there until a turn activates the session.
-    sessions.load(engine.get_config().session_dir, engine.get_config().session_cache_bytes,
-                  engine.get_config().kv_dir);
-    jobs.set_session_cache_hook([&sessions] { sessions.enforce_cache_limit(0); });
     httplib::Server svr;
 
     int wake[2] = {-1, -1};
@@ -164,12 +171,24 @@ int main(int argc, char **argv)
     svr.set_write_timeout(300, 0);
     svr.set_keep_alive_timeout(300);
 
-    // Add simple request logging
-    svr.set_pre_routing_handler([](const auto &req, auto &) {
+    if (!api_key.empty())
+    {
+        log_info("API key required for every route except GET /health");
+    }
+
+    // Reject a missing or wrong bearer token before the handler runs. The header is not logged.
+    svr.set_pre_routing_handler([api_key](const auto &req, auto &res) {
+        const bool health = req.method == "GET" && req.path == "/health";
+        if (!api_key.empty() && !health && !authorization_matches(api_key, req.get_header_value("Authorization")))
+        {
+            send_openai_error(res, 401, "invalid_request_error", "invalid api key", "invalid_api_key");
+            return httplib::Server::HandlerResponse::Handled;
+        }
         if (Logger::is_level(Logger::LEVEL_DEBUG))
         {
             log_info("Method: ", req.method, " Path: ", req.path, " Body: ", req.body);
-        } else
+        }
+        else
         {
             log_info("Method: ", req.method, " Path: ", req.path);
         }
@@ -217,7 +236,7 @@ int main(int argc, char **argv)
         }
     });
 
-    AppState state{engine, jobs, sessions};
+    AppState state{engine, jobs};
     register_endpoints(svr, state);
 
     log_info("server listening on ", host, ":", port);

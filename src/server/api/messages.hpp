@@ -4,8 +4,8 @@
 #include "../agent/response_parse.hpp"
 
 /**
- * Internal generation payload submitted to Jobs (built from a Session).
- * Not exposed as a public REST body — use POST /v1/sessions/:id/messages instead.
+ * Internal generation payload submitted to Jobs from POST /v1/responses.
+ * Not a public REST body.
  */
 struct MessagesRequest
 {
@@ -16,4 +16,6 @@ struct MessagesRequest
     // Negative keeps LlamaConfig::temperature.
     float temperature = -1.0f;
     std::vector<ChatTool> tools;
+    // Declared Responses namespaces. Tool names inside them are namespace + "." + member.
+    std::vector<std::string> tool_namespaces;
 };

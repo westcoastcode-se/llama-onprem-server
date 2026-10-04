@@ -6,8 +6,7 @@
 #include <string_view>
 #include <vector>
 
-// One Codex turn, converted from a Responses API body.
-// The server generates. Codex runs the tools.
+// One Responses turn from Codex or Copilot. The server generates. The client runs the tools.
 struct ResponsesTurn
 {
     // Echoed on the response. Empty when the request omitted model.
@@ -16,15 +15,17 @@ struct ResponsesTurn
     std::string instructions;
     std::vector<ChatMessage> messages;
     std::vector<ChatTool> tools;
+    // Names from tools of type namespace. Members are stored as namespace + "." + name.
+    std::vector<std::string> tool_namespaces;
     int max_tokens = -1;
     // Negative keeps the server temperature.
     float temperature = -1.0f;
     bool stream = false;
-    // KV slot. prompt_cache_key when Codex sends one, otherwise "codex".
+    // KV slot. prompt_cache_key when the client sends one, otherwise "codex".
     std::string session_id;
 };
 
-// Throws BadRequest. previous_response_id is ignored: Codex resends the input.
+// Throws BadRequest. previous_response_id is ignored: the client resends the input.
 [[nodiscard]] ResponsesTurn responses_from_json(const nlohmann::json &body);
 
 // GGUF file name without the directory or the .gguf suffix.
@@ -58,9 +59,13 @@ struct ResponsesResult
     std::vector<ParsedToolCall> tool_calls;
     std::string error;
     std::string error_code;
+    // Copied from the request so a qualified tool name can be split back into namespace + name.
+    std::vector<std::string> tool_namespaces;
+    std::vector<ChatTool> tools;
 };
 
-// Output items Codex stores from response.output_item.done.
+// Output items the client stores from response.output_item.done.
+// A function_call carries namespace when the name matches a declared namespace.
 [[nodiscard]] std::vector<nlohmann::json> response_output_items(const ResponseIds &ids, const ResponsesResult &result);
 
 // Terminal SSE payloads (the JSON `data`, not the frame). The stream ends on one of these.
@@ -68,6 +73,10 @@ struct ResponsesResult
                                                                    const ResponsesResult &result);
 
 [[nodiscard]] std::string sse_frame(const nlohmann::json &data);
+
+// True when Authorization is "Bearer <expected_key>". The scheme is case-insensitive.
+// An empty expected key never matches. The key bytes are compared without an early exit.
+[[nodiscard]] bool authorization_matches(std::string_view expected_key, std::string_view authorization_header);
 
 // Live deltas. Tool-call markup is dropped. <think> is reasoning, not answer text.
 class ResponsesDeltaFilter

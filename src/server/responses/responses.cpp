@@ -11,6 +11,8 @@
 namespace
 {
 
+bool readable_thinking(std::string_view text);
+
 std::string next_id(std::string_view prefix)
 {
     static std::atomic<uint64_t> seq{1};
@@ -123,7 +125,222 @@ std::string reasoning_text(const nlohmann::json &item)
     {
         take("summary");
     }
-    return text;
+    if (!text.empty())
+    {
+        return text;
+    }
+    // Codex sends an opaque blob here. Ollama stores plain thinking text for Copilot.
+    // Use the field only when it reads as text, so a ciphertext blob stays out of the prompt.
+    if (!item.contains("encrypted_content") || !item.at("encrypted_content").is_string())
+    {
+        return {};
+    }
+    const auto encrypted = item.at("encrypted_content").get<std::string>();
+    if (!readable_thinking(encrypted))
+    {
+        return {};
+    }
+    return encrypted;
+}
+
+bool readable_thinking(const std::string_view text)
+{
+    if (text.empty())
+    {
+        return false;
+    }
+    bool whitespace = false;
+    bool base64 = true;
+    for (const unsigned char ch : text)
+    {
+        if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t')
+        {
+            whitespace = true;
+            base64 = false;
+            continue;
+        }
+        if (ch < 0x20 || ch == 0x7f)
+        {
+            return false;
+        }
+        const bool alphabet = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+                              ch == '+' || ch == '/' || ch == '=' || ch == '-' || ch == '_';
+        if (!alphabet)
+        {
+            base64 = false;
+        }
+    }
+    return whitespace || !base64 || text.size() < 64;
+}
+
+std::string string_field(const nlohmann::json &item, const char *key)
+{
+    if (!item.contains(key) || !item.at(key).is_string())
+    {
+        return {};
+    }
+    return item.at(key).get<std::string>();
+}
+
+void remember_namespace(ResponsesTurn &turn, const std::string &ns)
+{
+    if (std::find(turn.tool_namespaces.begin(), turn.tool_namespaces.end(), ns) == turn.tool_namespaces.end())
+    {
+        turn.tool_namespaces.push_back(ns);
+    }
+}
+
+void qualify_tool_name(std::string &name, const nlohmann::json &item)
+{
+    if (name.empty())
+    {
+        return;
+    }
+    const auto ns = string_field(item, "namespace");
+    if (ns.empty())
+    {
+        return;
+    }
+    if (ns.find('.') != std::string::npos)
+    {
+        throw BadRequest{"namespace name must not contain '.'"};
+    }
+    const auto prefix = ns + ".";
+    if (!name.starts_with(prefix))
+    {
+        name.insert(0, prefix);
+    }
+}
+
+bool has_parameters(const nlohmann::json &tool)
+{
+    if (tool.contains("parameters") && !tool.at("parameters").is_null())
+    {
+        return true;
+    }
+    if (tool.contains("function") && tool.at("function").is_object())
+    {
+        const auto &fn = tool.at("function");
+        return fn.contains("parameters") && !fn.at("parameters").is_null();
+    }
+    return false;
+}
+
+void append_model_tool(ResponsesTurn &turn, nlohmann::json tool, const std::string &ns)
+{
+    const auto type = string_field(tool, "type");
+    const auto kind = type.empty() ? std::string("function") : type;
+    if (kind == "namespace")
+    {
+        const auto nested = string_field(tool, "name");
+        if (nested.empty())
+        {
+            throw BadRequest{"namespace tool requires a name"};
+        }
+        if (nested.find('.') != std::string::npos)
+        {
+            throw BadRequest{"namespace name must not contain '.'"};
+        }
+        if (!ns.empty())
+        {
+            throw BadRequest{"nested namespace tools are not supported"};
+        }
+        if (!tool.contains("tools") || !tool.at("tools").is_array())
+        {
+            throw BadRequest{"namespace tool requires tools"};
+        }
+        remember_namespace(turn, nested);
+        for (const auto &member : tool.at("tools"))
+        {
+            if (!member.is_object())
+            {
+                throw BadRequest{"each tool must be an object"};
+            }
+            append_model_tool(turn, member, nested);
+        }
+        return;
+    }
+    if (kind != "function" && kind != "custom" && kind != "tool_search")
+    {
+        return;
+    }
+    if (kind == "tool_search" && string_field(tool, "name").empty())
+    {
+        const bool wrapped = tool.contains("function") && tool.at("function").is_object() &&
+                             !string_field(tool.at("function"), "name").empty();
+        if (!wrapped)
+        {
+            tool["name"] = "tool_search";
+        }
+    }
+    if (kind == "tool_search" && !has_parameters(tool))
+    {
+        tool["parameters"] = {{"type", "object"},
+                              {"properties", {{"query", {{"type", "string"}}}}},
+                              {"required", nlohmann::json::array({"query"})}};
+    }
+    ChatTool parsed = ChatTool::from_json(tool);
+    if (!ns.empty())
+    {
+        if (parsed.name.find('.') != std::string::npos)
+        {
+            throw BadRequest{"namespace member name must not contain '.'"};
+        }
+        parsed.name = ns + "." + parsed.name;
+    }
+    turn.tools.push_back(std::move(parsed));
+}
+
+struct EmittedName
+{
+    std::string name;
+    std::string ns;
+};
+
+EmittedName emitted_tool_name(const std::string &raw, const std::vector<std::string> &namespaces,
+                              const std::vector<ChatTool> &tools)
+{
+    EmittedName best{raw, {}};
+    size_t best_len = 0;
+    for (const auto &ns : namespaces)
+    {
+        if (ns.empty())
+        {
+            continue;
+        }
+        const std::string prefix = ns + ".";
+        if (raw.size() > prefix.size() && raw.starts_with(prefix) && prefix.size() > best_len)
+        {
+            best_len = prefix.size();
+            best = EmittedName{raw.substr(prefix.size()), ns};
+        }
+    }
+    if (!best.ns.empty() || raw.find('.') != std::string::npos)
+    {
+        return best;
+    }
+    std::string found;
+    int matches = 0;
+    for (const auto &tool : tools)
+    {
+        const auto dot = tool.name.rfind('.');
+        if (dot == std::string::npos || tool.name.substr(dot + 1) != raw)
+        {
+            continue;
+        }
+        const auto ns = tool.name.substr(0, dot);
+        if (std::find(namespaces.begin(), namespaces.end(), ns) == namespaces.end())
+        {
+            continue;
+        }
+        ++matches;
+        found = ns;
+    }
+    if (matches == 1)
+    {
+        return EmittedName{raw, found};
+    }
+    return best;
 }
 
 void merge_assistant(std::vector<ChatMessage> &messages, ChatMessage incoming)
@@ -192,7 +409,8 @@ ParsedToolCall tool_call_from_item(const nlohmann::json &item, const bool custom
     return call;
 }
 
-void append_tool_output(std::vector<ChatMessage> &messages, const nlohmann::json &item)
+void append_tool_output(std::vector<ChatMessage> &messages, const nlohmann::json &item,
+                        const std::string_view fallback_name = {})
 {
     if (!item.contains("output"))
     {
@@ -201,7 +419,11 @@ void append_tool_output(std::vector<ChatMessage> &messages, const nlohmann::json
     ChatMessage message;
     message.role = std::string(ChatMessage::ROLE_TOOL);
     message.tool_call_id = item.value("call_id", "");
-    message.tool_name = item.value("name", "");
+    message.tool_name = string_field(item, "name");
+    if (message.tool_name.empty())
+    {
+        message.tool_name = std::string(fallback_name);
+    }
     message.content = text_from_parts(item.at("output"));
     messages.push_back(std::move(message));
 }
@@ -343,12 +565,7 @@ ResponsesTurn responses_from_json(const nlohmann::json &body)
             {
                 throw BadRequest{"each tool must be an object"};
             }
-            const auto type = tool.value("type", "function");
-            if (type != "function")
-            {
-                continue;
-            }
-            turn.tools.push_back(ChatTool::from_json(tool));
+            append_model_tool(turn, tool, {});
         }
     }
 
@@ -373,17 +590,25 @@ ResponsesTurn responses_from_json(const nlohmann::json &body)
             throw BadRequest{"each input item must be an object"};
         }
         const auto type = item.value("type", "");
-        if (type == "function_call" || type == "custom_tool_call")
+        if (type == "function_call" || type == "custom_tool_call" || type == "tool_search_call")
         {
+            nlohmann::json spec = item;
+            if (type == "tool_search_call" && string_field(spec, "name").empty())
+            {
+                spec["name"] = "tool_search";
+            }
             ChatMessage message;
             message.role = std::string(ChatMessage::ROLE_ASSISTANT);
-            message.tool_calls.push_back(tool_call_from_item(item, type == "custom_tool_call"));
+            auto call = tool_call_from_item(spec, type == "custom_tool_call");
+            qualify_tool_name(call.name, spec);
+            message.tool_calls.push_back(std::move(call));
             merge_assistant(turn.messages, std::move(message));
             continue;
         }
-        if (type == "function_call_output" || type == "custom_tool_call_output")
+        if (type == "function_call_output" || type == "custom_tool_call_output" || type == "tool_search_output")
         {
-            append_tool_output(turn.messages, item);
+            append_tool_output(turn.messages, item, type == "tool_search_output" ? "tool_search" : "");
+            qualify_tool_name(turn.messages.back().tool_name, item);
             continue;
         }
         if (type == "reasoning")
@@ -477,14 +702,20 @@ std::vector<nlohmann::json> response_output_items(const ResponseIds &ids, const 
     {
         const auto &call = result.tool_calls[i];
         const auto call_id = response_call_id(call, i);
-        output.push_back({
+        const auto emitted = emitted_tool_name(call.name, result.tool_namespaces, result.tools);
+        nlohmann::json item{
             {"id", "fc_" + call_id},
             {"type", "function_call"},
             {"status", "completed"},
-            {"name", call.name},
+            {"name", emitted.name},
             {"arguments", arguments_text(call.arguments)},
             {"call_id", call_id},
-        });
+        };
+        if (!emitted.ns.empty())
+        {
+            item["namespace"] = emitted.ns;
+        }
+        output.push_back(std::move(item));
     }
     return output;
 }
@@ -521,8 +752,33 @@ std::vector<nlohmann::json> response_terminal_events(const ResponseIds &ids, con
     }
 
     const auto output = response_output_items(ids, result);
-    for (const auto &item : output)
+    for (size_t index = 0; index < output.size(); ++index)
     {
+        const auto &item = output[index];
+        // Codex ignores argument deltas and runs the tool from output_item.done.
+        // Copilot reads the delta and the done event.
+        if (item.value("type", "") == "function_call")
+        {
+            const auto arguments = item.value("arguments", "");
+            nlohmann::json started = item;
+            started["status"] = "in_progress";
+            started["arguments"] = "";
+            events.push_back({{"type", "response.output_item.added"}, {"item", std::move(started)}});
+            events.push_back({
+                {"type", "response.function_call_arguments.delta"},
+                {"item_id", item.value("id", "")},
+                {"call_id", item.value("call_id", "")},
+                {"output_index", index},
+                {"delta", arguments},
+            });
+            events.push_back({
+                {"type", "response.function_call_arguments.done"},
+                {"item_id", item.value("id", "")},
+                {"call_id", item.value("call_id", "")},
+                {"output_index", index},
+                {"arguments", arguments},
+            });
+        }
         events.push_back({{"type", "response.output_item.done"}, {"item", item}});
     }
     events.push_back({
@@ -639,4 +895,48 @@ ResponsesDeltaFilter::Delta ResponsesDeltaFilter::drain(const bool flush)
         break;
     }
     return out;
+}
+
+namespace
+{
+
+bool same_key(const std::string_view expected, const std::string_view provided)
+{
+    const size_t n = std::max(expected.size(), provided.size());
+    volatile unsigned char diff = static_cast<unsigned char>(expected.size() ^ provided.size());
+    for (size_t i = 0; i < n; ++i)
+    {
+        const unsigned char left = i < expected.size() ? static_cast<unsigned char>(expected[i]) : 0;
+        const unsigned char right = i < provided.size() ? static_cast<unsigned char>(provided[i]) : 0;
+        diff = static_cast<unsigned char>(diff | (left ^ right));
+    }
+    return diff == 0;
+}
+
+} // namespace
+
+bool authorization_matches(const std::string_view expected_key, const std::string_view authorization_header)
+{
+    if (expected_key.empty())
+    {
+        return false;
+    }
+    constexpr std::string_view kBearer = "bearer ";
+    if (authorization_header.size() < kBearer.size())
+    {
+        return false;
+    }
+    for (size_t i = 0; i < kBearer.size(); ++i)
+    {
+        unsigned char ch = static_cast<unsigned char>(authorization_header[i]);
+        if (ch >= 'A' && ch <= 'Z')
+        {
+            ch = static_cast<unsigned char>(ch - 'A' + 'a');
+        }
+        if (ch != static_cast<unsigned char>(kBearer[i]))
+        {
+            return false;
+        }
+    }
+    return same_key(expected_key, authorization_header.substr(kBearer.size()));
 }

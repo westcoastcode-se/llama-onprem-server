@@ -135,11 +135,130 @@ int test_response_items_match_codex()
     assertEquals(std::string("shell"), items[2].value("name", ""));
     assertEquals(std::string("call_1"), items[2].value("call_id", ""));
     assertEquals(std::string("{\"command\":\"ls\"}"), items[2].value("arguments", ""));
+    assertTrue(!items[2].contains("namespace"));
 
     const auto events = response_terminal_events(ids, "local", result);
-    assertEquals(std::string("response.completed"), events.back().value("type", ""));
+    assertEquals(static_cast<size_t>(7), events.size());
+    assertEquals(std::string("response.output_item.done"), events[0].value("type", ""));
+    assertEquals(std::string("response.output_item.done"), events[1].value("type", ""));
+    assertEquals(std::string("response.output_item.added"), events[2].value("type", ""));
+    assertEquals(std::string(""), events[2].at("item").value("arguments", "missing"));
+    assertEquals(std::string("response.function_call_arguments.delta"), events[3].value("type", ""));
+    assertEquals(std::string("{\"command\":\"ls\"}"), events[3].value("delta", ""));
+    assertEquals(2, events[3].value("output_index", -1));
+    assertEquals(std::string("response.function_call_arguments.done"), events[4].value("type", ""));
+    assertEquals(std::string("{\"command\":\"ls\"}"), events[4].value("arguments", ""));
+    assertEquals(std::string("response.output_item.done"), events[5].value("type", ""));
+    assertEquals(std::string("response.completed"), events[6].value("type", ""));
     assertEquals(std::string("resp_1"), events.back().at("response").value("id", ""));
     assertEquals(std::string("event: response.completed\ndata: "), sse_frame(events.back()).substr(0, 32));
+    return EXIT_SUCCESS;
+}
+
+int test_responses_namespace_and_copilot_tools()
+{
+    const std::string blob(80, 'A');
+    auto body = nlohmann::json::parse(R"({
+        "input": [
+            {"type": "message", "role": "user", "content": "read it"},
+            {"type": "reasoning", "content": null, "summary": [], "encrypted_content": ""},
+            {"type": "reasoning", "content": null, "summary": [], "encrypted_content": "Think about the file."},
+            {"type": "function_call", "call_id": "call_9", "name": "read", "namespace": "shell", "arguments": "{\"path\":\"a\"}"},
+            {"type": "function_call_output", "call_id": "call_9", "name": "read", "namespace": "shell", "output": "data"},
+            {"type": "tool_search_call", "call_id": "call_s", "arguments": {"query": "edit"}},
+            {"type": "tool_search_output", "call_id": "call_s", "output": "edit"}
+        ],
+        "tools": [
+            {"type": "namespace", "name": "shell", "tools": [
+                {"type": "function", "name": "read", "description": "Read a file",
+                 "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}},
+                {"type": "function", "name": "list", "description": "List"}
+            ]},
+            {"type": "namespace", "name": "other", "tools": [
+                {"type": "function", "name": "read", "description": "Other read"}
+            ]},
+            {"type": "custom", "name": "apply_patch", "description": "Patch"},
+            {"type": "tool_search"},
+            {"type": "web_search"}
+        ]
+    })");
+    body["input"][1]["encrypted_content"] = blob;
+    const auto turn = responses_from_json(body);
+    assertEquals(static_cast<size_t>(5), turn.tools.size());
+    assertEquals(std::string("shell.read"), turn.tools[0].name);
+    assertEquals(std::string("shell.list"), turn.tools[1].name);
+    assertEquals(std::string("other.read"), turn.tools[2].name);
+    assertEquals(std::string("apply_patch"), turn.tools[3].name);
+    assertEquals(std::string("tool_search"), turn.tools[4].name);
+    assertTrue(turn.tools[4].parameters.find("query") != std::string::npos);
+    assertEquals(static_cast<size_t>(2), turn.tool_namespaces.size());
+    assertEquals(std::string("shell"), turn.tool_namespaces[0]);
+    assertEquals(std::string("other"), turn.tool_namespaces[1]);
+    assertEquals(static_cast<size_t>(5), turn.messages.size());
+    assertEquals(std::string("Think about the file."), turn.messages[1].reasoning_content);
+    assertEquals(std::string("shell.read"), turn.messages[1].tool_calls[0].name);
+    assertEquals(std::string("a"), turn.messages[1].tool_calls[0].arguments.value("path", ""));
+    assertEquals(std::string("shell.read"), turn.messages[2].tool_name);
+    assertEquals(std::string("data"), turn.messages[2].content);
+    assertEquals(std::string("tool_search"), turn.messages[3].tool_calls[0].name);
+    assertEquals(std::string("edit"), turn.messages[3].tool_calls[0].arguments.value("query", ""));
+    assertEquals(std::string("tool_search"), turn.messages[4].tool_name);
+    assertEquals(std::string("edit"), turn.messages[4].content);
+
+    bool dotted = false;
+    try
+    {
+        (void)responses_from_json(nlohmann::json::parse(R"({"input":"hi","tools":[{"type":"namespace","name":"a.b","tools":[]}]})"));
+    }
+    catch (const BadRequest &)
+    {
+        dotted = true;
+    }
+    assertTrue(dotted);
+
+    ResponsesResult result;
+    result.tool_namespaces = turn.tool_namespaces;
+    result.tools = turn.tools;
+    ParsedToolCall qualified;
+    qualified.id = "1";
+    qualified.name = "shell.read";
+    qualified.arguments = nlohmann::json::object();
+    ParsedToolCall bare;
+    bare.id = "2";
+    bare.name = "list";
+    bare.arguments = nlohmann::json::object();
+    ParsedToolCall flat;
+    flat.id = "3";
+    flat.name = "a.b";
+    flat.arguments = nlohmann::json::object();
+    ParsedToolCall ambiguous;
+    ambiguous.id = "4";
+    ambiguous.name = "read";
+    ambiguous.arguments = nlohmann::json::object();
+    result.tool_calls = {qualified, bare, flat, ambiguous};
+
+    const auto items = response_output_items(ResponseIds{"resp_1", "rs_1", "msg_1"}, result);
+    assertEquals(std::string("read"), items[0].value("name", ""));
+    assertEquals(std::string("shell"), items[0].value("namespace", ""));
+    assertEquals(std::string("list"), items[1].value("name", ""));
+    assertEquals(std::string("shell"), items[1].value("namespace", ""));
+    assertEquals(std::string("a.b"), items[2].value("name", ""));
+    assertTrue(!items[2].contains("namespace"));
+    assertEquals(std::string("read"), items[3].value("name", ""));
+    assertTrue(!items[3].contains("namespace"));
+    return EXIT_SUCCESS;
+}
+
+int test_authorization_matches()
+{
+    assertTrue(authorization_matches("secret", "Bearer secret"));
+    assertTrue(authorization_matches("secret", "bearer secret"));
+    assertTrue(authorization_matches("secret", "BEARER secret"));
+    assertTrue(!authorization_matches("secret", "Bearer secret "));
+    assertTrue(!authorization_matches("secret", "Bearer secre"));
+    assertTrue(!authorization_matches("secret", "secret"));
+    assertTrue(!authorization_matches("", "Bearer "));
+    assertTrue(!authorization_matches("secret", ""));
     return EXIT_SUCCESS;
 }
 
@@ -197,6 +316,8 @@ int test_responses()
     RUN_TEST(test_responses_codex_tool_round);
     RUN_TEST(test_responses_rejects_images_and_missing_input);
     RUN_TEST(test_response_items_match_codex);
+    RUN_TEST(test_responses_namespace_and_copilot_tools);
+    RUN_TEST(test_authorization_matches);
     RUN_TEST(test_delta_filter_hides_tools);
     RUN_TEST(test_public_model_id);
     return EXIT_SUCCESS;

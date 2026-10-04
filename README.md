@@ -62,7 +62,7 @@ snapshot_download(repo_id="unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF", all
 EOF
 ```
 
-Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`. There is no authentication.
+Start the server. `-c` is the context length. `-ngl 99` offloads layers to the GPU. The default bind address is `127.0.0.1:8080`. The API is open unless `--api-key` or `CALLISTO_API_KEY` is set. `GET /health` never checks the key.
 
 ```bash
 ./cmake-build-release/callisto_server \
@@ -78,7 +78,7 @@ A GGUF whose file name contains `devstral` is parsed as Devstral. Temperature `0
   -c 32768 -ngl 99 -t 0.15 --min-p 0.01 -p 8081
 ```
 
-The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p` and `port`. `reasoning` is a boolean. `session-cache-size` is a byte count or a string such as `"8G"`. A later file overrides the keys it sets. Flags on the command line override the file.
+The same arguments can be stored in a JSON file and passed with `--config-file`. Short flags use names such as `model`, `context`, `batch`, `gpu-layers`, and `temperature`. Longer options keep their names, such as `top-p`, `port`, and `api-key`. `reasoning` is a boolean. A later file overrides the keys it sets. Flags on the command line override the file. `CALLISTO_API_KEY` applies only when the flag and the file leave the key empty.
 
 ```bash
 ./cmake-build-release/callisto_server --config-file callisto-server.json -p 8081
@@ -119,19 +119,41 @@ model_provider = "callisto"
 name = "Callisto"
 base_url = "http://127.0.0.1:8080/v1"
 wire_api = "responses"
+requires_openai_auth = false
 ```
 
-`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. The server accepts any `model` string and echoes it. Leave out `env_key`: the server does not check a bearer token.
+`base_url` must end in `/v1`. Codex appends `/responses`. `wire_api` must be `"responses"`. The server accepts any `model` string and echoes it. `requires_openai_auth = false` skips the ChatGPT login. Leave out `env_key` when the server has no API key.
 
-`prompt_cache_key` from Codex is the KV slot for that thread. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`, and the name is cut at 120 characters. With no key, the slot is `codex`. The file is `<id>.kv` under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`).
+When the server requires a key, `env_key` is the name of an environment variable, not the secret. Add `env_key = "CALLISTO_API_KEY"` under `[model_providers.callisto]`. Interactive `codex` reads that variable from its background server, not from the terminal that launches it. Export `CALLISTO_API_KEY`, run `codex app-server daemon restart`, and then start `codex`. `codex --no-daemon` reads the variable from the current shell instead. The server reads that same variable when `--api-key` and the config-file key are both empty. Those two win when set, and the bearer token must match them. [docs/using.md](docs/using.md) has the full provider block.
 
-Image, audio, and file inputs are rejected. The server does not run tools.
+`prompt_cache_key` from Codex is the KV slot for that thread. Letters, digits, `.`, `_`, and `-` are kept. Anything else becomes `_`, and the name is cut at 120 characters. With no key, the slot is `codex`. The file is `<id>.kv` under `$XDG_CACHE_HOME/callisto/sessions` (default `~/.cache/callisto/sessions`). `--session-dir PATH` stores those files in `PATH`.
 
-`GET /health` returns `OK`. `GET /v1/models` lists the loaded GGUF file name, without the directory or the `.gguf` suffix.
+Image, audio, and file inputs are rejected. The server does not run tools. Namespace tools are flattened to `namespace.member` and returned with a `namespace` field. `custom` and `tool_search` are accepted. Hosted tools such as `web_search` are skipped.
 
-The session HTTP API is still there for a caller that manages its own tools. Codex does not use it. [src/api/openapi.yaml](src/api/openapi.yaml) describes both.
+`GET /health` returns `OK`. `GET /v1/models` lists the loaded GGUF file name, without the directory or the `.gguf` suffix. [src/api/openapi.yaml](src/api/openapi.yaml) describes the routes.
 
-Each session's conversation is `<id>.json` under `$XDG_STATE_HOME/callisto/sessions` (default `~/.local/state/callisto/sessions`). `--session-dir PATH` stores the conversation files and the KV files in that directory. `--session-cache-size` caps their combined size (for example `8G`; `0` means no cap). With no home directory and no XDG variable, both are under `/tmp/callisto/sessions`.
+# Copilot CLI
+
+Install [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli), start the server, then start Copilot in a project directory. On macOS or Linux with Homebrew:
+
+```bash
+brew install --cask copilot-cli
+```
+
+The other official installs are `npm install -g @github/copilot` (Node.js 22 or later) and `curl -fsSL https://gh.io/copilot-install | bash`. On Windows, from PowerShell: `winget install GitHub.Copilot`. [docs/using.md](docs/using.md) has the same steps next to the server flags.
+
+The default wire is Chat Completions. This server implements `POST /v1/responses` only, so set `COPILOT_PROVIDER_WIRE_API=responses`. `COPILOT_PROVIDER_BASE_URL` must end in `/v1`. `COPILOT_MODEL` is any string and is echoed. `COPILOT_OFFLINE=true` skips GitHub login. Leave `COPILOT_PROVIDER_API_KEY` unset unless the server was given an API key.
+
+```bash
+export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:8080/v1
+export COPILOT_PROVIDER_TYPE=openai
+export COPILOT_PROVIDER_WIRE_API=responses
+export COPILOT_MODEL=local
+export COPILOT_OFFLINE=true
+copilot
+```
+
+If `~/.copilot/providers.json` declares a provider or a model, it overrides `COPILOT_PROVIDER_*`.
 
 # Credits
 
