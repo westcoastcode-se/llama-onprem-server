@@ -47,6 +47,10 @@ static int test_session_kv_header()
 
     write_seq_header(dir / "42.kv", 3, true);
     assertEquals(static_cast<size_t>(3), store.token_count("42").value_or(0));
+    write_seq_header(dir / "thread_1.kv", 3, true);
+    assertEquals(static_cast<size_t>(3), store.token_count("thread_1").value_or(0));
+    assertTrue(!store.token_count("..").has_value());
+    assertTrue(!store.token_count("../escape").has_value());
 
     assertTrue(store.copy("42", "7"));
     assertEquals(static_cast<size_t>(3), store.token_count("7").value_or(0));

@@ -66,22 +66,15 @@ void SessionKvStore::open(std::filesystem::path dir)
 
 bool SessionKvStore::valid_id(const std::string_view id) const
 {
-    if (!opened_ || id.empty() || id.size() > 32)
+    if (!opened_ || id.empty() || id.size() > 120 || id == "." || id == "..")
     {
         return false;
     }
-    std::size_t i = 0;
-    if (id.front() == '-')
+    for (const unsigned char ch : id)
     {
-        if (id.size() == 1)
-        {
-            return false;
-        }
-        i = 1;
-    }
-    for (; i < id.size(); ++i)
-    {
-        if (id[i] < '0' || id[i] > '9')
+        const bool ok = (ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '.' ||
+                        ch == '_' || ch == '-';
+        if (!ok)
         {
             return false;
         }

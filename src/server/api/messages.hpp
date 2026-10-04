@@ -13,5 +13,7 @@ struct MessagesRequest
     std::vector<ChatMessage> messages;
     std::string session_id;
     int max_tokens = -1;
+    // Negative keeps LlamaConfig::temperature.
+    float temperature = -1.0f;
     std::vector<ChatTool> tools;
 };

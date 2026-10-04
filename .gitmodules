@@ -1,6 +1,3 @@
 [submodule "vendors/llama.cpp"]
 	path = vendors/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp.git
-[submodule "vendors/ftxui"]
-	path = vendors/ftxui
-	url = https://github.com/ArthurSonzogni/FTXUI.git

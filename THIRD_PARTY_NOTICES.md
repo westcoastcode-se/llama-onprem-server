@@ -2,7 +2,7 @@
 
 Callisto is MIT, copyright (c) 2026 westcoastcode-se. See `LICENSE`.
 
-The programs `callisto_server` and `callisto_cli` also contain the projects below. Source copies keep their own license files. This file repeats the notices those licenses require when the binaries are distributed. It is not an endorsement by the copyright holders.
+The program `callisto_server` also contains the projects below. Source copies keep their own license files. This file repeats the notices those licenses require when the binary is distributed. It is not an endorsement by the copyright holders.
 
 ## llama.cpp and ggml
 
@@ -95,46 +95,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## FTXUI
-
-https://github.com/ArthurSonzogni/FTXUI
-
-Submodule `vendors/ftxui` at v6.1.9, linked into `callisto_cli`. Copyright (c) 2019 Arthur Sonzogni. MIT, same permission notice as llama.cpp above. License text: `vendors/ftxui/LICENSE`.
-
-## CLI11
-
-https://github.com/CLIUtils/CLI11
-
-Version 2.5.0, header `vendors/cli11/CLI11.hpp`, linked into `callisto_cli`. BSD-3-Clause.
-
-```
-CLI11 2.5.0 Copyright (c) 2017-2025 University of Cincinnati, developed by Henry
-Schreiner under NSF AWARD 1414736. All rights reserved.
-
-Redistribution and use in source and binary forms of CLI11, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-3. Neither the name of the copyright holder nor the names of its contributors
-   may be used to endorse or promote products derived from this software without
-   specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-```
-
 ## subprocess.h
 
 https://github.com/sheredom/subprocess.h
@@ -172,7 +132,7 @@ For more information, please refer to <http://unlicense.org/>
 
 https://curl.se
 
-`callisto_cli` links the system libcurl. This repository does not vendor curl. Curl's own license applies to that library: https://curl.se/docs/copyright.html
+The `tests` binary links the system libcurl. `callisto_server` does not. This repository does not vendor curl. Curl's own license applies to that library: https://curl.se/docs/copyright.html
 
 ## Not part of the binaries
 

@@ -13,7 +13,8 @@ struct llama_context;
 
 // Files named <session id>.kv. llama_state_seq_save_file writes the sequence state and the token
 // ids straight to the file, one tensor slice at a time, so the whole snapshot is not a RAM buffer.
-// Ids are decimal so a name cannot escape the directory.
+// An id is one path segment: letters, digits, '.', '_', and '-'. Decimal session ids stay valid.
+// A name cannot escape the directory.
 class SessionKvStore
 {
   public:

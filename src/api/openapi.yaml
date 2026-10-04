@@ -3,10 +3,13 @@ info:
   title: Callisto server
   version: 1.0.0
   description: |
-    HTTP API for `callisto_server`. One loaded model serves many chat sessions.
-    Generation runs on a single worker. The server does not execute tools: a finished
-    turn that contains tool calls or a question pauses the session, and the client
-    continues it with `POST /v1/sessions/{id}/tools` or `POST /v1/sessions/{id}/messages`.
+    HTTP API for `callisto_server`. One loaded model generates text. Codex CLI uses
+    `POST /v1/responses`. The server does not execute tools. It returns `function_call`
+    items, and Codex runs them.
+
+    The session API is separate. A finished turn that contains tool calls or a question
+    pauses that session. The caller continues it with `POST /v1/sessions/{id}/tools` or
+    `POST /v1/sessions/{id}/messages`. Codex does not use those routes.
 
     There is no authentication. The process binds `127.0.0.1:8080` unless `--host`
     and `-p` / `--port` say otherwise.
@@ -19,6 +22,8 @@ servers:
     description: Default bind address
 tags:
   - name: health
+  - name: responses
+  - name: models
   - name: sessions
   - name: jobs
 paths:
@@ -36,6 +41,137 @@ paths:
                 type: string
                 enum: ["OK"]
               example: OK
+
+  /v1/models:
+    get:
+      tags: [models]
+      operationId: listModels
+      summary: List the loaded model
+      description: |
+        One entry. `id` is the GGUF file name without the directory or the `.gguf` suffix.
+        `GET /models` is the same list.
+      responses:
+        "200":
+          description: The loaded model.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object:
+                    type: string
+                    enum: [list]
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, object, owned_by]
+                      properties:
+                        id:
+                          type: string
+                        object:
+                          type: string
+                          enum: [model]
+                        owned_by:
+                          type: string
+                          enum: [callisto]
+              example:
+                object: list
+                data:
+                  - id: Qwen3.8-27B
+                    object: model
+                    owned_by: callisto
+
+  /v1/responses:
+    post:
+      tags: [responses]
+      operationId: createResponse
+      summary: Generate one Codex turn
+      description: |
+        OpenAI Responses API. `POST /responses` is the same handler.
+
+        `input` is a string or an array of items (`message`, `reasoning`, `function_call`,
+        `function_call_output`, and the custom-tool equivalents). `instructions` is system
+        text. `developer` messages are folded into that text. A reasoning item with empty
+        content and an empty summary is skipped. `previous_response_id` is ignored.
+        Tools other than `type: function` are skipped. Image, audio, and file inputs
+        are rejected.
+
+        `prompt_cache_key` selects the KV slot. Letters, digits, `.`, `_`, and `-` are
+        kept. Anything else becomes `_`. The name is at most 120 characters. With no key
+        the slot is `codex`.
+
+        `stream: true` returns `text/event-stream`. The events Codex reads are
+        `response.created`, `response.output_text.delta`, `response.reasoning_text.delta`,
+        `response.output_item.done`, and `response.completed`. Cancel sends
+        `response.incomplete` with `incomplete_details.reason` `interrupted`. Failure
+        sends `response.failed`.
+
+        `stream: false` returns the completed response object, or `500` when generation fails.
+        Request errors use `{"error":{"message","type":"invalid_request_error"}}`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                model:
+                  type: string
+                instructions:
+                  type: string
+                input:
+                  oneOf:
+                    - type: string
+                    - type: array
+                      items:
+                        type: object
+                tools:
+                  type: array
+                  items:
+                    type: object
+                stream:
+                  type: boolean
+                  default: false
+                max_output_tokens:
+                  type: integer
+                temperature:
+                  type: number
+                prompt_cache_key:
+                  type: string
+            example:
+              model: local
+              instructions: Be brief.
+              input: Hello
+              stream: true
+      responses:
+        "200":
+          description: Completed response object, or an event stream when `stream` is true.
+        "400":
+          description: The body is not a Responses request this server can run.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [message, type]
+                    properties:
+                      message:
+                        type: string
+                      type:
+                        type: string
+                        enum: [invalid_request_error]
+              example:
+                error:
+                  message: input is required
+                  type: invalid_request_error
+        "500":
+          description: Generation failed. Same `error` object, with `type` `server_error`.
 
   /v1/sessions:
     post:

@@ -204,7 +204,12 @@ static int test_session_header_omits_messages()
     session.id = 4;
     session.state = SessionState::Idle;
     session.include_messages = false;
-    session.messages.push_back(ChatMessage{.role = "user", .content = "secret", .reasoning_content = {}});
+    session.messages.push_back(ChatMessage{.role = "user",
+                                           .content = "secret",
+                                           .reasoning_content = {},
+                                           .tool_call_id = {},
+                                           .tool_name = {},
+                                           .tool_calls = {}});
     const nlohmann::json header = session.to_json();
     assertTrue(!header.contains("messages"));
     assertEquals(static_cast<SessionID>(4), header.value("id", SessionID()));
@@ -215,7 +220,12 @@ static int test_session_header_omits_messages()
     assertTrue(!back.to_json().contains("messages"));
 
     SessionMessagesResponse transcript;
-    transcript.messages.push_back(ChatMessage{.role = "assistant", .content = "done", .reasoning_content = {}});
+    transcript.messages.push_back(ChatMessage{.role = "assistant",
+                                              .content = "done",
+                                              .reasoning_content = {},
+                                              .tool_call_id = {},
+                                              .tool_name = {},
+                                              .tool_calls = {}});
     const auto restored = SessionMessagesResponse::from_json(transcript.to_json());
     assertEquals(1, static_cast<int>(restored.messages.size()));
     assertEquals("done", restored.messages[0].content);

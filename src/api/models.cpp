@@ -43,8 +43,20 @@ ChatMessage ChatMessage::from_json(const nlohmann::json &j)
 {
     ChatMessage message;
     message.role = j.value("role", "user");
-    message.content = j.value("content", "");
+    if (j.contains("content") && j.at("content").is_string())
+    {
+        message.content = j.at("content").get<std::string>();
+    }
     message.reasoning_content = j.value("reasoning_content", "");
+    message.tool_call_id = j.value("tool_call_id", "");
+    message.tool_name = j.value("tool_name", "");
+    if (j.contains("tool_calls") && j.at("tool_calls").is_array())
+    {
+        for (const auto &call : j.at("tool_calls"))
+        {
+            message.tool_calls.push_back(ParsedToolCall::from_json(call));
+        }
+    }
     message.validate();
     return message;
 }
@@ -56,6 +68,23 @@ ChatMessage ChatMessage::from_json(const nlohmann::json &j)
     if (!reasoning_content.empty())
     {
         j["reasoning_content"] = reasoning_content;
+    }
+    if (!tool_call_id.empty())
+    {
+        j["tool_call_id"] = tool_call_id;
+    }
+    if (!tool_name.empty())
+    {
+        j["tool_name"] = tool_name;
+    }
+    if (!tool_calls.empty())
+    {
+        auto calls = nlohmann::json::array();
+        for (const auto &call : tool_calls)
+        {
+            calls.push_back(call.to_json());
+        }
+        j["tool_calls"] = std::move(calls);
     }
     return j;
 }

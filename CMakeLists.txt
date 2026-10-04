@@ -85,54 +85,12 @@ add_executable(callisto_server
         src/server/llm/llm_engine.cpp
         src/server/llm/kv_trim.cpp
         src/server/llm/session_kv_store.cpp
-        src/server/sessions/tool_history.cpp)
+        src/server/sessions/tool_history.cpp
+        src/server/responses/responses.cpp)
 configure_localai_target(callisto_server)
 target_include_directories(callisto_server BEFORE PRIVATE
         ${CMAKE_SOURCE_DIR}/vendors/httplib)
 target_link_libraries(callisto_server PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
-
-#
-# Coding-agent client. Tools run here; the server only generates.
-# CLI11 parses argv. The interactive session is an FTXUI view.
-# FTXUI is the git submodule vendors/ftxui, pinned to v6.1.9.
-#
-set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory(vendors/ftxui)
-
-add_executable(callisto_cli
-        src/cli/main.cpp
-        src/cli/agent/agent.cpp
-        src/cli/agent/agent_session.cpp
-        src/cli/agent/agent_commands.cpp
-        src/cli/project/project_context.cpp
-        src/cli/agent/reply_stream.cpp
-        src/cli/client_config.cpp
-        src/cli/servers.cpp
-        src/cli/session_store.cpp
-        src/cli/tui/system_block.cpp
-        src/cli/tui/thinking_block.cpp
-        src/cli/agent/tool_runner.cpp
-        src/cli/tui/theme.cpp
-        src/cli/agent/tool_schema.cpp
-        src/cli/tui/transcript_scroll.cpp
-        src/cli/tui/tui.cpp
-        src/cli/tui/tui_input.cpp
-        src/cli/tui/tui_menu.cpp
-        src/cli/tui/tui_transcript.cpp
-        src/cli/tui/visible_text.cpp
-        src/cli/rest_client.cpp
-        src/api/models.cpp
-        src/common/log.cpp
-        src/common/xdg.cpp
-        ${COMMON_TOOL_SOURCES})
-configure_localai_target(callisto_cli)
-target_include_directories(callisto_cli BEFORE PRIVATE
-        ${CMAKE_SOURCE_DIR}/vendors/httplib
-        ${CMAKE_SOURCE_DIR}/vendors/cli11)
-target_link_libraries(callisto_cli PRIVATE ftxui::component CURL::libcurl ${CMAKE_THREAD_LIBS_INIT})
 
 #
 # Unit tests. No model weights required. llama is linked for the chat template.
@@ -152,22 +110,6 @@ add_executable(tests
     tests/common/tools/test_tool_file_search.cpp
     tests/common/tools/test_tool_search_text.cpp
     tests/common/tools/test_tool_subagent.cpp
-    tests/cli/test_theme.cpp
-    tests/cli/test_tool_schema.cpp
-    src/cli/tui/theme.cpp
-    tests/cli/test_client_config.cpp
-    tests/cli/test_servers.cpp
-    src/cli/client_config.cpp
-    tests/cli/test_project_context.cpp
-    tests/cli/test_session_store.cpp
-    tests/cli/test_transcript_scroll.cpp
-    tests/cli/test_system_block.cpp
-    tests/cli/test_thinking_block.cpp
-    src/cli/tui/thinking_block.cpp
-    src/cli/tui/visible_text.cpp
-    tests/cli/test_context_pressure.cpp
-    src/cli/tui/transcript_scroll.cpp
-    src/cli/tui/system_block.cpp
     tests/server/test_utf8_stream.cpp
     tests/server/test_token_buffer.cpp
     tests/api/test_models.cpp
@@ -175,15 +117,13 @@ add_executable(tests
     tests/server/test_session_kv_store.cpp
     tests/server/test_session_disk.cpp
     tests/server/test_server_options.cpp
+    tests/server/test_responses.cpp
     src/server/options.cpp
+    src/server/responses/responses.cpp
     tests/server/test_context_params.cpp
     tests/server/test_session_gc.cpp
     tests/server/test_tool_history.cpp
     src/api/models.cpp
-    src/cli/agent/tool_schema.cpp
-    src/cli/project/project_context.cpp
-    src/cli/servers.cpp
-    src/cli/session_store.cpp
     src/common/log.cpp
     src/common/xdg.cpp
     src/server/sessions/tool_history.cpp
@@ -197,8 +137,7 @@ add_executable(tests
     src/server/sessions/session_disk.cpp
     ${COMMON_TOOL_SOURCES})
 configure_localai_target(tests)
-target_include_directories(tests BEFORE PRIVATE ${CMAKE_SOURCE_DIR}/vendors/cli11)
-target_link_libraries(tests PRIVATE ftxui::dom CURL::libcurl llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(tests PRIVATE CURL::libcurl llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 enable_testing()
 add_test(NAME tests COMMAND $<TARGET_FILE:tests>)
